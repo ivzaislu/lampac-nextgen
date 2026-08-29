@@ -20,7 +20,7 @@ public class VideoseedController : BaseOnlineController
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/videoseed")]
-    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, short s = -1, bool rjson = false, short serial = -1)
+    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, short s = -1, bool rjson = false, short serial = -1, string voice = null)
     {
         if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
             return OnError();
@@ -31,7 +31,7 @@ public class VideoseedController : BaseOnlineController
         if (string.IsNullOrEmpty(init.token))
             return OnError();
 
-        var cache = await InvokeCacheResult<Data>($"videoseed:view:{kinopoisk_id}:{imdb_id}:{original_title}", TimeSpan.FromHours(4), async e =>
+        var cache = await InvokeCacheResult<Data>($"videoseed:view:{serial}:{kinopoisk_id}:{imdb_id}:{original_title}:{year}", TimeSpan.FromHours(4), async e =>
         {
             var data =
                 await goSearch(serial, kinopoisk_id > 0, $"&kp={kinopoisk_id}") ??
@@ -47,6 +47,44 @@ public class VideoseedController : BaseOnlineController
             return e.Success(data);
         });
 
+        string defaultVoice = null;
+
+        if (cache.IsSuccess && string.IsNullOrEmpty(voice) && s != -1 && cache.Value?.seasons != null)
+        {
+            var season = cache.Value.seasons
+                .FirstOrDefault(i => i.Key == s.ToString() || SortNumber(i.Key) == s)
+                .Value;
+
+            var translations = season?.translation_iframe?.Count > 0
+                ? season.translation_iframe
+                : cache.Value.translation_iframe;
+
+            var firstVideo = season?.videos?
+                .OrderBy(i => SortNumber(i.Key))
+                .ThenBy(i => i.Key, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault()
+                .Value;
+
+            if (!string.IsNullOrEmpty(firstVideo?.iframe) && translations?.Count > 0)
+            {
+                var player = await getPlayerData(firstVideo.iframe);
+                if (player.success)
+                {
+                    string detectedVoice = Regex.Match(
+                        player.value,
+                        "\\{([^{}\\r\\n]+)\\} ?(https?://[^\\;\\{\"\\n\\r\\t ]+\\.m3u8)"
+                    ).Groups[1].Value.Trim();
+
+                    if (!string.IsNullOrEmpty(detectedVoice))
+                    {
+                        defaultVoice = translations
+                            .Select(i => i.Value?.short_name ?? i.Value?.name ?? i.Key)
+                            .FirstOrDefault(i => string.Equals(i, detectedVoice, StringComparison.OrdinalIgnoreCase));
+                    }
+                }
+            }
+        }
+
         return ContentTpl(cache, () =>
         {
             if (cache.Value.seasons != null)
@@ -54,16 +92,20 @@ public class VideoseedController : BaseOnlineController
                 #region Сериал
                 string enc_title = HttpUtility.UrlEncode(title);
                 string enc_original_title = HttpUtility.UrlEncode(original_title);
+                string enc_imdb_id = HttpUtility.UrlEncode(imdb_id);
+                string serialQuery = $"rjson={rjson}&kinopoisk_id={kinopoisk_id}&imdb_id={enc_imdb_id}&title={enc_title}&original_title={enc_original_title}&year={year}&serial=1";
 
                 if (s == -1)
                 {
                     var tpl = new SeasonTpl(cache.Value.seasons.Count);
 
-                    foreach (var season in cache.Value.seasons)
+                    foreach (var season in cache.Value.seasons
+                        .OrderBy(i => SortNumber(i.Key))
+                        .ThenBy(i => i.Key, StringComparer.OrdinalIgnoreCase))
                     {
                         tpl.Append(
                             $"{season.Key} сезон",
-                            $"{host}/lite/videoseed?rjson={rjson}&kinopoisk_id={kinopoisk_id}&imdb_id={imdb_id}&title={enc_title}&original_title={enc_original_title}&s={season.Key}",
+                            $"{host}/lite/videoseed?{serialQuery}&s={season.Key}",
                             season.Key
                         );
                     }
@@ -72,21 +114,64 @@ public class VideoseedController : BaseOnlineController
                 }
                 else
                 {
-                    string sArhc = s.ToString();
-                    var videos = cache.Value.seasons.FirstOrDefault(i => i.Key == sArhc).Value?.videos;
+                    var season = cache.Value.seasons
+                        .FirstOrDefault(i => i.Key == s.ToString() || SortNumber(i.Key) == s)
+                        .Value;
+
+                    var videos = season?.videos;
                     if (videos == null)
                         return default;
 
-                    var etpl = new EpisodeTpl(videos.Count);
+                    string seasonLink = $"{host}/lite/videoseed?{serialQuery}&s={s}";
+                    var translations = season.translation_iframe?.Count > 0
+                        ? season.translation_iframe
+                        : cache.Value.translation_iframe;
 
-                    foreach (var video in videos)
+                    VoiceTpl vtpl = null;
+                    string selectedVoice = voice;
+                    string activeVoice = !string.IsNullOrEmpty(selectedVoice) ? selectedVoice : defaultVoice;
+
+                    if (translations?.Count > 0)
                     {
+                        var voices = translations
+                            .Select(i => i.Value?.short_name ?? i.Value?.name ?? i.Key)
+                            .Where(i => !string.IsNullOrEmpty(i))
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .OrderBy(i => i, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        if (voices.Count > 0)
+                        {
+                            vtpl = new VoiceTpl(voices.Count);
+
+                            foreach (string voiceName in voices)
+                            {
+                                vtpl.Append(
+                                    voiceName,
+                                    string.Equals(activeVoice, voiceName, StringComparison.OrdinalIgnoreCase),
+                                    $"{seasonLink}&voice={HttpUtility.UrlEncode(voiceName)}"
+                                );
+                            }
+                        }
+                    }
+
+                    var etpl = new EpisodeTpl(vtpl, videos.Count);
+
+                    foreach (var video in videos
+                        .OrderBy(i => SortNumber(i.Key))
+                        .ThenBy(i => i.Key, StringComparer.OrdinalIgnoreCase))
+                    {
+                        string link = accsArgs($"{host}/lite/videoseed/video/{AesTo.Encrypt(video.Value.iframe)}");
+
+                        if (!string.IsNullOrEmpty(selectedVoice))
+                            link += $"&voice={HttpUtility.UrlEncode(selectedVoice)}";
+
                         etpl.Append(
                             $"{video.Key} серия",
                             title ?? original_title,
                             s,
                             video.Key,
-                            accsArgs($"{host}/lite/videoseed/video/{AesTo.Encrypt(video.Value.iframe)}") + "#.m3u8",
+                            link + "#.m3u8",
                             "call",
                             vast: init.vast
                         );
@@ -105,11 +190,11 @@ public class VideoseedController : BaseOnlineController
                 {
                     foreach (var translation in cache.Value.translation_iframe)
                     {
-                        string voice = translation.Value.short_name;
+                        string translationVoice = translation.Value.short_name;
 
                         mtpl.Append(
-                            voice ?? translation.Value.name ?? translation.Key,
-                            accsArgs($"{host}/lite/videoseed/video/{AesTo.Encrypt(cache.Value.iframe)}") + $"&voice={HttpUtility.UrlEncode(voice)}" + "#.m3u8",
+                            translationVoice ?? translation.Value.name ?? translation.Key,
+                            accsArgs($"{host}/lite/videoseed/video/{AesTo.Encrypt(cache.Value.iframe)}") + $"&voice={HttpUtility.UrlEncode(translationVoice)}" + "#.m3u8",
                             "call",
                             vast: init.vast
                         );
@@ -143,6 +228,48 @@ public class VideoseedController : BaseOnlineController
         if (string.IsNullOrEmpty(iframe))
             return OnError();
 
+        var player = await getPlayerData(iframe);
+
+        if (!player.success)
+            return OnError(player.error);
+
+        string location;
+
+        if (!string.IsNullOrEmpty(voice))
+        {
+            location = Regex.Match(
+                player.value,
+                "\\{" + Regex.Escape(voice) + "\\} ?(https?://[^\\;\\{\"\\n\\r\\t ]+\\.m3u8)",
+                RegexOptions.IgnoreCase
+            ).Groups[1].Value;
+
+            if (string.IsNullOrEmpty(location))
+                return OnError("voice_location");
+        }
+        else
+        {
+            location = Regex.Match(player.value, "(https?://[^\\;\\{\"\\n\\r\\t ]+\\.m3u8)").Groups[1].Value;
+        }
+
+        if (string.IsNullOrEmpty(location))
+            return OnError("location");
+
+        string referer = Regex.Match(iframe, "(^https?://[^/]+)").Groups[1].Value;
+        var headers_stream = httpHeaders(init.host, HeadersModel.JoinReadOnly(HeadersModel.Init("referer", referer), init.headers_stream));
+
+        return ContentTo(VideoTpl.ToJson(
+            "play",
+            HostStreamProxy(location, headers: headers_stream),
+            "auto",
+            vast: init.vast,
+            httpContext: HttpContext
+        ));
+    }
+    #endregion
+
+    #region PlayerData
+    async Task<(bool success, string value, string error)> getPlayerData(string iframe)
+    {
         var cache = await InvokeCacheResult<string>($"videoseed:video:{iframe}:{proxyManager?.CurrentProxyIp}", 20, async e =>
         {
             var headers = httpHeaders(init);
@@ -234,30 +361,7 @@ public class VideoseedController : BaseOnlineController
             }
         });
 
-        if (!cache.IsSuccess)
-            return OnError(cache.ErrorMsg);
-
-        string location = null;
-
-        if (voice != null)
-            location = Regex.Match(cache.Value, "\\{" + voice + "\\} ?(https?://[^\\;\\{\"\n\r\t ]+\\.m3u8)").Groups[1].Value;
-
-        if (string.IsNullOrEmpty(location))
-            location = Regex.Match(cache.Value, "(https?://[^\\;\\{\"\n\r\t ]+\\.m3u8)").Groups[1].Value;
-
-        if (string.IsNullOrEmpty(location))
-            return OnError("location");
-
-        string referer = Regex.Match(iframe, "(^https?://[^/]+)").Groups[1].Value;
-        var headers_stream = httpHeaders(init.host, HeadersModel.JoinReadOnly(HeadersModel.Init("referer", referer), init.headers_stream));
-
-        return ContentTo(VideoTpl.ToJson(
-            "play",
-            HostStreamProxy(location, headers: headers_stream),
-            "auto",
-            vast: init.vast,
-            httpContext: HttpContext
-        ));
+        return (cache.IsSuccess, cache.Value, cache.ErrorMsg);
     }
     #endregion
 
@@ -278,4 +382,15 @@ public class VideoseedController : BaseOnlineController
         return root.data.FirstOrDefault();
     }
     #endregion
+
+    static int SortNumber(string value)
+    {
+        if (int.TryParse(value, out int number))
+            return number;
+
+        var match = Regex.Match(value ?? string.Empty, "[0-9]+");
+        return match.Success && int.TryParse(match.Value, out number)
+            ? number
+            : int.MaxValue;
+    }
 }
