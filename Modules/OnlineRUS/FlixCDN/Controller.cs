@@ -51,6 +51,9 @@ public class FlixCDNController : BaseOnlineController
         {
             var result = cache.Value;
             var voices = GetVoices(result);
+            string uidQuery = string.IsNullOrEmpty(requestInfo?.user_uid)
+                ? string.Empty
+                : $"&uid={HttpUtility.UrlEncode(requestInfo.user_uid)}";
 
             if (!result.is_serial)
             {
@@ -61,7 +64,7 @@ public class FlixCDNController : BaseOnlineController
                 {
                     mtpl.Append(
                         voice.title,
-                        $"{host}/lite/flixcdn/stream?kinopoisk_id={kinopoisk_id}&id={result.id}&t={voice.id}",
+                        $"{host}/lite/flixcdn/stream?kinopoisk_id={kinopoisk_id}&id={result.id}&t={voice.id}{uidQuery}",
                         "call",
                         vast: init.vast
                     );
@@ -135,7 +138,7 @@ public class FlixCDNController : BaseOnlineController
                     continue;
 
                 short episodeNumber = (short)episode;
-                string link = $"{host}/lite/flixcdn/stream?kinopoisk_id={kinopoisk_id}&id={result.id}&t={t}&s={s}&e={episodeNumber}";
+                string link = $"{host}/lite/flixcdn/stream?kinopoisk_id={kinopoisk_id}&id={result.id}&t={t}&s={s}&e={episodeNumber}{uidQuery}";
 
                 etpl.Append(
                     $"Серия {episodeNumber}",
