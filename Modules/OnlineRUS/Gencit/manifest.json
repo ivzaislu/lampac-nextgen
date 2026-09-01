@@ -3,7 +3,6 @@
   "dynamic": true,
   "tree": [
     "Controller.cs",
-    "Index.cs",
     "Model.cs",
     "ModInit.cs",
     "ModuleConf.cs",
