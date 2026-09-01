@@ -19,7 +19,7 @@ public class ModuleConf : BaseSettings, ICloneable
 
     public int index_max { get; set; } = 25000;
 
-    public int index_workers { get; set; } = 6;
+    public int index_workers { get; set; } = 20;
 
     public int index_wait_ms { get; set; } = 3500;
 
