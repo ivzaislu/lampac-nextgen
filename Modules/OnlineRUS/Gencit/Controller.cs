@@ -62,7 +62,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/gencit/stream")]
-    public async Task<ActionResult> Stream(int playlist, short s = 0, short e = 0, int t = 0, bool play = false)
+    public async Task<ActionResult> Stream(int playlist, int v = 0, short s = 0, short e = 0, int t = 0, bool play = false)
     {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
@@ -70,8 +70,18 @@ public class GencitController : BaseOnlineController<ModuleConf>
         if (playlist <= 0)
             return OnError("playlist");
 
-        var page = await service.GetPage(playlist, s, e, t).ConfigureAwait(false);
-        string hls = service.GetHls(page);
+        string hls;
+        if (v > 0)
+        {
+            var video = await service.GetVideo(playlist, v).ConfigureAwait(false);
+            hls = service.GetHls(video);
+        }
+        else
+        {
+            // Backward compatibility for old cached links created before video_id was added.
+            var page = await service.GetPage(playlist, s, e, t).ConfigureAwait(false);
+            hls = service.GetHls(page);
+        }
 
         if (string.IsNullOrWhiteSpace(hls))
             return OnError(service?.LastError ?? "video", refresh_proxy: true);
@@ -95,7 +105,8 @@ public class GencitController : BaseOnlineController<ModuleConf>
         var serial = player?.playlist?.serial;
         if (serial?.list == null || serial.list.Count == 0)
         {
-            string link = BuildStreamLink(playlistId, 0, 0, 0);
+            int videoId = player?.config?.video_id ?? 0;
+            string link = BuildStreamLink(playlistId, videoId, 0, 0, 0);
             var mtpl = new MovieTpl(title, originalTitle);
             mtpl.Append(
                 "По умолчанию",
@@ -187,7 +198,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
                 continue;
 
             short episodeNumber = (short)episode.num;
-            string link = BuildStreamLink(playlistId, season, episodeNumber, voiceId);
+            string link = BuildStreamLink(playlistId, source.video_id, season, episodeNumber, voiceId);
 
             etpl.Append(
                 $"Серия {episodeNumber}",
@@ -211,8 +222,8 @@ public class GencitController : BaseOnlineController<ModuleConf>
         return $"{host}/lite/gencit?kinopoisk_id={kinopoiskId}&imdb_id={HttpUtility.UrlEncode(imdbId)}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(originalTitle)}&year={year}&playlist={playlistId}&s={season}&t={voiceId}&rjson={rjson.ToString().ToLowerInvariant()}{uid}";
     }
 
-    private string BuildStreamLink(int playlistId, short season, short episode, int voiceId)
-        => $"{host}/lite/gencit/stream?playlist={playlistId}&s={season}&e={episode}&t={voiceId}{UidQuery()}";
+    private string BuildStreamLink(int playlistId, int videoId, short season, short episode, int voiceId)
+        => $"{host}/lite/gencit/stream?playlist={playlistId}&v={videoId}&s={season}&e={episode}&t={voiceId}{UidQuery()}";
 
     private string UidQuery()
         => string.IsNullOrEmpty(requestInfo?.user_uid)
