@@ -70,21 +70,34 @@ public class GencitController : BaseOnlineController<ModuleConf>
         if (playlist <= 0)
             return OnError("playlist");
 
-        string hls;
+        string hls = null;
+        string videoError = null;
+
+        // Fast path: player already gave us video_id, so ask /videos.php for a fresh signed HLS.
         if (v > 0)
         {
             var video = await service.GetVideo(playlist, v).ConfigureAwait(false);
             hls = service.GetHls(video);
-        }
-        else
-        {
-            // Backward compatibility for old cached links created before video_id was added.
-            var page = await service.GetPage(playlist, s, e, t).ConfigureAwait(false);
-            hls = service.GetHls(page);
+            videoError = service?.LastError;
         }
 
+        // /videos.php can occasionally reject a server-side request even while /lat works.
+        // Keep the proven HTML path as a transparent fallback instead of returning 503.
         if (string.IsNullOrWhiteSpace(hls))
-            return OnError(service?.LastError ?? "video", refresh_proxy: true);
+        {
+            var page = await service.GetPage(playlist, s, e, t).ConfigureAwait(false);
+            hls = service.GetHls(page);
+
+            if (string.IsNullOrWhiteSpace(hls))
+            {
+                string pageError = service?.LastError ?? "video";
+                string error = string.IsNullOrWhiteSpace(videoError)
+                    ? pageError
+                    : $"{videoError}; fallback:{pageError}";
+
+                return OnError(error, refresh_proxy: true);
+            }
+        }
 
         string stream = HostStreamProxy(hls);
 
