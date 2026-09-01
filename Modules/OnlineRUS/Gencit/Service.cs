@@ -14,6 +14,7 @@ public class GencitService
     private readonly ModuleConf init;
     private readonly HttpHydra httpHydra;
     private readonly IReadOnlyList<HeadersModel> pageHeaders;
+    private readonly IReadOnlyList<HeadersModel> apiHeaders;
 
     public string LastError { get; private set; }
 
@@ -25,6 +26,116 @@ public class GencitService
             ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
             ("referer", Referer)
         );
+        apiHeaders = HeadersModel.Init(
+            ("accept", "application/json,text/plain,*/*")
+        );
+    }
+
+    public async Task<int> ResolvePlaylist(long kinopoiskId, string imdbId)
+    {
+        LastError = null;
+        string kpError = null;
+
+        if (kinopoiskId > 0)
+        {
+            var data = await GetApiData(kinopoiskId.ToString()).ConfigureAwait(false);
+            if (data?.playlist_id > 0 && (data.kinopoisk_id <= 0 || data.kinopoisk_id == kinopoiskId))
+                return data.playlist_id;
+
+            kpError = LastError ?? "api:kp:not_found";
+        }
+
+        string imdb = NormalizeImdb(imdbId);
+        if (!string.IsNullOrWhiteSpace(imdb))
+        {
+            var data = await GetApiData(imdb).ConfigureAwait(false);
+            if (data?.playlist_id > 0)
+            {
+                string responseImdb = NormalizeImdb(data.imdb_id);
+                if (string.IsNullOrWhiteSpace(responseImdb) || responseImdb == imdb)
+                    return data.playlist_id;
+            }
+
+            string imdbError = LastError ?? "api:imdb:not_found";
+            LastError = string.IsNullOrWhiteSpace(kpError)
+                ? imdbError
+                : $"{kpError}; {imdbError}";
+            return 0;
+        }
+
+        LastError = kpError ?? "external_id";
+        return 0;
+    }
+
+    private async Task<GencitApiData> GetApiData(string externalId)
+    {
+        if (string.IsNullOrWhiteSpace(externalId))
+        {
+            LastError = "api:id";
+            return null;
+        }
+
+        string apiHost = init.api_host?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(apiHost))
+        {
+            LastError = "api:host";
+            return null;
+        }
+
+        string uri = $"{apiHost}/api/{Uri.EscapeDataString(externalId)}";
+        string json;
+
+        try
+        {
+            json = await httpHydra.Get(uri, addheaders: apiHeaders).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LastError = $"api:http:{ex.GetType().Name}";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            LastError = "api:empty";
+            return null;
+        }
+
+        try
+        {
+            var data = JsonConvert.DeserializeObject<GencitApiData>(json);
+            if (data == null)
+            {
+                LastError = "api:null";
+                return null;
+            }
+
+            if (data.playlist_id <= 0)
+            {
+                LastError = "api:playlist";
+                return null;
+            }
+
+            LastError = null;
+            return data;
+        }
+        catch (Exception ex)
+        {
+            LastError = $"api:json:{ex.GetType().Name}";
+            return null;
+        }
+    }
+
+    private static string NormalizeImdb(string imdbId)
+    {
+        if (string.IsNullOrWhiteSpace(imdbId))
+            return null;
+
+        string value = imdbId.Trim().ToLowerInvariant();
+        if (value.StartsWith("tt", StringComparison.Ordinal))
+            return value;
+
+        return long.TryParse(value, out _) ? $"tt{value}" : value;
     }
 
     public async Task<GencitPageData> GetPage(int playlistId, short season = 0, short episode = 0, int voiceId = 0)
@@ -56,7 +167,7 @@ public class GencitService
             return null;
         }
 
-        if (GencitIndex.IsBlockedPage(html))
+        if (IsBlockedPage(html))
         {
             LastError = $"html:blocked:{html.Length}";
             return null;
@@ -189,6 +300,12 @@ public class GencitService
 
         return uri;
     }
+
+    private static bool IsBlockedPage(string html)
+        => !string.IsNullOrEmpty(html)
+            && html.Length < 2048
+            && html.Contains("404 Not Found", StringComparison.OrdinalIgnoreCase)
+            && html.Contains("isFramed", StringComparison.OrdinalIgnoreCase);
 
     public static string ExtractAssignedJson(string html, string marker)
     {
