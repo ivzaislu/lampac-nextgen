@@ -107,11 +107,68 @@ public class GencitService
         };
     }
 
-    public string GetHls(GencitPageData page)
+    public async Task<GencitVideoData> GetVideo(int playlistId, int videoId)
     {
-        string hls = page?.player?.config?.video;
+        LastError = null;
+
+        if (videoId <= 0)
+        {
+            LastError = "video_id";
+            return null;
+        }
+
+        string host = init.host.TrimEnd('/');
+        string uri = $"{host}/videos.php?id={videoId}";
+        var headers = HeadersModel.Init(
+            ("accept", "application/json,text/plain,*/*"),
+            ("referer", playlistId > 0 ? $"{host}/lat/{playlistId}" : $"{host}/")
+        );
+
+        string json;
+        try
+        {
+            json = await httpHydra.Get(uri, addheaders: headers).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LastError = $"video:http:{ex.GetType().Name}";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            LastError = "video:empty";
+            return null;
+        }
+
+        try
+        {
+            var video = JsonConvert.DeserializeObject<GencitVideoData>(json);
+            if (video == null)
+            {
+                LastError = "video:null";
+                return null;
+            }
+
+            return video;
+        }
+        catch (Exception ex)
+        {
+            LastError = $"video:json:{ex.GetType().Name}";
+            return null;
+        }
+    }
+
+    public string GetHls(GencitPageData page)
+        => NormalizeHls(page?.player?.config?.video, page?.player?.config?.video_new);
+
+    public string GetHls(GencitVideoData video)
+        => NormalizeHls(video?.video, video?.video_new);
+
+    private static string NormalizeHls(string hls, string fallback)
+    {
         if (string.IsNullOrWhiteSpace(hls))
-            hls = page?.player?.config?.video_new;
+            hls = fallback;
 
         if (string.IsNullOrWhiteSpace(hls))
             return null;
