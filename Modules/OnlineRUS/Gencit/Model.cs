@@ -20,7 +20,13 @@ public class GencitApiData
 
     public string imdb_id { get; set; }
 
-    public int max_quality { get; set; }
+    private int _max_quality;
+
+    public int max_quality
+    {
+        get => _max_quality >= 2160 ? 2160 : 0;
+        set => _max_quality = value;
+    }
 
     public string title { get; set; }
 }
