@@ -1,0 +1,69 @@
+using Microsoft.AspNetCore.Http;
+using Shared.Models.Base;
+using Shared.Models.Events;
+using Shared.Models.Module;
+using Shared.Models.Module.Interfaces;
+using Shared.Services;
+using System.Collections.Generic;
+
+namespace Gencit;
+
+public class ModInit : IModuleLoaded, IModuleOnline
+{
+    public static ModuleConf conf;
+
+    public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
+    {
+        var online = new List<ModuleOnlineItem>();
+
+        if (args.kinopoisk_id > 0 && !args.isanime)
+            online.Add(new(conf));
+
+        return online;
+    }
+
+    public void Loaded(InitspaceModel baseconf)
+    {
+        updateConf();
+        EventListener.UpdateInitFile += updateConf;
+        EventListener.OnlineApiQuality += onlineApiQuality;
+    }
+
+    public void Dispose()
+    {
+        EventListener.UpdateInitFile -= updateConf;
+        EventListener.OnlineApiQuality -= onlineApiQuality;
+    }
+
+    private void updateConf()
+    {
+        conf = ModuleInvoke.Init("Gencit", new ModuleConf("Gencit", "https://ylitron.pro", streamproxy: true)
+        {
+            displayindex = 535,
+            rch_access = "apk",
+            stream_access = "apk,cors,web",
+            index_enable = true,
+            index_max = 25000,
+            index_workers = 6,
+            index_wait_ms = 3500,
+            headers = HeadersModel.Init(
+                Http.defaultFullHeaders,
+                ("referer", GencitService.Referer)
+            ).ToDictionary(),
+            headers_stream = HeadersModel.Init(
+                Http.defaultFullHeaders,
+                ("accept", "*/*"),
+                ("origin", "https://ylitron.pro"),
+                ("referer", "https://ylitron.pro/"),
+                ("sec-fetch-dest", "empty"),
+                ("sec-fetch-mode", "cors"),
+                ("sec-fetch-site", "same-site")
+            ).ToDictionary()
+        });
+
+        GencitIndex.Configure(conf);
+    }
+
+    private string onlineApiQuality(EventOnlineApiQuality e)
+        => e.balanser == "gencit" ? " ~ 1080p" : null;
+}
