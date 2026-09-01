@@ -15,13 +15,7 @@ public class ModuleConf : BaseSettings, ICloneable
             this.host = host.StartsWith("http") ? host : Decrypt(host);
     }
 
-    public bool index_enable { get; set; } = true;
-
-    public int index_max { get; set; } = 25000;
-
-    public int index_workers { get; set; } = 20;
-
-    public int index_wait_ms { get; set; } = 3500;
+    public string api_host { get; set; } = "https://aderom.net";
 
     public ModuleConf Clone()
         => (ModuleConf)MemberwiseClone();
