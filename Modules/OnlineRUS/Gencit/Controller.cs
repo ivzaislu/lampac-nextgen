@@ -267,6 +267,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
             >= 1080 => 1080,
             >= 720 => 720,
             >= 480 => 480,
+            >= 360 => 360,
             _ => 0
         };
 
