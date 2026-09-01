@@ -31,7 +31,7 @@ public class GencitService
         );
     }
 
-    public async Task<int> ResolvePlaylist(long kinopoiskId, string imdbId)
+    public async Task<GencitApiData> ResolvePlaylist(long kinopoiskId, string imdbId)
     {
         LastError = null;
         string kpError = null;
@@ -40,7 +40,7 @@ public class GencitService
         {
             var data = await GetApiData(kinopoiskId.ToString()).ConfigureAwait(false);
             if (data?.playlist_id > 0 && (data.kinopoisk_id <= 0 || data.kinopoisk_id == kinopoiskId))
-                return data.playlist_id;
+                return data;
 
             kpError = LastError ?? "api:kp:not_found";
         }
@@ -53,18 +53,18 @@ public class GencitService
             {
                 string responseImdb = NormalizeImdb(data.imdb_id);
                 if (string.IsNullOrWhiteSpace(responseImdb) || responseImdb == imdb)
-                    return data.playlist_id;
+                    return data;
             }
 
             string imdbError = LastError ?? "api:imdb:not_found";
             LastError = string.IsNullOrWhiteSpace(kpError)
                 ? imdbError
                 : $"{kpError}; {imdbError}";
-            return 0;
+            return null;
         }
 
         LastError = kpError ?? "external_id";
-        return 0;
+        return null;
     }
 
     private async Task<GencitApiData> GetApiData(string externalId)
