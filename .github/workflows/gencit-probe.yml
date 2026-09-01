@@ -72,6 +72,31 @@ jobs:
                   print('adsConfig_parse_error=', type(e).__name__)
           PY
 
+      - name: Probe discovery endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+          for url in \
+            'https://ylitron.pro/robots.txt' \
+            'https://ylitron.pro/sitemap.xml' \
+            'https://ylitron.pro/index.php?do=search&subaction=search&story=%D0%9E%D1%87%D0%B5%D0%BD%D1%8C%20%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5%20%D0%B4%D0%B5%D0%BB%D0%B0' \
+            'https://ylitron.pro/search/%D0%9E%D1%87%D0%B5%D0%BD%D1%8C%20%D1%81%D1%82%D1%80%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5%20%D0%B4%D0%B5%D0%BB%D0%B0/'; do
+            code=$(curl -L -sS -A "$UA" -e 'https://kinomix.web.app/' -o /tmp/discovery.out -w '%{http_code}' --max-time 20 "$url" || true)
+            size=$(wc -c < /tmp/discovery.out 2>/dev/null || echo 0)
+            echo "URL=$url status=$code bytes=$size"
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('/tmp/discovery.out')
+          text=p.read_text(errors='replace') if p.exists() else ''
+          print('lat_links=', re.findall(r'/lat/(\d+)', text)[:20])
+          print('has_294=', '/lat/294' in text)
+          print('title_marker=', 'странн' in text.lower())
+          print('body_head=', re.sub(r'\s+', ' ', text[:240]))
+          PY
+          done
+
       - name: Probe API root
         shell: bash
         run: |
