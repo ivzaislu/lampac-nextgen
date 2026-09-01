@@ -22,7 +22,13 @@ jobs:
           echo '=== response ==='
           head -n 1 /tmp/headers.txt 2>/dev/null || true
           grep -iE '^(content-type|location|server):' /tmp/headers.txt 2>/dev/null || true
-          echo "bytes=$(wc -c < /tmp/page.html 2>/dev/null || echo 0)"
+          size=$(wc -c < /tmp/page.html 2>/dev/null || echo 0)
+          echo "bytes=$size"
+          if [ "$size" -le 2000 ]; then
+            echo '=== small body ==='
+            cat /tmp/page.html | sed -E 's#https?://[^"< ]+/x/[^"< ]+#<media-url>#g' || true
+            echo
+          fi
           python3 - <<'PY'
           from pathlib import Path
           import re, json
@@ -40,7 +46,6 @@ jobs:
               print(src)
           for marker in ('api_base_url', 'request_full', 'kp_id', 'imdb_id'):
               print(marker, 'count=', html.count(marker))
-          # Print only non-sensitive structural values.
           m = re.search(r'window\.playerData\s*=\s*(\{.*?\});\s*</script>', html, re.S)
           if m:
               try:
