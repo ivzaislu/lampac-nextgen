@@ -109,6 +109,8 @@ public class GencitFilm
 
 public class GencitIndexCache
 {
+    public int version { get; set; }
+
     public Dictionary<long, int> kp_to_playlist { get; set; }
 
     public int max_scan { get; set; }
