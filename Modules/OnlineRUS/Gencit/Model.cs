@@ -1,3 +1,4 @@
+using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 
 namespace Gencit;
@@ -11,7 +12,7 @@ public class GencitPageData
 
 public class GencitPlayerData
 {
-    public Dictionary<string, string> voices { get; set; }
+    public Dictionary<string, JToken> voices { get; set; }
 
     public GencitPlayerConfig config { get; set; }
 
