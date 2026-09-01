@@ -35,12 +35,12 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
         if (playlist <= 0)
         {
-            if (kinopoisk_id <= 0)
-                return OnError("kinopoisk_id");
+            if (kinopoisk_id <= 0 && string.IsNullOrWhiteSpace(imdb_id))
+                return OnError("external_id");
 
-            playlist = await GencitIndex.LookupAsync(kinopoisk_id).ConfigureAwait(false);
+            playlist = await service.ResolvePlaylist(kinopoisk_id, imdb_id).ConfigureAwait(false);
             if (playlist <= 0)
-                return OnError("playlist");
+                return OnError(service?.LastError ?? "playlist");
         }
 
         var page = await service.GetPage(playlist).ConfigureAwait(false);
@@ -49,13 +49,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
         long pageKp = page.ads?.film?.kp_id ?? 0;
         if (kinopoisk_id > 0 && pageKp > 0 && pageKp != kinopoisk_id)
-        {
-            GencitIndex.Forget(kinopoisk_id, playlist);
             return OnError("kinopoisk_id mismatch");
-        }
-
-        if (pageKp > 0)
-            GencitIndex.Remember(pageKp, playlist);
 
         return ContentTpl(BuildResult(page.player, playlist, imdb_id, kinopoisk_id, title, original_title, year, s, t, rjson));
     }
