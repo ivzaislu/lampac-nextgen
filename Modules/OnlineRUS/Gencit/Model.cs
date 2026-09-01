@@ -10,6 +10,19 @@ public class GencitPageData
     public GencitAdsConfig ads { get; set; }
 }
 
+public class GencitVideoData
+{
+    public string video { get; set; }
+
+    public string video_new { get; set; }
+
+    public List<JToken> cc { get; set; }
+
+    public int duration { get; set; }
+
+    public int with_ads { get; set; }
+}
+
 public class GencitPlayerData
 {
     public Dictionary<string, JToken> voices { get; set; }
@@ -25,7 +38,7 @@ public class GencitPlayerConfig
 
     public string video_new { get; set; }
 
-    public long video_id { get; set; }
+    public int video_id { get; set; }
 
     public string request_full { get; set; }
 
