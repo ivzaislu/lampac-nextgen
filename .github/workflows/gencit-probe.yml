@@ -1,0 +1,84 @@
+name: Probe Gencit player
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe /lat/294
+        shell: bash
+        run: |
+          set -euo pipefail
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
+          curl -L --fail-with-body --max-time 30 -A "$UA" -e 'https://kinomix.web.app/' \
+            -D /tmp/headers.txt -o /tmp/page.html 'https://ylitron.pro/lat/294' || true
+          echo '=== response ==='
+          head -n 1 /tmp/headers.txt 2>/dev/null || true
+          grep -iE '^(content-type|location|server):' /tmp/headers.txt 2>/dev/null || true
+          echo "bytes=$(wc -c < /tmp/page.html 2>/dev/null || echo 0)"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, json
+          p = Path('/tmp/page.html')
+          if not p.exists():
+              print('page_missing=true')
+              raise SystemExit(0)
+          html = p.read_text(errors='replace')
+          print('has_playerData=', 'window.playerData' in html)
+          print('has_adsConfig=', 'window.adsConfig' in html)
+          print('has_inputData=', 'id="inputData"' in html)
+          print('has_data_film=', 'data-film=' in html)
+          print('script_srcs:')
+          for src in re.findall(r'<script[^>]+src=["\']([^"\']+)', html, re.I)[:30]:
+              print(src)
+          for marker in ('api_base_url', 'request_full', 'kp_id', 'imdb_id'):
+              print(marker, 'count=', html.count(marker))
+          # Print only non-sensitive structural values.
+          m = re.search(r'window\.playerData\s*=\s*(\{.*?\});\s*</script>', html, re.S)
+          if m:
+              try:
+                  d = json.loads(m.group(1))
+                  cfg = d.get('config') or {}
+                  pl = d.get('playlist') or {}
+                  cur = pl.get('current') or {}
+                  serial = pl.get('serial') or {}
+                  print('player.current.id=', cur.get('id'))
+                  print('player.serial.seasons=', len(serial.get('list') or []))
+                  print('player.voices=', len(d.get('voices') or {}))
+                  print('player.api_base_url=', cfg.get('api_base_url'))
+                  print('player.request_full=', cfg.get('request_full'))
+              except Exception as e:
+                  print('playerData_parse_error=', type(e).__name__)
+          m = re.search(r'window\.adsConfig\s*=\s*(\{.*?\});', html, re.S)
+          if m:
+              try:
+                  d = json.loads(m.group(1))
+                  film = d.get('film') or {}
+                  print('ads.kp_id=', film.get('kp_id'))
+                  print('ads.imdb_id=', film.get('imdb_id'))
+              except Exception as e:
+                  print('adsConfig_parse_error=', type(e).__name__)
+          PY
+
+      - name: Probe API root
+        shell: bash
+        run: |
+          set -euo pipefail
+          for url in \
+            'https://apiplayer.gdyrin.store/v1' \
+            'https://apiplayer.gdyrin.store/v1/' \
+            'https://apiplayer.gdyrin.store/openapi.json' \
+            'https://apiplayer.gdyrin.store/v1/openapi.json'; do
+            code=$(curl -L -sS -o /tmp/api.out -w '%{http_code}' --max-time 15 "$url" || true)
+            ct=$(curl -L -sSI --max-time 15 "$url" 2>/dev/null | awk -F': ' 'tolower($1)=="content-type"{print $2}' | tail -1 | tr -d '\r' || true)
+            echo "$url status=$code content-type=$ct bytes=$(wc -c < /tmp/api.out 2>/dev/null || echo 0)"
+            head -c 300 /tmp/api.out 2>/dev/null | tr '\n' ' ' | sed -E 's#https?://[^" ]+/x/[^" ]+#<media-url>#g' || true
+            echo
+          done
