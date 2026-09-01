@@ -25,7 +25,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/gencit")]
-    public async Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, int playlist = 0, short s = -1, int t = -1, bool rjson = false, bool similar = false)
+    public async Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, int playlist = 0, short s = -1, int t = -1, bool rjson = false, bool similar = false, bool checksearch = false)
     {
         if (similar)
             return OnError();
@@ -33,14 +33,27 @@ public class GencitController : BaseOnlineController<ModuleConf>
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
-        if (playlist <= 0)
+        GencitApiData apiData = null;
+
+        if (playlist <= 0 || checksearch)
         {
             if (kinopoisk_id <= 0 && string.IsNullOrWhiteSpace(imdb_id))
-                return OnError("external_id");
+            {
+                if (playlist <= 0)
+                    return OnError("external_id");
+            }
+            else
+            {
+                apiData = await service.ResolvePlaylist(kinopoisk_id, imdb_id).ConfigureAwait(false);
 
-            playlist = await service.ResolvePlaylist(kinopoisk_id, imdb_id).ConfigureAwait(false);
-            if (playlist <= 0)
-                return OnError(service?.LastError ?? "playlist");
+                if (playlist <= 0)
+                {
+                    if (apiData?.playlist_id <= 0)
+                        return OnError(service?.LastError ?? "playlist");
+
+                    playlist = apiData.playlist_id;
+                }
+            }
         }
 
         var page = await service.GetPage(playlist).ConfigureAwait(false);
@@ -50,6 +63,9 @@ public class GencitController : BaseOnlineController<ModuleConf>
         long pageKp = page.ads?.film?.kp_id ?? 0;
         if (kinopoisk_id > 0 && pageKp > 0 && pageKp != kinopoisk_id)
             return OnError("kinopoisk_id mismatch");
+
+        if (checksearch)
+            return Content(QualityMarker(apiData?.max_quality ?? 0), "text/html; charset=utf-8");
 
         return ContentTpl(BuildResult(page.player, playlist, imdb_id, kinopoisk_id, title, original_title, year, s, t, rjson));
     }
@@ -236,6 +252,23 @@ public class GencitController : BaseOnlineController<ModuleConf>
         => string.IsNullOrEmpty(requestInfo?.user_uid)
             ? string.Empty
             : $"&uid={HttpUtility.UrlEncode(requestInfo.user_uid)}";
+
+    private static string QualityMarker(int maxQuality)
+    {
+        int quality = maxQuality switch
+        {
+            >= 2160 => 2160,
+            >= 1440 => 1440,
+            >= 1080 => 1080,
+            >= 720 => 720,
+            >= 480 => 480,
+            _ => 0
+        };
+
+        return quality > 0
+            ? $"<!--q:{quality}p-->"
+            : "<!--gencit-->";
+    }
 
     private static string VoiceName(GencitPlayerData player, int voiceId)
     {
