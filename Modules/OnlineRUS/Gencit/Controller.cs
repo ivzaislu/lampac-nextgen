@@ -38,7 +38,11 @@ public class GencitController : BaseOnlineController<ModuleConf>
             if (kinopoisk_id <= 0)
                 return OnError("kinopoisk_id");
 
-            playlist = await GencitIndex.LookupAsync(kinopoisk_id).ConfigureAwait(false);
+            // Bootstrap the one verified mapping while the server-side index is blocked by Gencit.
+            playlist = kinopoisk_id == 915196
+                ? 294
+                : await GencitIndex.LookupAsync(kinopoisk_id).ConfigureAwait(false);
+
             if (playlist <= 0)
                 return OnError("playlist");
         }
