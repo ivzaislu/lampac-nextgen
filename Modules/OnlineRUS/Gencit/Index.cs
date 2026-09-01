@@ -4,7 +4,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -17,34 +16,42 @@ namespace Gencit;
 public static class GencitIndex
 {
     private const string Referer = "https://kinomix.web.app/";
-    private const int ReadLimit = 128 * 1024;
+    private const int ReadLimit = 20 * 1024;
     private const int SaveStep = 250;
+    private const int InitialHealthWindow = 1024;
 
     private static readonly ConcurrentDictionary<long, int> kpToPlaylist = new();
     private static readonly SemaphoreSlim scanLock = new(1, 1);
     private static readonly object stateLock = new();
+    private static readonly object saveLock = new();
     private static readonly Regex dataFilmRegex = new("data-film='(?<json>\\{[^']+\\})'", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex kpRegex = new("\\\"kp_id\\\"\\s*:\\s*(?<id>[0-9]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static ModuleConf conf;
-    private static string cachePath = Path.Combine("database", "gencit_index.json");
+    private static readonly string cachePath = Path.Combine("database", "gencit_index.json");
     private static int maxScan;
-    private static bool blocked;
     private static bool loaded;
+    private static Task scanTask = Task.CompletedTask;
 
     public static void Configure(ModuleConf init)
     {
+        ModuleConf current;
+
         lock (stateLock)
         {
             conf = init?.Clone();
-            blocked = false;
 
             if (!loaded)
             {
                 Load();
                 loaded = true;
             }
+
+            current = conf?.Clone();
         }
+
+        if (current?.index_enable == true)
+            EnsureScanStarted();
     }
 
     public static void Remember(long kpId, int playlistId)
@@ -62,7 +69,10 @@ public static class GencitIndex
             return;
 
         if (kpToPlaylist.TryGetValue(kpId, out int current) && current == playlistId)
+        {
             kpToPlaylist.TryRemove(kpId, out _);
+            Save();
+        }
     }
 
     public static async Task<int> LookupAsync(long kpId)
@@ -77,38 +87,69 @@ public static class GencitIndex
         lock (stateLock)
             current = conf?.Clone();
 
-        if (current?.index_enable != true || blocked)
+        if (current?.index_enable != true)
             return 0;
 
-        Task<int> scan = ScanUntilAsync(kpId);
+        EnsureScanStarted();
+
         int wait = Math.Clamp(current.index_wait_ms, 250, 15000);
-        await Task.WhenAny(scan, Task.Delay(wait)).ConfigureAwait(false);
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(wait);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (kpToPlaylist.TryGetValue(kpId, out known))
+                return known;
+
+            Task currentScan;
+            lock (stateLock)
+                currentScan = scanTask;
+
+            if (currentScan == null || currentScan.IsCompleted)
+                break;
+
+            await Task.Delay(100).ConfigureAwait(false);
+        }
 
         return kpToPlaylist.TryGetValue(kpId, out known) ? known : 0;
     }
 
-    private static async Task<int> ScanUntilAsync(long targetKpId)
+    private static void EnsureScanStarted()
+    {
+        lock (stateLock)
+        {
+            if (conf?.index_enable != true)
+                return;
+
+            int max = Math.Clamp(conf.index_max, 1, 100000);
+            if (Volatile.Read(ref maxScan) >= max)
+                return;
+
+            if (scanTask != null && !scanTask.IsCompleted)
+                return;
+
+            scanTask = Task.Run(ScanAsync);
+        }
+    }
+
+    private static async Task ScanAsync()
     {
         await scanLock.WaitAsync().ConfigureAwait(false);
 
         try
         {
-            if (kpToPlaylist.TryGetValue(targetKpId, out int known))
-                return known;
-
             ModuleConf current;
             lock (stateLock)
                 current = conf?.Clone();
 
-            if (current?.index_enable != true || blocked)
-                return 0;
+            if (current?.index_enable != true)
+                return;
 
             int max = Math.Clamp(current.index_max, 1, 100000);
-            int workers = Math.Clamp(current.index_workers, 1, 16);
+            int workers = Math.Clamp(current.index_workers, 1, 64);
             int next = Math.Max(1, Volatile.Read(ref maxScan) + 1);
 
             if (next > max)
-                return 0;
+                return;
 
             using var handler = new HttpClientHandler();
 
@@ -132,6 +173,14 @@ public static class GencitIndex
             };
 
             int sinceSave = 0;
+            bool sourceVerified = kpToPlaylist.Count > 0 || Volatile.Read(ref maxScan) > 0;
+
+            Serilog.Log.Information(
+                "Gencit index scan started: {Start}-{Max}, workers={Workers}",
+                next,
+                max,
+                workers
+            );
 
             while (next <= max)
             {
@@ -146,43 +195,58 @@ public static class GencitIndex
 
                 ProbeResult[] results = await Task.WhenAll(tasks).ConfigureAwait(false);
 
-                if (results.Any(i => i.blocked))
-                {
-                    blocked = true;
-                    Serilog.Log.Warning("Gencit returned framed 404 for server IP; configure module proxy or use RCH/direct playlist");
-                    return 0;
-                }
-
+                bool foundInBatch = false;
                 foreach (var result in results)
                 {
-                    if (result.kpId > 0)
-                        kpToPlaylist[result.kpId] = result.playlistId;
+                    if (result.kpId <= 0)
+                        continue;
+
+                    kpToPlaylist[result.kpId] = result.playlistId;
+                    foundInBatch = true;
                 }
 
+                int scannedTo = next + count - 1;
                 next += count;
-                Volatile.Write(ref maxScan, next - 1);
-                sinceSave += count;
 
-                if (kpToPlaylist.TryGetValue(targetKpId, out known))
+                if (!sourceVerified)
                 {
-                    Save();
-                    return known;
+                    if (foundInBatch)
+                    {
+                        sourceVerified = true;
+                    }
+                    else if (scannedTo >= Math.Min(max, InitialHealthWindow))
+                    {
+                        Serilog.Log.Warning(
+                            "Gencit index found no valid pages in first {Count} ids; check module proxy",
+                            InitialHealthWindow
+                        );
+                        return;
+                    }
                 }
 
-                if (sinceSave >= SaveStep)
+                if (sourceVerified)
                 {
-                    Save();
-                    sinceSave = 0;
+                    Volatile.Write(ref maxScan, scannedTo);
+                    sinceSave += count;
+
+                    if (sinceSave >= SaveStep)
+                    {
+                        Save();
+                        sinceSave = 0;
+                    }
                 }
             }
 
             Save();
-            return 0;
+            Serilog.Log.Information(
+                "Gencit index scan complete: entries={Entries}, max={Max}",
+                kpToPlaylist.Count,
+                Volatile.Read(ref maxScan)
+            );
         }
         catch (Exception ex)
         {
             Serilog.Log.Warning(ex, "Gencit index scan failed");
-            return 0;
         }
         finally
         {
@@ -201,10 +265,12 @@ public static class GencitIndex
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.Referrer = new Uri(Referer);
             request.Headers.UserAgent.ParseAdd("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36");
+            request.Headers.TryAddWithoutValidation("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+            request.Headers.TryAddWithoutValidation("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
 
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK)
-                return new ProbeResult(playlistId, 0, false);
+                return new ProbeResult(playlistId, 0);
 
             await using Stream stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             byte[] buffer = new byte[ReadLimit];
@@ -220,15 +286,17 @@ public static class GencitIndex
             }
 
             string html = Encoding.UTF8.GetString(buffer, 0, total);
-            if (IsBlockedPage(html))
-                return new ProbeResult(playlistId, 0, true);
 
-            long kpId = ExtractKpId(html);
-            return new ProbeResult(playlistId, kpId, false);
+            // A framed 404 is either an absent playlist id or Gencit's datacenter-IP block.
+            // For the index it must be treated as a miss, not as a reason to abort the whole scan.
+            if (IsBlockedPage(html))
+                return new ProbeResult(playlistId, 0);
+
+            return new ProbeResult(playlistId, ExtractKpId(html));
         }
         catch
         {
-            return new ProbeResult(playlistId, 0, false);
+            return new ProbeResult(playlistId, 0);
         }
     }
 
@@ -286,24 +354,27 @@ public static class GencitIndex
 
     private static void Save()
     {
-        try
+        lock (saveLock)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(cachePath) ?? "database");
-            var cache = new GencitIndexCache
+            try
             {
-                kp_to_playlist = new Dictionary<long, int>(kpToPlaylist),
-                max_scan = Volatile.Read(ref maxScan)
-            };
+                Directory.CreateDirectory(Path.GetDirectoryName(cachePath) ?? "database");
+                var cache = new GencitIndexCache
+                {
+                    kp_to_playlist = new Dictionary<long, int>(kpToPlaylist),
+                    max_scan = Volatile.Read(ref maxScan)
+                };
 
-            string temp = cachePath + ".tmp";
-            File.WriteAllText(temp, JsonConvert.SerializeObject(cache));
-            File.Move(temp, cachePath, true);
-        }
-        catch (Exception ex)
-        {
-            Serilog.Log.Warning(ex, "Gencit index cache save failed");
+                string temp = cachePath + ".tmp";
+                File.WriteAllText(temp, JsonConvert.SerializeObject(cache));
+                File.Move(temp, cachePath, true);
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "Gencit index cache save failed");
+            }
         }
     }
 
-    private readonly record struct ProbeResult(int playlistId, long kpId, bool blocked);
+    private readonly record struct ProbeResult(int playlistId, long kpId);
 }
