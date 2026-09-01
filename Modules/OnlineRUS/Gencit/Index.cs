@@ -16,7 +16,8 @@ namespace Gencit;
 public static class GencitIndex
 {
     private const string Referer = "https://kinomix.web.app/";
-    private const int ReadLimit = 20 * 1024;
+    private const int CacheVersion = 2;
+    private const int ReadLimit = 128 * 1024;
     private const int SaveStep = 250;
     private const int InitialHealthWindow = 1024;
 
@@ -151,7 +152,10 @@ public static class GencitIndex
             if (next > max)
                 return;
 
-            using var handler = new HttpClientHandler();
+            using var handler = new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
+            };
 
             try
             {
@@ -173,7 +177,7 @@ public static class GencitIndex
             };
 
             int sinceSave = 0;
-            bool sourceVerified = kpToPlaylist.Count > 0 || Volatile.Read(ref maxScan) > 0;
+            bool sourceVerified = Volatile.Read(ref maxScan) > 0;
 
             Serilog.Log.Information(
                 "Gencit index scan started: {Start}-{Max}, workers={Workers}",
@@ -217,7 +221,7 @@ public static class GencitIndex
                     else if (scannedTo >= Math.Min(max, InitialHealthWindow))
                     {
                         Serilog.Log.Warning(
-                            "Gencit index found no valid pages in first {Count} ids; check module proxy",
+                            "Gencit index found no parsable kp_id in first {Count} ids; check proxy or page parser",
                             InitialHealthWindow
                         );
                         return;
@@ -287,8 +291,8 @@ public static class GencitIndex
 
             string html = Encoding.UTF8.GetString(buffer, 0, total);
 
-            // A framed 404 is either an absent playlist id or Gencit's datacenter-IP block.
-            // For the index it must be treated as a miss, not as a reason to abort the whole scan.
+            // The same framed 404 is used for missing playlist ids and for blocked direct server IPs.
+            // During an indexed scan it is therefore only a miss; health is verified by finding real kp_id values.
             if (IsBlockedPage(html))
                 return new ProbeResult(playlistId, 0);
 
@@ -344,7 +348,20 @@ public static class GencitIndex
                 }
             }
 
-            maxScan = Math.Max(0, cache?.max_scan ?? 0);
+            if (cache?.version == CacheVersion)
+            {
+                maxScan = Math.Max(0, cache.max_scan);
+            }
+            else
+            {
+                // Keep known mappings learned from real playback, but rebuild scan progress with the new parser.
+                maxScan = 0;
+                Serilog.Log.Information(
+                    "Gencit index cache version changed ({OldVersion}->{NewVersion}); rebuilding scan progress",
+                    cache?.version ?? 0,
+                    CacheVersion
+                );
+            }
         }
         catch (Exception ex)
         {
@@ -361,6 +378,7 @@ public static class GencitIndex
                 Directory.CreateDirectory(Path.GetDirectoryName(cachePath) ?? "database");
                 var cache = new GencitIndexCache
                 {
+                    version = CacheVersion,
                     kp_to_playlist = new Dictionary<long, int>(kpToPlaylist),
                     max_scan = Volatile.Read(ref maxScan)
                 };
