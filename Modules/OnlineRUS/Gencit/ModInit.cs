@@ -16,7 +16,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
     {
         var online = new List<ModuleOnlineItem>();
 
-        if (args.kinopoisk_id > 0)
+        if (args.kinopoisk_id > 0 || !string.IsNullOrWhiteSpace(args.imdb_id))
             online.Add(new(conf));
 
         return online;
@@ -41,10 +41,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
         {
             displayindex = 535,
             stream_access = "apk,cors,web",
-            index_enable = true,
-            index_max = 25000,
-            index_workers = 20,
-            index_wait_ms = 3500,
+            api_host = "https://aderom.net",
             headers = HeadersModel.Init(
                 Http.defaultFullHeaders,
                 ("referer", GencitService.Referer)
@@ -59,8 +56,6 @@ public class ModInit : IModuleLoaded, IModuleOnline
                 ("sec-fetch-site", "same-site")
             ).ToDictionary()
         });
-
-        GencitIndex.Configure(conf);
     }
 
     private string onlineApiQuality(EventOnlineApiQuality e)
