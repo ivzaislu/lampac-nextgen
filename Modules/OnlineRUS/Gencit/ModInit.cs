@@ -26,11 +26,13 @@ public class ModInit : IModuleLoaded, IModuleOnline
     {
         updateConf();
         EventListener.UpdateInitFile += updateConf;
+        EventListener.OnlineApiQuality += onlineApiQuality;
     }
 
     public void Dispose()
     {
         EventListener.UpdateInitFile -= updateConf;
+        EventListener.OnlineApiQuality -= onlineApiQuality;
     }
 
     private void updateConf()
@@ -55,4 +57,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
             ).ToDictionary()
         });
     }
+
+    private string onlineApiQuality(EventOnlineApiQuality e)
+        => e.balanser == "gencit" ? " ~ 1080p" : null;
 }
