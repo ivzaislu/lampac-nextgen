@@ -40,8 +40,6 @@ public class ModInit : IModuleLoaded, IModuleOnline
         conf = ModuleInvoke.Init("Gencit", new ModuleConf("Gencit", "https://ylitron.pro", streamproxy: true)
         {
             displayindex = 535,
-            rhub = true,
-            rch_access = "apk,cors,web",
             stream_access = "apk,cors,web",
             index_enable = true,
             index_max = 25000,
