@@ -10,6 +10,19 @@ public class GencitPageData
     public GencitAdsConfig ads { get; set; }
 }
 
+public class GencitApiData
+{
+    public long id { get; set; }
+
+    public int playlist_id { get; set; }
+
+    public long kinopoisk_id { get; set; }
+
+    public string imdb_id { get; set; }
+
+    public string title { get; set; }
+}
+
 public class GencitVideoData
 {
     public string video { get; set; }
@@ -118,13 +131,4 @@ public class GencitFilm
     public long kp_id { get; set; }
 
     public long imdb_id { get; set; }
-}
-
-public class GencitIndexCache
-{
-    public int version { get; set; }
-
-    public Dictionary<long, int> kp_to_playlist { get; set; }
-
-    public int max_scan { get; set; }
 }
