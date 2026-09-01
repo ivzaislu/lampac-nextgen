@@ -64,10 +64,15 @@ public class GencitController : BaseOnlineController<ModuleConf>
         if (kinopoisk_id > 0 && pageKp > 0 && pageKp != kinopoisk_id)
             return OnError("kinopoisk_id mismatch");
 
-        if (checksearch)
-            return Content(QualityMarker(apiData?.max_quality ?? 0), "text/html; charset=utf-8");
+        var result = BuildResult(page.player, playlist, imdb_id, kinopoisk_id, title, original_title, year, s, t, rjson);
 
-        return ContentTpl(BuildResult(page.player, playlist, imdb_id, kinopoisk_id, title, original_title, year, s, t, rjson));
+        if (checksearch)
+        {
+            string html = result?.ToHtml() ?? string.Empty;
+            return Content(html + QualityMarker(apiData?.max_quality ?? 0), "text/html; charset=utf-8");
+        }
+
+        return ContentTpl(result);
     }
 
     [HttpGet, Staticache(manually: true)]
