@@ -30,7 +30,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
         if (similar)
             return OnError();
 
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
         if (playlist <= 0)
@@ -68,7 +68,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
     [Route("lite/gencit/stream")]
     public async Task<ActionResult> Stream(int playlist, short s = 0, short e = 0, int t = 0, bool play = false)
     {
-        if (await IsRequestBlocked(rch: true))
+        if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
         if (playlist <= 0)
