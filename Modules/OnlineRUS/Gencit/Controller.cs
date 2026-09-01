@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json.Linq;
 using Shared;
 using Shared.Attributes;
 using Shared.Models.Templates;
@@ -44,7 +45,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
         var page = await service.GetPage(playlist).ConfigureAwait(false);
         if (page?.player == null)
-            return OnError("playerData", refresh_proxy: true);
+            return OnError(service?.LastError ?? "playerData", refresh_proxy: true);
 
         long pageKp = page.ads?.film?.kp_id ?? 0;
         if (kinopoisk_id > 0 && pageKp > 0 && pageKp != kinopoisk_id)
@@ -73,7 +74,7 @@ public class GencitController : BaseOnlineController<ModuleConf>
         string hls = service.GetHls(page);
 
         if (string.IsNullOrWhiteSpace(hls))
-            return OnError("video", refresh_proxy: true);
+            return OnError(service?.LastError ?? "video", refresh_proxy: true);
 
         string stream = HostStreamProxy(hls);
 
@@ -220,8 +221,28 @@ public class GencitController : BaseOnlineController<ModuleConf>
 
     private static string VoiceName(GencitPlayerData player, int voiceId)
     {
-        if (player?.voices != null && player.voices.TryGetValue(voiceId.ToString(), out string name) && !string.IsNullOrWhiteSpace(name))
-            return name;
+        if (player?.voices != null && player.voices.TryGetValue(voiceId.ToString(), out JToken value) && value != null)
+        {
+            if (value.Type == JTokenType.String)
+            {
+                string text = value.Value<string>();
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+            else if (value.Type == JTokenType.Object)
+            {
+                string text = value.Value<string>("name")
+                    ?? value.Value<string>("voice_name")
+                    ?? value.Value<string>("title")
+                    ?? value.Value<string>("translation");
+
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+        }
+
+        if (player?.playlist?.serial?.current?.voiceId == voiceId && !string.IsNullOrWhiteSpace(player.playlist.serial.current.voiceName))
+            return player.playlist.serial.current.voiceName;
 
         return $"Озвучка {voiceId}";
     }
