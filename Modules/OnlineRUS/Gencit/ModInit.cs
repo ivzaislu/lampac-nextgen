@@ -43,7 +43,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
             stream_access = "apk,cors,web",
             index_enable = true,
             index_max = 25000,
-            index_workers = 6,
+            index_workers = 20,
             index_wait_ms = 3500,
             headers = HeadersModel.Init(
                 Http.defaultFullHeaders,
