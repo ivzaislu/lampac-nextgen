@@ -382,7 +382,7 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
             if (added == 0)
                 break;
 
-            string nextPattern = $"href='[^']*\\?(?:category=\\d+&)?page={page + 1}'";
+            string nextPattern = $@"href='[^']*\?(?:category=\d+&)?page={page + 1}'";
             if (!Regex.IsMatch(html, nextPattern, RegexOptions.IgnoreCase))
                 break;
         }
