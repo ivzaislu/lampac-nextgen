@@ -130,7 +130,7 @@ public class KbteamController : BaseOnlineController<ModuleConf>
     async Task<Root> ApiGet(string parameters)
     {
         string url = $"{init.apihost}?{parameters}&device=";
-        return await httpHydra.Get<Root>(url, safety: true, addheaders: HeadersModel.Init(init.headers));
+        return await httpHydra.Get<Root>(url, safety: true);
     }
 
     static List<Item> FlattenItems(Root data)
