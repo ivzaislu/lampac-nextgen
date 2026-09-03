@@ -25,6 +25,7 @@ public class VideoItem
 public class SeasonItem
 {
     public int id { get; set; }
+    public int number { get; set; }
 }
 
 public class VideoConfig
