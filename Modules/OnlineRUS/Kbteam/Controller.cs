@@ -42,15 +42,18 @@ public class KbteamController : BaseOnlineController<ModuleConf>
         });
 
         var items = FlattenItems(rootCache.Value);
-        if (items.Count == 0)
+        var seasonItems = PanelItems(items);
+        bool serial = seasonItems.Count > 0;
+        var movieVoices = serial ? null : GroupMovieVoices(items);
+        bool playable = serial || movieVoices.Count > 0;
+
+        if (!playable)
         {
             if (checksearch)
                 return Json(new { rch = false });
 
             return OnError();
         }
-
-        bool serial = ItemsLookSerial(items);
 
         if (checksearch)
             return Json(new { rch = true, type = serial ? "serial" : "movie", quality = "FHD" });
@@ -60,14 +63,14 @@ public class KbteamController : BaseOnlineController<ModuleConf>
             return ContentTpl(rootCache, () => BuildMovie(
                 title,
                 original_title,
-                GroupMovieVoices(items)
+                movieVoices
             ));
         }
 
-        if (s == -1 && items.Count > 1)
+        if (s == -1 && seasonItems.Count > 1)
         {
             return ContentTpl(rootCache, () => BuildSeasons(
-                items,
+                seasonItems,
                 kinopoisk_id,
                 title,
                 original_title,
@@ -79,10 +82,10 @@ public class KbteamController : BaseOnlineController<ModuleConf>
             s = 1;
 
         int seasonIndex = Math.Max(0, s - 1);
-        if (seasonIndex >= items.Count)
+        if (seasonIndex >= seasonItems.Count)
             seasonIndex = 0;
 
-        string seasonParams = PanelToParams(items[seasonIndex].action);
+        string seasonParams = PanelToParams(seasonItems[seasonIndex].action);
         if (string.IsNullOrEmpty(seasonParams))
             return OnError("seasonParams");
 
@@ -95,7 +98,7 @@ public class KbteamController : BaseOnlineController<ModuleConf>
             return e.Success(data);
         });
 
-        var voicesItems = FlattenItems(voicesCache.Value);
+        var voicesItems = PanelItems(FlattenItems(voicesCache.Value));
         if (voicesItems.Count == 0)
             return OnError("voices");
 
@@ -113,7 +116,9 @@ public class KbteamController : BaseOnlineController<ModuleConf>
             return e.Success(data);
         });
 
-        var episodeItems = FlattenItems(episodesCache.Value);
+        var episodeItems = VideoItems(FlattenItems(episodesCache.Value));
+        if (episodeItems.Count == 0)
+            return OnError("episodes");
 
         return ContentTpl(episodesCache, () => BuildEpisodes(
             voicesItems,
@@ -151,15 +156,27 @@ public class KbteamController : BaseOnlineController<ModuleConf>
         return result;
     }
 
-    static bool ItemsLookSerial(List<Item> items)
+    static bool IsPanelItem(Item item)
     {
-        foreach (var item in items)
-        {
-            if (item?.type == "control" && !string.IsNullOrEmpty(item.action) && item.action.StartsWith("panel:", StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
+        return item?.type == "control"
+            && !string.IsNullOrEmpty(item.action)
+            && item.action.StartsWith("panel:", StringComparison.OrdinalIgnoreCase);
+    }
 
-        return false;
+    static bool IsVideoItem(Item item)
+    {
+        return !string.IsNullOrEmpty(item?.action)
+            && item.action.StartsWith("video:", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static List<Item> PanelItems(List<Item> items)
+    {
+        return items?.Where(IsPanelItem).ToList() ?? new List<Item>();
+    }
+
+    static List<Item> VideoItems(List<Item> items)
+    {
+        return items?.Where(IsVideoItem).ToList() ?? new List<Item>();
     }
 
     static List<VoiceGroup> GroupMovieVoices(List<Item> items)
@@ -188,8 +205,16 @@ public class KbteamController : BaseOnlineController<ModuleConf>
                 continue;
             }
 
-            if (current == null || string.IsNullOrEmpty(item.action))
+            if (!IsVideoItem(item))
                 continue;
+
+            if (current == null)
+            {
+                current = new VoiceGroup
+                {
+                    name = $"Озвучка {voices.Count + 1}"
+                };
+            }
 
             string url = StripVideo(item.action);
             int quality = QualityFromAction(item.action);
