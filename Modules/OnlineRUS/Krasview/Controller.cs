@@ -91,7 +91,8 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
                 return ContentTpl(movieTpl);
             }
 
-            var episodeTpl = await BuildEpisodes(sourceHost, title, original_title, eps, eps[0].s);
+            int firstSeason = eps[0].s;
+            var episodeTpl = await BuildEpisodes(sourceHost, title, original_title, eps, firstSeason);
             return ContentTpl(episodeTpl);
         }
 
@@ -99,23 +100,28 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
         {
             if (seasons.Count == 1)
             {
-                var eps = await FetchSeasonEpisodes(sourceHost, match.slug, seasons[0].id);
+                int onlySeason = seasons[0].number > 0 ? seasons[0].number : 1;
+                var eps = await FetchSeasonEpisodes(sourceHost, match.slug, seasons[0].id, onlySeason);
                 if (eps.Count == 0)
                     return OnError();
 
-                var episodeTpl = await BuildEpisodes(sourceHost, title, original_title, eps, eps[0].s);
+                var episodeTpl = await BuildEpisodes(sourceHost, title, original_title, eps, onlySeason);
                 return ContentTpl(episodeTpl);
             }
 
             return ContentTpl(BuildSeasons(title, original_title, year, seasons, rjson));
         }
 
-        int index = Math.Clamp(s - 1, 0, seasons.Count - 1);
-        var episodes = await FetchSeasonEpisodes(sourceHost, match.slug, seasons[index].id);
+        int index = seasons.FindIndex(i => i.number == s);
+        if (index < 0)
+            index = Math.Clamp(s - 1, 0, seasons.Count - 1);
+
+        var selectedSeason = seasons[index];
+        int realSeason = selectedSeason.number > 0 ? selectedSeason.number : s;
+        var episodes = await FetchSeasonEpisodes(sourceHost, match.slug, selectedSeason.id, realSeason);
         if (episodes.Count == 0)
             return OnError();
 
-        int realSeason = episodes[0].s > 0 ? episodes[0].s : s;
         var resultTpl = await BuildEpisodes(sourceHost, title, original_title, episodes, realSeason);
         return ContentTpl(resultTpl);
     }
@@ -309,35 +315,57 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
         var result = new List<SeasonItem>();
         var seen = new HashSet<int>();
 
-        foreach (Match m in Regex.Matches(html ?? string.Empty, @"<li[^>]+id='c-(\d+)'[^>]*>\s*<a[^>]+href='/(?:series|movie)/[^']+\?category=\d+", RegexOptions.IgnoreCase))
+        var matches = Regex.Matches(
+            html ?? string.Empty,
+            @"<li[^>]+id='c-(\d+)'[^>]*>\s*<a[^>]+href='/(?:series|movie)/[^']+\?category=\d+'[^>]*>([^<]*)",
+            RegexOptions.IgnoreCase
+        );
+
+        foreach (Match m in matches)
         {
             if (!int.TryParse(m.Groups[1].Value, out int id) || id == 0 || !seen.Add(id))
                 continue;
 
-            result.Add(new SeasonItem { id = id });
+            int number = 0;
+            var numberMatch = Regex.Match(m.Groups[2].Value, @"(\d+)");
+            if (numberMatch.Success)
+                int.TryParse(numberMatch.Groups[1].Value, out number);
+
+            if (number <= 0)
+                number = result.Count + 1;
+
+            result.Add(new SeasonItem
+            {
+                id = id,
+                number = number
+            });
         }
 
-        return result;
+        return result.OrderBy(i => i.number).ToList();
     }
 
     static List<VideoItem> ParseSeriesEpisodes(string html)
     {
         var result = new List<VideoItem>();
-        var seen = new HashSet<string>();
+        var seenEpisodes = new HashSet<string>();
 
         foreach (Match m in Regex.Matches(html ?? string.Empty, @"href='(/video/(\d+)-([^']+))'", RegexOptions.IgnoreCase))
         {
             string id = m.Groups[2].Value;
             string slug = m.Groups[3].Value;
-            if (!seen.Add(id) || SlugBlacklist.IsMatch(slug))
+            if (SlugBlacklist.IsMatch(slug))
                 continue;
 
-            var sm = Regex.Match(slug, @"(\d+)\.sezon", RegexOptions.IgnoreCase);
-            var em = Regex.Match(slug, @"(\d+)\.seriya", RegexOptions.IgnoreCase);
+            var sm = Regex.Match(slug, @"(\d+)[._-]+(?:sezon|season)[._-]+", RegexOptions.IgnoreCase);
+            var em = Regex.Match(slug, @"(\d+)[._-]+(?:seriya|serija|series?)(?:[._-]|$)", RegexOptions.IgnoreCase);
             if (!sm.Success || !em.Success)
                 continue;
 
             if (!int.TryParse(sm.Groups[1].Value, out int season) || !int.TryParse(em.Groups[1].Value, out int episode))
+                continue;
+
+            string episodeKey = $"{season}:{episode}";
+            if (!seenEpisodes.Add(episodeKey))
                 continue;
 
             result.Add(new VideoItem
@@ -353,10 +381,10 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
         return result.OrderBy(i => i.s).ThenBy(i => i.e).ToList();
     }
 
-    async Task<List<VideoItem>> FetchSeasonEpisodes(string sourceHost, string slug, int categoryId)
+    async Task<List<VideoItem>> FetchSeasonEpisodes(string sourceHost, string slug, int categoryId, int expectedSeason)
     {
         var all = new List<VideoItem>();
-        var seen = new HashSet<string>();
+        var seenEpisodes = new HashSet<string>();
 
         for (int page = 1; page <= 10; page++)
         {
@@ -366,13 +394,17 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
                 break;
 
             var part = ParseSeriesEpisodes(html);
+            if (expectedSeason > 0)
+                part = part.Where(i => i.s == expectedSeason).ToList();
+
             if (part.Count == 0)
                 break;
 
             int added = 0;
             foreach (var item in part)
             {
-                if (seen.Add(item.id))
+                string episodeKey = $"{item.s}:{item.e}";
+                if (seenEpisodes.Add(episodeKey))
                 {
                     all.Add(item);
                     added++;
@@ -380,10 +412,6 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
             }
 
             if (added == 0)
-                break;
-
-            string nextPattern = $@"href='[^']*\?(?:category=\d+&)?page={page + 1}'";
-            if (!Regex.IsMatch(html, nextPattern, RegexOptions.IgnoreCase))
                 break;
         }
 
@@ -430,7 +458,7 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
 
         for (int i = 0; i < seasons.Count; i++)
         {
-            int season = i + 1;
+            int season = seasons[i].number > 0 ? seasons[i].number : i + 1;
             tpl.Append(
                 $"Сезон {season}",
                 $"{host}/lite/krasview?title={encTitle}&original_title={encOriginal}&year={year}&serial=1&rjson={rjson}&s={season}",
@@ -443,7 +471,13 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
 
     async Task<ITplResult> BuildEpisodes(string sourceHost, string title, string originalTitle, List<VideoItem> episodes, int season)
     {
-        var filtered = episodes?.Where(i => i.s == season).ToList() ?? new List<VideoItem>();
+        var filtered = episodes?
+            .Where(i => i.s == season)
+            .GroupBy(i => i.e)
+            .Select(g => g.First())
+            .OrderBy(i => i.e)
+            .ToList() ?? new List<VideoItem>();
+
         if (filtered.Count == 0)
             return null;
 
