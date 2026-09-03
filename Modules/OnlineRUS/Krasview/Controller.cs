@@ -154,7 +154,7 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
         foreach (Match m in matches)
         {
             string href = m.Groups[1].Value;
-            string rawTitle = m.Groups[2].Value;
+            string rawTitle = HttpUtility.HtmlDecode(m.Groups[2].Value ?? string.Empty);
 
             var path = Regex.Match(href, @"/(movie|series)/([^/?#]+)", RegexOptions.IgnoreCase);
             if (!path.Success)
@@ -165,12 +165,13 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
                 foundHost = uri.Host;
 
             int foundYear = 0;
-            var yearMatch = Regex.Match(rawTitle, @"(?:^|\s|\()((?:18|19|20|21)\d{2})(?:\)|\s|$)");
-            if (yearMatch.Success)
-                int.TryParse(yearMatch.Groups[1].Value, out foundYear);
+            var yearMatches = Regex.Matches(rawTitle, @"(?:^|\s|\()((?:18|19|20|21)\d{2})(?:\)|\s|$)");
+            if (yearMatches.Count > 0)
+                int.TryParse(yearMatches[yearMatches.Count - 1].Groups[1].Value, out foundYear);
 
-            string en = string.Join("/", rawTitle.Split('/').Skip(1));
-            en = Regex.Replace(en, @"\s+\d{4}\s*$", string.Empty).Trim();
+            string en = ChooseSearchTitle(rawTitle, query);
+            if (string.IsNullOrWhiteSpace(en))
+                continue;
 
             result.Add(new SearchItem
             {
@@ -201,31 +202,37 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
             return null;
 
         string want = AsciiNorm(originalTitle);
+        if (string.IsNullOrEmpty(want))
+            return null;
+
         SearchItem best = null;
         int bestScore = -1;
 
         foreach (var item in results)
         {
-            int score = 0;
             string en = AsciiNorm(item.en);
+            int titleScore = TitleMatchScore(want, en);
+            if (titleScore < 0)
+                continue;
 
-            if (!string.IsNullOrEmpty(want) && en == want)
-                score += 100;
-            else if (!string.IsNullOrEmpty(want) && en.Contains(want, StringComparison.Ordinal))
-                score += 50;
-            else if (!string.IsNullOrEmpty(want) && en.Length > 3 && want.Contains(en, StringComparison.Ordinal))
-                score += 30;
+            int score = titleScore;
 
             if (year > 0 && item.year > 0)
             {
                 int diff = Math.Abs(item.year - year);
-                if (diff == 0)
-                    score += 30;
-                else if (diff <= tolerance)
-                    score += 10;
-                else
-                    score -= 20;
+                if (diff > tolerance)
+                    continue;
+
+                score += diff == 0 ? 30 : 10;
             }
+            else if (year > 0)
+            {
+                score -= 5;
+            }
+
+            string slug = AsciiNorm(item.slug);
+            if (TitleMatchScore(want, slug) >= 95)
+                score += 5;
 
             if (score > bestScore)
             {
@@ -234,12 +241,110 @@ public class KrasviewController : BaseOnlineController<ModuleConf>
             }
         }
 
-        return bestScore >= 30 ? best : null;
+        return bestScore >= 85 ? best : null;
+    }
+
+    static string ChooseSearchTitle(string rawTitle, string query)
+    {
+        if (string.IsNullOrWhiteSpace(rawTitle))
+            return string.Empty;
+
+        string want = AsciiNorm(query);
+        var parts = Regex.Split(rawTitle, @"\s+/\s+")
+            .Select(CleanSearchTitle)
+            .Where(i => !string.IsNullOrWhiteSpace(i) && Regex.IsMatch(i, "[A-Za-z]"))
+            .ToList();
+
+        if (parts.Count == 0)
+        {
+            string fallback = CleanSearchTitle(rawTitle);
+            return Regex.IsMatch(fallback ?? string.Empty, "[A-Za-z]") ? fallback : string.Empty;
+        }
+
+        string exact = parts.FirstOrDefault(i => AsciiNorm(i) == want);
+        if (!string.IsNullOrEmpty(exact))
+            return exact;
+
+        return parts
+            .OrderByDescending(i => SearchTokenOverlap(want, AsciiNorm(i)))
+            .ThenBy(i => Math.Abs(AsciiNorm(i).Length - want.Length))
+            .FirstOrDefault() ?? string.Empty;
+    }
+
+    static string CleanSearchTitle(string value)
+    {
+        value = HttpUtility.HtmlDecode(value ?? string.Empty).Trim();
+        value = Regex.Replace(value, @"(?:\s|\(|\[)+(?:18|19|20|21)\d{2}(?:\)|\])?\s*$", string.Empty);
+        return Regex.Replace(value, @"\s+", " ").Trim();
+    }
+
+    static int SearchTokenOverlap(string left, string right)
+    {
+        var a = SearchTokens(left);
+        var b = SearchTokens(right);
+        if (a.Length == 0 || b.Length == 0)
+            return 0;
+
+        var set = new HashSet<string>(b, StringComparer.Ordinal);
+        return a.Count(set.Contains);
+    }
+
+    static int TitleMatchScore(string want, string candidate)
+    {
+        want = AsciiNorm(want);
+        candidate = AsciiNorm(candidate);
+        if (string.IsNullOrEmpty(want) || string.IsNullOrEmpty(candidate))
+            return -1;
+
+        if (candidate == want)
+            return 100;
+
+        string wantNoArticle = WithoutLeadingArticle(want);
+        string candidateNoArticle = WithoutLeadingArticle(candidate);
+        if (!string.IsNullOrEmpty(wantNoArticle) && wantNoArticle == candidateNoArticle)
+            return 95;
+
+        string[] wantTokens = SearchTokens(want);
+        string[] candidateTokens = SearchTokens(candidate);
+
+        // Однословные названия (It, Up, Alien...) слишком опасны для contains.
+        if (wantTokens.Length <= 1 || candidateTokens.Length == 0)
+            return -1;
+
+        var candidateSet = new HashSet<string>(candidateTokens, StringComparer.Ordinal);
+        int common = wantTokens.Distinct(StringComparer.Ordinal).Count(candidateSet.Contains);
+        int wantCount = wantTokens.Distinct(StringComparer.Ordinal).Count();
+        int candidateCount = candidateTokens.Distinct(StringComparer.Ordinal).Count();
+
+        double coverage = wantCount == 0 ? 0 : (double)common / wantCount;
+        double precision = candidateCount == 0 ? 0 : (double)common / candidateCount;
+
+        // Все слова запроса присутствуют, допускаем только небольшой хвост вроде Extended/Part.
+        if (coverage >= 0.999 && precision >= 0.75)
+            return 82;
+
+        // Для длинных названий допускаем небольшую разницу в одном слове.
+        if (wantCount >= 4 && coverage >= 0.80 && precision >= 0.80)
+            return 75;
+
+        return -1;
+    }
+
+    static string[] SearchTokens(string value)
+        => AsciiNorm(value).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+    static string WithoutLeadingArticle(string value)
+    {
+        string[] tokens = SearchTokens(value);
+        if (tokens.Length > 1 && (tokens[0] == "the" || tokens[0] == "a" || tokens[0] == "an"))
+            return string.Join(' ', tokens.Skip(1));
+
+        return string.Join(' ', tokens);
     }
 
     static string AsciiNorm(string value)
     {
-        value = (value ?? string.Empty).ToLowerInvariant();
+        value = (value ?? string.Empty).ToLowerInvariant().Replace("&", " and ");
         value = Regex.Replace(value, "[^a-z0-9]+", " ");
         return Regex.Replace(value, @"\s+", " ").Trim();
     }
