@@ -84,7 +84,7 @@ public struct FanCDNInvoke
         try
         {
             string episodePage = await GetPage(episodeUrl);
-            if (string.IsNullOrWhiteSpace(episodePage) || RequiresAuth(episodePage))
+            if (string.IsNullOrWhiteSpace(episodePage) || FanCDNHelper.RequiresAuth(episodePage))
                 return null;
 
             Dictionary<string, string> streams = ExtractCdnStreams(episodePage);
@@ -110,12 +110,12 @@ public struct FanCDNInvoke
         if (string.IsNullOrWhiteSpace(html) || !Uri.TryCreate(seriesUrl, UriKind.Absolute, out Uri seriesUri))
             return result;
 
-        string rootPath = SeriesRootPath(seriesUri.AbsolutePath);
+        string rootPath = FanCDNHelper.SeriesRootPath(seriesUri.AbsolutePath);
         string prefix = $"{rootPath}/{season}-season/";
 
         foreach (Match link in Regex.Matches(html, "href\\s*=\\s*[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase | RegexOptions.Singleline))
         {
-            string url = NormalizeSiteUrl(link.Groups[1].Value);
+            string url = FanCDNHelper.NormalizeSiteUrl(init.host, link.Groups[1].Value);
             if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
                 continue;
 
@@ -202,11 +202,11 @@ public struct FanCDNInvoke
         if (string.IsNullOrWhiteSpace(rawPlayer))
             return null;
 
-        string direct = NormalizeFanCdnUrl(rawPlayer);
+        string direct = FanCDNHelper.NormalizeFanCdnUrl(rawPlayer);
         if (!string.IsNullOrEmpty(direct))
             return direct;
 
-        string playerUrl = NormalizeSiteUrl(rawPlayer);
+        string playerUrl = FanCDNHelper.NormalizeSiteUrl(init.host, rawPlayer);
         if (string.IsNullOrEmpty(playerUrl) || !Uri.TryCreate(playerUrl, UriKind.Absolute, out Uri playerUri))
             return null;
 
@@ -215,7 +215,7 @@ public struct FanCDNInvoke
             return null;
 
         string file = HttpUtility.ParseQueryString(playerUri.Query).Get("file");
-        return NormalizeFanCdnUrl(file);
+        return FanCDNHelper.NormalizeFanCdnUrl(file);
     }
     #endregion
 
@@ -241,7 +241,7 @@ public struct FanCDNInvoke
             headers: headers
         );
 
-        if (UsablePage(direct) && !RequiresAuth(direct))
+        if (!FanCDNHelper.IsChallengeResponse(direct) && !FanCDNHelper.RequiresAuth(direct))
             return direct;
 
         await playwrightGate.WaitAsync();
@@ -259,81 +259,15 @@ public struct FanCDNInvoke
             playwrightGate.Release();
         }
     }
-
-    static bool UsablePage(string html)
-    {
-        if (string.IsNullOrWhiteSpace(html))
-            return false;
-
-        return !html.Contains("cf-chl-", StringComparison.OrdinalIgnoreCase)
-            && !html.Contains("challenge-platform", StringComparison.OrdinalIgnoreCase)
-            && !html.Contains("Just a moment", StringComparison.OrdinalIgnoreCase);
-    }
     #endregion
 
     #region Helpers
-    string NormalizeSiteUrl(string rawUrl)
-    {
-        if (string.IsNullOrWhiteSpace(rawUrl) || !Uri.TryCreate(init.host.TrimEnd('/') + "/", UriKind.Absolute, out Uri baseUri))
-            return null;
-
-        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
-        if (value.StartsWith("//"))
-            value = baseUri.Scheme + ":" + value;
-
-        if (!Uri.TryCreate(baseUri, value, out Uri uri))
-            return null;
-
-        if (!uri.Host.Equals(baseUri.Host, StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        return uri.ToString();
-    }
-
-    static string NormalizeFanCdnUrl(string rawUrl)
-    {
-        if (string.IsNullOrWhiteSpace(rawUrl))
-            return null;
-
-        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
-        if (value.StartsWith("//"))
-            value = "https:" + value;
-
-        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri uri))
-            return null;
-
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            return null;
-
-        if (!uri.Host.Equals("cdn.fancdn.net", StringComparison.OrdinalIgnoreCase) &&
-            !uri.Host.EndsWith(".cdn.fancdn.net", StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        return uri.ToString();
-    }
-
-    static string SeriesRootPath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return "/";
-
-        string value = path.TrimEnd('/');
-        if (value.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
-            value = value.Substring(0, value.Length - 5);
-
-        Match serialPath = Regex.Match(value, "^(.*?)/[0-9]+-season(?:/[0-9]+-episode)?$", RegexOptions.IgnoreCase);
-        if (serialPath.Success && !string.IsNullOrEmpty(serialPath.Groups[1].Value))
-            value = serialPath.Groups[1].Value;
-
-        return string.IsNullOrEmpty(value) ? "/" : value;
-    }
-
     string BuildSeasonUrl(string seriesUrl, short season)
     {
         if (!Uri.TryCreate(seriesUrl, UriKind.Absolute, out Uri uri))
             return null;
 
-        string rootPath = SeriesRootPath(uri.AbsolutePath);
+        string rootPath = FanCDNHelper.SeriesRootPath(uri.AbsolutePath);
         return $"{uri.Scheme}://{uri.Authority}{rootPath}/{season}-season.html";
     }
 
@@ -354,16 +288,6 @@ public struct FanCDNInvoke
         string text = Regex.Replace(value, "<[^>]+>", " ");
         text = HttpUtility.HtmlDecode(text);
         return Regex.Replace(text, "\\s+", " ").Trim();
-    }
-
-    static bool RequiresAuth(string html)
-    {
-        if (string.IsNullOrEmpty(html))
-            return false;
-
-        return html.Contains("требуется вход в систему", StringComparison.OrdinalIgnoreCase)
-            || html.Contains("для доступа к видеоконтенту необходимо иметь учётную запись", StringComparison.OrdinalIgnoreCase)
-            || html.Contains("для доступа к видеоконтенту необходимо иметь учетную запись", StringComparison.OrdinalIgnoreCase);
     }
 
     static string ExtractJsonObject(string html, int start, out int end)
