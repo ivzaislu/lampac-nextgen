@@ -7,7 +7,6 @@ using Shared.Services.HTTP;
 using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
-using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
@@ -16,18 +15,6 @@ namespace FanCDN;
 
 public struct FanCDNInvoke
 {
-    static readonly string[] playerHosts =
-    {
-        "cdnlbox.club",
-        "ylitron.pro",
-        "lomont.site",
-        "gencit.info",
-        "ortified.ws",
-        "vak345.com",
-        "interkh.com",
-        "zombie-film.com"
-    };
-
     OnlinesSettings init;
     List<Microsoft.Playwright.Cookie> cookies;
     Func<string, IReadOnlyList<HeadersModel>, string> onstreamfile;
@@ -40,127 +27,163 @@ public struct FanCDNInvoke
     }
 
     #region Search
-    async public Task<string> Search(string title, string original_title, short year)
+    async public Task<(string kp, string key)> Search(string title, string original_title, short year)
     {
         if (string.IsNullOrWhiteSpace(title))
-            return null;
+            return default;
 
-        string catalog = await PlaywrightHttp.Get(
+        string host = init.host.TrimEnd('/');
+        string search = await PlaywrightHttp.Get(
             init,
-            init.host.TrimEnd('/') + "/",
+            $"{host}/engine/ajax/msearch.php?q={HttpUtility.UrlEncode(title)}",
             cookies: cookies,
             headers: HeadersModel.Init(
-                ("referer", init.host.TrimEnd('/') + "/"),
+                ("referer", $"{host}/"),
+                ("sec-fetch-dest", "empty"),
+                ("sec-fetch-mode", "cors"),
+                ("sec-fetch-site", "same-origin")
+            )
+        );
+
+        if (string.IsNullOrWhiteSpace(search))
+            return default;
+
+        JArray root = null;
+        try
+        {
+            root = JsonConvert.DeserializeObject<JArray>(search);
+        }
+        catch { }
+
+        if (root == null || root.Count == 0)
+            return default;
+
+        string stitle = SearchNameTo.Convert(title);
+        string soriginal = SearchNameTo.Convert(original_title);
+        string newsUrl = null;
+        string fallbackUrl = null;
+
+        foreach (JToken item in root)
+        {
+            string itemTitle = item.Value<string>("title");
+            string itemOriginal = item.Value<string>("original_title");
+
+            bool titleMatch = !string.IsNullOrEmpty(stitle) && SearchNameTo.Equals(itemTitle, stitle);
+            bool originalMatch = !string.IsNullOrEmpty(soriginal) && SearchNameTo.Equals(itemOriginal, soriginal);
+            if (!titleMatch && !originalMatch)
+                continue;
+
+            string normalized = NormalizeSiteUrl(item.Value<string>("url"));
+            if (string.IsNullOrEmpty(normalized))
+                continue;
+
+            if (year <= 0)
+            {
+                newsUrl = normalized;
+                break;
+            }
+
+            string itemYearText = item.Value<string>("year");
+            if (!short.TryParse(itemYearText, out short itemYear))
+            {
+                fallbackUrl ??= normalized;
+                continue;
+            }
+
+            if (Math.Abs(itemYear - year) <= 1)
+            {
+                newsUrl = normalized;
+                break;
+            }
+        }
+
+        newsUrl ??= fallbackUrl;
+        if (string.IsNullOrEmpty(newsUrl))
+            return default;
+
+        string news = await PlaywrightHttp.Get(
+            init,
+            newsUrl,
+            cookies: cookies,
+            headers: HeadersModel.Init(
+                ("referer", $"{host}/"),
                 ("sec-fetch-dest", "document"),
                 ("sec-fetch-mode", "navigate"),
                 ("sec-fetch-site", "same-origin")
             )
         );
 
-        if (string.IsNullOrWhiteSpace(catalog) || !catalog.Contains("literal__item", StringComparison.OrdinalIgnoreCase))
-            return null;
+        if (string.IsNullOrWhiteSpace(news) || RequiresAuth(news))
+            return default;
 
-        string stitle = SearchNameTo.Convert(title);
-        string soriginal = SearchNameTo.Convert(original_title);
-        string fallback = null;
-
-        var itemRegex = new Regex("<li[^>]*class=[\"'][^\"']*\\bliteral__item\\b[^\"']*[\"'][^>]*>(.*?)</li>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        var linkRegex = new Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        var originalRegex = new Regex("<[^>]*class=[\"'][^\"']*\\bliteral__original\\b[^\"']*[\"'][^>]*>(.*?)</[^>]+>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        var yearRegex = new Regex("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])");
-
-        foreach (Match itemMatch in itemRegex.Matches(catalog))
+        foreach (Match iframe in Regex.Matches(news, "<iframe\\b[^>]*\\bsrc\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
         {
-            string block = itemMatch.Groups[1].Value;
-            Match linkMatch = linkRegex.Match(block);
-            if (!linkMatch.Success)
+            string playerUrl = NormalizeSiteUrl(iframe.Groups[1].Value);
+            if (string.IsNullOrEmpty(playerUrl) || !Uri.TryCreate(playerUrl, UriKind.Absolute, out Uri playerUri))
                 continue;
 
-            string href = NormalizePageUrl(linkMatch.Groups[1].Value);
-            if (string.IsNullOrEmpty(href))
+            Match path = Regex.Match(playerUri.AbsolutePath, "^/movies/([0-9]+)/?$", RegexOptions.IgnoreCase);
+            if (!path.Success)
                 continue;
 
-            if (Uri.TryCreate(href, UriKind.Absolute, out Uri pageUri) && pageUri.AbsolutePath.StartsWith("/series/", StringComparison.OrdinalIgnoreCase))
+            string key = HttpUtility.ParseQueryString(playerUri.Query).Get("key");
+            if (string.IsNullOrWhiteSpace(key))
                 continue;
 
-            string itemTitle = CleanText(linkMatch.Groups[2].Value);
-            string itemOriginal = CleanText(originalRegex.Match(block).Groups[1].Value);
-
-            bool titleMatch = !string.IsNullOrEmpty(stitle) && SearchNameTo.Equals(itemTitle, stitle);
-            bool originalMatch = !string.IsNullOrEmpty(soriginal)
-                && (SearchNameTo.Equals(itemTitle, soriginal) || SearchNameTo.Equals(itemOriginal, soriginal));
-
-            if (!titleMatch && !originalMatch)
-                continue;
-
-            bool hasYear = false;
-            bool yearMatch = false;
-            if (year > 0)
-            {
-                string text = CleanText(block);
-                foreach (Match ym in yearRegex.Matches(text))
-                {
-                    if (!short.TryParse(ym.Value, out short itemYear))
-                        continue;
-
-                    hasYear = true;
-                    if (Math.Abs(itemYear - year) <= 1)
-                    {
-                        yearMatch = true;
-                        break;
-                    }
-                }
-            }
-
-            if (year > 0 && hasYear && !yearMatch)
-                continue;
-
-            if (yearMatch)
-                return href;
-
-            fallback ??= href;
+            return (path.Groups[1].Value, key);
         }
 
-        return fallback;
+        return default;
     }
     #endregion
 
     #region Embed
-    async public Task<EmbedModel> Embed(string pageUrl)
+    async public Task<EmbedModel> Embed(string kp, string key)
     {
-        pageUrl = NormalizePageUrl(pageUrl);
-        if (string.IsNullOrEmpty(pageUrl))
+        if (string.IsNullOrWhiteSpace(kp) || !Regex.IsMatch(kp, "^[0-9]+$") || string.IsNullOrWhiteSpace(key))
             return null;
 
-        string page = await PlaywrightHttp.Get(
+        string host = init.host.TrimEnd('/');
+        string encodedKey = HttpUtility.UrlEncode(key);
+        string movieUrl = $"{host}/movies/{kp}?key={encodedKey}";
+
+        string json = await PlaywrightHttp.Get(
             init,
-            pageUrl,
+            $"{host}/film.php?kp={kp}&key={encodedKey}",
             cookies: cookies,
             headers: HeadersModel.Init(
-                ("referer", init.host.TrimEnd('/') + "/"),
-                ("sec-fetch-dest", "document"),
-                ("sec-fetch-mode", "navigate"),
+                ("referer", movieUrl),
+                ("sec-fetch-dest", "empty"),
+                ("sec-fetch-mode", "cors"),
                 ("sec-fetch-site", "same-origin")
             )
         );
 
-        if (string.IsNullOrWhiteSpace(page) || RequiresAuth(page))
+        if (string.IsNullOrWhiteSpace(json))
             return null;
 
-        List<PlayerCandidate> players = ExtractPlayers(page, pageUrl);
-        if (players.Count == 0)
-            return null;
-
-        var movies = new List<Episode>();
-        var streams = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var player in players)
+        Episode[] source = null;
+        try
         {
-            Episode episode = await ResolvePlayer(pageUrl, player);
-            if (episode == null || string.IsNullOrEmpty(episode.file) || !streams.Add(episode.file))
+            source = JsonConvert.DeserializeObject<Episode[]>(json);
+        }
+        catch { }
+
+        if (source == null || source.Length == 0)
+            return null;
+
+        var movies = new List<Episode>(source.Length);
+        foreach (Episode movie in source)
+        {
+            if (movie == null || string.IsNullOrWhiteSpace(movie.file))
                 continue;
 
-            movies.Add(episode);
+            string file = NormalizeFanCdnUrl(movie.file);
+            if (string.IsNullOrEmpty(file))
+                continue;
+
+            movie.file = file;
+            movies.Add(movie);
         }
 
         if (movies.Count == 0)
@@ -168,289 +191,15 @@ public struct FanCDNInvoke
 
         return new EmbedModel { movies = movies.ToArray() };
     }
-
-    async Task<Episode> ResolvePlayer(string pageUrl, PlayerCandidate player)
-    {
-        string playerHtml;
-        try
-        {
-            playerHtml = await PlaywrightHttp.Get(
-                init,
-                player.url,
-                headers: PlayerHeaders(pageUrl)
-            );
-        }
-        catch
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(playerHtml))
-            return null;
-
-        Episode result = ParsePlayer(playerHtml, player.url, player.title);
-        if (result != null)
-            return result;
-
-        foreach (var nested in ExtractPlayers(playerHtml, player.url))
-        {
-            if (nested.url.Equals(player.url, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            try
-            {
-                string nestedHtml = await PlaywrightHttp.Get(init, nested.url, headers: PlayerHeaders(player.url));
-                if (string.IsNullOrWhiteSpace(nestedHtml))
-                    continue;
-
-                result = ParsePlayer(nestedHtml, nested.url, string.IsNullOrWhiteSpace(nested.title) ? player.title : nested.title);
-                if (result != null)
-                    return result;
-            }
-            catch { }
-        }
-
-        return null;
-    }
-
-    Episode ParsePlayer(string html, string playerUrl, string title)
-    {
-        string stream = null;
-        var subtitles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        string playerDataJson = ExtractAssignedObject(html, "window.playerData");
-        if (!string.IsNullOrEmpty(playerDataJson))
-        {
-            try
-            {
-                JObject playerData = JsonConvert.DeserializeObject<JObject>(playerDataJson);
-                JToken config = playerData?["config"];
-
-                stream = NormalizeMediaUrl(config?.Value<string>("video"), playerUrl)
-                    ?? NormalizeMediaUrl(config?.Value<string>("video_new"), playerUrl);
-
-                if (config?["cc"] is JObject cc)
-                {
-                    foreach (var property in cc.Properties())
-                    {
-                        string url = NormalizeMediaUrl(property.Value.Type == JTokenType.String ? property.Value.Value<string>() : null, playerUrl);
-                        if (!string.IsNullOrEmpty(url) && !subtitles.ContainsKey(property.Name))
-                            subtitles[property.Name] = url;
-                    }
-                }
-            }
-            catch { }
-        }
-
-        if (string.IsNullOrEmpty(stream) && playerUrl.Contains("lomont.site", StringComparison.OrdinalIgnoreCase))
-        {
-            Match configMatch = Regex.Match(html, "data-config=([\"'])(.*?)\\1", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            if (configMatch.Success)
-            {
-                try
-                {
-                    string raw = HttpUtility.HtmlDecode(configMatch.Groups[2].Value);
-                    JObject config = JsonConvert.DeserializeObject<JObject>(raw);
-                    stream = NormalizeMediaUrl(config?.Value<string>("hls"), playerUrl);
-                }
-                catch { }
-            }
-
-            foreach (Match subtitleMatch in Regex.Matches(html, "data-([a-z]{2})_subtitle=([\"'])(.*?)\\2", RegexOptions.IgnoreCase | RegexOptions.Singleline))
-            {
-                string url = NormalizeMediaUrl(subtitleMatch.Groups[3].Value, playerUrl);
-                if (!string.IsNullOrEmpty(url))
-                    subtitles[subtitleMatch.Groups[1].Value] = url;
-            }
-        }
-
-        stream ??= FindStream(html, playerUrl);
-        if (string.IsNullOrEmpty(stream))
-            return null;
-
-        Uri playerUri = new Uri(playerUrl);
-        string label = string.IsNullOrWhiteSpace(title) ? playerUri.Host : CleanText(title);
-
-        return new Episode
-        {
-            title = string.IsNullOrWhiteSpace(label) ? "FanCDN" : label,
-            file = stream,
-            subtitle_tracks = subtitles.Count > 0 ? subtitles : null,
-            referer = playerUrl,
-            origin = $"{playerUri.Scheme}://{playerUri.Authority}"
-        };
-    }
-    #endregion
-
-    #region Players
-    List<PlayerCandidate> ExtractPlayers(string html, string baseUrl)
-    {
-        var result = new List<PlayerCandidate>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        int searchFrom = 0;
-        const string cdnMarker = "window.cdnData[";
-        while (searchFrom < html.Length)
-        {
-            int marker = html.IndexOf(cdnMarker, searchFrom, StringComparison.OrdinalIgnoreCase);
-            if (marker < 0)
-                break;
-
-            int equals = html.IndexOf('=', marker + cdnMarker.Length);
-            if (equals < 0 || equals - marker > 128)
-            {
-                searchFrom = marker + cdnMarker.Length;
-                continue;
-            }
-
-            int start = html.IndexOf('{', equals + 1);
-            if (start < 0 || start - equals > 64)
-            {
-                searchFrom = equals + 1;
-                continue;
-            }
-
-            string json = ExtractJsonObject(html, start, out int end);
-            searchFrom = end > start ? end + 1 : start + 1;
-            if (string.IsNullOrEmpty(json))
-                continue;
-
-            try
-            {
-                JObject item = JsonConvert.DeserializeObject<JObject>(json);
-                AddPlayer(result, seen, item?.Value<string>("player"), item?.Value<string>("name"), baseUrl);
-            }
-            catch { }
-        }
-
-        foreach (Match iframe in Regex.Matches(html, "<iframe\\b[^>]*(?:src|data-src)\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
-            AddPlayer(result, seen, iframe.Groups[1].Value, null, baseUrl);
-
-        return result;
-    }
-
-    void AddPlayer(List<PlayerCandidate> result, HashSet<string> seen, string rawUrl, string title, string baseUrl)
-    {
-        string url = NormalizePlayerUrl(rawUrl, baseUrl);
-        if (string.IsNullOrEmpty(url) || !seen.Add(url))
-            return;
-
-        result.Add(new PlayerCandidate { url = url, title = CleanText(title) });
-    }
-
-    string NormalizePlayerUrl(string rawUrl, string baseUrl)
-    {
-        if (string.IsNullOrWhiteSpace(rawUrl) || !Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri baseUri))
-            return null;
-
-        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
-        if (value.StartsWith("//"))
-            value = "https:" + value;
-
-        if (!Uri.TryCreate(baseUri, value, out Uri uri) || !IsAllowedPlayer(uri))
-            return null;
-
-        return uri.ToString();
-    }
-
-    static bool IsAllowedPlayer(Uri uri)
-    {
-        if (uri == null || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            return false;
-
-        foreach (string host in playerHosts)
-        {
-            if (uri.Host.Equals(host, StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith("." + host, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
-
-        return false;
-    }
-    #endregion
-
-    #region Media
-    static string FindStream(string html, string baseUrl)
-    {
-        if (string.IsNullOrWhiteSpace(html))
-            return null;
-
-        string decoded = HttpUtility.HtmlDecode(html)
-            .Replace("\\/", "/")
-            .Replace("\\u0026", "&", StringComparison.OrdinalIgnoreCase);
-
-        string fallback = null;
-        foreach (Match match in Regex.Matches(decoded, "https?://[^\\s\\\"'<>]+?\\.(?:m3u8|mp4)(?:[^\\s\\\"'<>\\\\]*)?", RegexOptions.IgnoreCase))
-        {
-            string stream = NormalizeMediaUrl(match.Value, baseUrl);
-            if (string.IsNullOrEmpty(stream))
-                continue;
-
-            if (stream.Contains("master.m3u8", StringComparison.OrdinalIgnoreCase))
-                return stream;
-
-            fallback ??= stream;
-        }
-
-        return fallback;
-    }
-
-    static string NormalizeMediaUrl(string rawUrl, string baseUrl)
-    {
-        if (string.IsNullOrWhiteSpace(rawUrl) || !Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri baseUri))
-            return null;
-
-        string value = HttpUtility.HtmlDecode(rawUrl.Trim())
-            .Replace("\\/", "/")
-            .Replace("\\u0026", "&", StringComparison.OrdinalIgnoreCase);
-
-        if (value.StartsWith("//"))
-            value = "https:" + value;
-
-        if (!Uri.TryCreate(baseUri, value, out Uri uri) || !IsSafeMediaUri(uri))
-            return null;
-
-        return uri.ToString();
-    }
-
-    static bool IsSafeMediaUri(Uri uri)
-    {
-        if (uri == null || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) || string.IsNullOrWhiteSpace(uri.Host))
-            return false;
-
-        string host = uri.Host.TrimEnd('.');
-        if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".local", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".internal", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (!IPAddress.TryParse(host, out IPAddress ip))
-            return true;
-
-        if (IPAddress.IsLoopback(ip))
-            return false;
-
-        byte[] bytes = ip.GetAddressBytes();
-        if (bytes.Length == 4)
-        {
-            if (bytes[0] == 10 || bytes[0] == 127 || bytes[0] == 0)
-                return false;
-            if (bytes[0] == 169 && bytes[1] == 254)
-                return false;
-            if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
-                return false;
-            if (bytes[0] == 192 && bytes[1] == 168)
-                return false;
-        }
-
-        return true;
-    }
     #endregion
 
     #region Helpers
-    string NormalizePageUrl(string rawUrl)
+    string NormalizeSiteUrl(string rawUrl)
     {
         if (string.IsNullOrWhiteSpace(rawUrl) || !Uri.TryCreate(init.host.TrimEnd('/') + "/", UriKind.Absolute, out Uri baseUri))
             return null;
 
-        string value = HttpUtility.HtmlDecode(rawUrl.Trim());
+        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
         if (value.StartsWith("//"))
             value = baseUri.Scheme + ":" + value;
 
@@ -463,30 +212,25 @@ public struct FanCDNInvoke
         return uri.ToString();
     }
 
-    static IReadOnlyList<HeadersModel> PlayerHeaders(string referer)
+    static string NormalizeFanCdnUrl(string rawUrl)
     {
-        string origin = null;
-        if (Uri.TryCreate(referer, UriKind.Absolute, out Uri uri))
-            origin = $"{uri.Scheme}://{uri.Authority}";
-
-        return HeadersModel.Init(
-            ("referer", referer),
-            ("origin", origin),
-            ("sec-fetch-dest", "iframe"),
-            ("sec-fetch-mode", "navigate"),
-            ("sec-fetch-site", "cross-site")
-        );
-    }
-
-    static string CleanText(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrWhiteSpace(rawUrl))
             return null;
 
-        string text = Regex.Replace(value, "<[^>]+>", " ");
-        text = HttpUtility.HtmlDecode(text);
-        text = Regex.Replace(text, "\\s+", " ").Trim();
-        return text;
+        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
+        if (value.StartsWith("//"))
+            value = "https:" + value;
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri uri))
+            return null;
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            return null;
+
+        if (!uri.Host.Equals("cdn.fancdn.net", StringComparison.OrdinalIgnoreCase) && !uri.Host.EndsWith(".cdn.fancdn.net", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return uri.ToString();
     }
 
     static bool RequiresAuth(string html)
@@ -498,92 +242,6 @@ public struct FanCDNInvoke
             || html.Contains("для доступа к видеоконтенту необходимо иметь учётную запись", StringComparison.OrdinalIgnoreCase)
             || html.Contains("для доступа к видеоконтенту необходимо иметь учетную запись", StringComparison.OrdinalIgnoreCase);
     }
-
-    static string ExtractAssignedObject(string html, string marker)
-    {
-        if (string.IsNullOrEmpty(html) || string.IsNullOrEmpty(marker))
-            return null;
-
-        int markerIndex = html.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (markerIndex < 0)
-            return null;
-
-        int equals = html.IndexOf('=', markerIndex + marker.Length);
-        if (equals < 0 || equals - markerIndex > 128)
-            return null;
-
-        int start = html.IndexOf('{', equals + 1);
-        if (start < 0 || start - equals > 128)
-            return null;
-
-        return ExtractJsonObject(html, start, out _);
-    }
-
-    static string ExtractJsonObject(string html, int start, out int end)
-    {
-        end = -1;
-        if (string.IsNullOrEmpty(html) || start < 0 || start >= html.Length || html[start] != '{')
-            return null;
-
-        int depth = 0;
-        char quote = '\0';
-        bool escaped = false;
-
-        for (int i = start; i < html.Length; i++)
-        {
-            char ch = html[i];
-
-            if (quote != '\0')
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                    continue;
-                }
-
-                if (ch == '\\')
-                {
-                    escaped = true;
-                    continue;
-                }
-
-                if (ch == quote)
-                    quote = '\0';
-
-                continue;
-            }
-
-            if (ch == '"' || ch == '\'')
-            {
-                quote = ch;
-                continue;
-            }
-
-            if (ch == '{')
-            {
-                depth++;
-                continue;
-            }
-
-            if (ch != '}')
-                continue;
-
-            depth--;
-            if (depth == 0)
-            {
-                end = i;
-                return html.Substring(start, i - start + 1);
-            }
-        }
-
-        return null;
-    }
-
-    sealed class PlayerCandidate
-    {
-        public string url { get; set; }
-        public string title { get; set; }
-    }
     #endregion
 
     #region Html
@@ -592,46 +250,37 @@ public struct FanCDNInvoke
         if (root?.movies == null || root.movies.Length == 0)
             return default;
 
+        string host = init.host.TrimEnd('/');
+        var streamHeaders = HeadersModel.Init(
+            ("referer", $"{host}/"),
+            ("origin", host),
+            ("sec-fetch-dest", "empty"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-site", "cross-site")
+        );
+
         var mtpl = new MovieTpl(title, original_title, root.movies.Length);
 
-        foreach (var m in root.movies)
+        foreach (Episode movie in root.movies)
         {
-            if (string.IsNullOrEmpty(m.file))
+            if (string.IsNullOrEmpty(movie.file))
                 continue;
 
-            var streamHeaders = HeadersModel.Init(
-                ("referer", m.referer),
-                ("origin", m.origin),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "cross-site")
-            );
-
             var subtitles = new SubtitleTpl();
-
-            if (m.subtitle_tracks != null)
+            if (!string.IsNullOrEmpty(movie.subtitles))
             {
-                foreach (var track in m.subtitle_tracks)
-                {
-                    if (!string.IsNullOrWhiteSpace(track.Value))
-                        subtitles.Append(track.Key, onstreamfile.Invoke(track.Value, streamHeaders));
-                }
-            }
-
-            if (!string.IsNullOrEmpty(m.subtitles))
-            {
-                var match = new Regex("\\[([^\\]]+)\\]([^\\,]+)").Match(m.subtitles);
+                Match match = new Regex("\\[([^\\]]+)\\]([^\\,]+)").Match(movie.subtitles);
                 while (match.Success)
                 {
-                    string srt = m.file.Replace("/hls.m3u8", "/") + match.Groups[2].Value;
+                    string srt = movie.file.Replace("/hls.m3u8", "/") + match.Groups[2].Value;
                     subtitles.Append(match.Groups[1].Value, onstreamfile.Invoke(srt, streamHeaders));
                     match = match.NextMatch();
                 }
             }
 
             mtpl.Append(
-                m.title,
-                onstreamfile.Invoke(m.file, streamHeaders),
+                movie.title,
+                onstreamfile.Invoke(movie.file, streamHeaders),
                 subtitles: subtitles,
                 vast: vast,
                 headers: headers
