@@ -92,12 +92,9 @@ public class FanCDNController : BaseOnlineController
 
         if (serialRequest)
         {
-            // For long-running series the search endpoint can expose the year of a
-            // current season/episode instead of the original premiere year supplied
-            // by TMDB/Kinopoisk. Title/original-title are the stable identifiers here.
-            var search = await InvokeCacheResult<string>($"fancdn:v5:serial:search:{title}:{original_title}", TimeSpan.FromHours(1), onget: async e =>
+            var search = await InvokeCacheResult<string>($"fancdn:v7:serial:search:{kinopoisk_id}:{title}:{original_title}", TimeSpan.FromHours(1), onget: async e =>
             {
-                string result = await oninvk.SearchPage(title, original_title, 0);
+                string result = await SearchSeriesPageReliable(oninvk, title, original_title);
                 if (string.IsNullOrEmpty(result))
                     return e.Fail("search");
 
@@ -109,9 +106,9 @@ public class FanCDNController : BaseOnlineController
 
             if (s <= 0)
             {
-                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v5:seasons:{search.Value}", 30, textJson: true, onget: async e =>
+                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v7:seasons:{search.Value}", 30, textJson: true, onget: async e =>
                 {
-                    List<int> result = await oninvk.Seasons(search.Value);
+                    List<int> result = await GetSeasonsReliable(oninvk, search.Value);
                     if (result == null || result.Count == 0)
                         return e.Fail("seasons");
 
@@ -123,9 +120,9 @@ public class FanCDNController : BaseOnlineController
                 );
             }
 
-            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v5:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
+            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v7:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
             {
-                FanCdnSerialSeason result = await oninvk.Serial(search.Value, s);
+                FanCdnSerialSeason result = await GetSerialReliable(oninvk, search.Value, s);
                 if (result == null)
                     return e.Fail("serial");
 
@@ -149,10 +146,10 @@ public class FanCDNController : BaseOnlineController
             );
         }
 
-        var movieSearch = await InvokeCacheResult<(string kp, string key)>($"fancdn:v3:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
+        var movieSearch = await InvokeCacheResult<(string kp, string key)>($"fancdn:v7:movie:search:{kinopoisk_id}:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
         {
-            var result = await oninvk.Search(title, original_title, year);
-            if (string.IsNullOrEmpty(result.kp) || string.IsNullOrEmpty(result.key))
+            var result = await SearchMovieReliable(oninvk, kinopoisk_id, title, original_title, year);
+            if (!ValidMovieResult(result, kinopoisk_id))
                 return e.Fail("search");
 
             return e.Success(result);
@@ -161,9 +158,16 @@ public class FanCDNController : BaseOnlineController
         if (!movieSearch.IsSuccess)
             return OnError(movieSearch.ErrorMsg);
 
-        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v3:{movieSearch.Value.kp}:{movieSearch.Value.key}", 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v7:movie:embed:{movieSearch.Value.kp}:{movieSearch.Value.key}", 20, textJson: true, onget: async e =>
         {
-            var result = await oninvk.Embed(movieSearch.Value.kp, movieSearch.Value.key);
+            EmbedModel result = null;
+            for (int attempt = 0; attempt < 2 && result == null; attempt++)
+            {
+                result = await oninvk.Embed(movieSearch.Value.kp, movieSearch.Value.key);
+                if (result == null && attempt == 0)
+                    await Task.Delay(250);
+            }
+
             if (result == null)
                 return e.Fail("embed");
 
@@ -173,5 +177,96 @@ public class FanCDNController : BaseOnlineController
         return ContentTpl(cache,
             () => oninvk.Tpl(cache.Value, imdb_id, kinopoisk_id, title, original_title, vast: init.vast, headers: httpHeaders(init))
         );
+    }
+
+    async Task<(string kp, string key)> SearchMovieReliable(FanCDNInvoke oninvk, long kinopoisk_id, string title, string original_title, short year)
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            var result = await oninvk.Search(title, original_title, year);
+            if (ValidMovieResult(result, kinopoisk_id))
+                return result;
+
+            if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
+            {
+                result = await oninvk.Search(original_title, title, year);
+                if (ValidMovieResult(result, kinopoisk_id))
+                    return result;
+            }
+
+            if (attempt < 2)
+                await Task.Delay(250 * (attempt + 1));
+        }
+
+        return default;
+    }
+
+    static bool ValidMovieResult((string kp, string key) result, long kinopoisk_id)
+    {
+        if (string.IsNullOrEmpty(result.kp) || string.IsNullOrEmpty(result.key))
+            return false;
+
+        return kinopoisk_id <= 0 || result.kp == kinopoisk_id.ToString();
+    }
+
+    async Task<string> SearchSeriesPageReliable(FanCDNInvoke oninvk, string title, string original_title)
+    {
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            string result = await oninvk.SearchPage(title, original_title, 0);
+            if (await IsUsableSeriesPage(oninvk, result))
+                return result;
+
+            if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
+            {
+                result = await oninvk.SearchPage(original_title, title, 0);
+                if (await IsUsableSeriesPage(oninvk, result))
+                    return result;
+            }
+
+            if (attempt < 2)
+                await Task.Delay(250 * (attempt + 1));
+        }
+
+        return null;
+    }
+
+    async Task<bool> IsUsableSeriesPage(FanCDNInvoke oninvk, string pageUrl)
+    {
+        if (string.IsNullOrWhiteSpace(pageUrl))
+            return false;
+
+        List<int> seasons = await oninvk.Seasons(pageUrl);
+        return seasons != null && seasons.Count > 0;
+    }
+
+    async Task<List<int>> GetSeasonsReliable(FanCDNInvoke oninvk, string pageUrl)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            List<int> result = await oninvk.Seasons(pageUrl);
+            if (result != null && result.Count > 0)
+                return result;
+
+            if (attempt == 0)
+                await Task.Delay(250);
+        }
+
+        return null;
+    }
+
+    async Task<FanCdnSerialSeason> GetSerialReliable(FanCDNInvoke oninvk, string pageUrl, short season)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            FanCdnSerialSeason result = await oninvk.Serial(pageUrl, season);
+            if (result != null)
+                return result;
+
+            if (attempt == 0)
+                await Task.Delay(250);
+        }
+
+        return null;
     }
 }
