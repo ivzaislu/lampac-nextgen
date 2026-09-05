@@ -84,7 +84,7 @@ public class FanCDNController : BaseOnlineController
         string voice = null,
         bool rjson = false)
     {
-        Response.Headers["X-FanCDN-Rev"] = "v14-movie-fallback";
+        Response.Headers["X-FanCDN-Rev"] = "v15-series-year";
         Response.Headers["X-FanCDN-Stage"] = "init";
         Response.Headers["X-FanCDN-Playwright-Max"] = "2";
 
@@ -138,10 +138,10 @@ public class FanCDNController : BaseOnlineController
             List<int> preloadedSeasons = null;
 
             Response.Headers["X-FanCDN-Stage"] = "serial-search";
-            var search = await InvokeCacheResult<string>($"fancdn:v13:serial:search:{kinopoisk_id}:{title}:{original_title}", TimeSpan.FromHours(1), onget: async e =>
+            var search = await InvokeCacheResult<string>($"fancdn:v15:serial:search:{kinopoisk_id}:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
             {
                 long started = Environment.TickCount64;
-                var resolved = await SearchSeriesPageFast(kinopoisk_id, title, original_title);
+                var resolved = await SearchSeriesPageFast(kinopoisk_id, title, original_title, year);
                 Response.Headers["X-FanCDN-Search-Ms"] = (Environment.TickCount64 - started).ToString();
                 preloadedSeasons = resolved.seasons;
 
@@ -399,16 +399,16 @@ public class FanCDNController : BaseOnlineController
         return kinopoisk_id <= 0 || result.kp == kinopoisk_id.ToString();
     }
 
-    async Task<(string url, List<int> seasons)> SearchSeriesPageFast(long kinopoisk_id, string title, string original_title)
+    async Task<(string url, List<int> seasons)> SearchSeriesPageFast(long kinopoisk_id, string title, string original_title, short year)
     {
-        string candidate = await SearchPageHttp(title, original_title, 0);
+        string candidate = await SearchPageHttp(title, original_title, year);
         var resolved = await ResolveSeriesPage(candidate, kinopoisk_id);
         if (!string.IsNullOrEmpty(resolved.url))
             return resolved;
 
         if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
         {
-            candidate = await SearchPageHttp(original_title, title, 0);
+            candidate = await SearchPageHttp(original_title, title, year);
             return await ResolveSeriesPage(candidate, kinopoisk_id);
         }
 
@@ -455,10 +455,16 @@ public class FanCDNController : BaseOnlineController
         {
             string itemTitle = item.Value<string>("title");
             string itemOriginal = item.Value<string>("original_title");
+            string itemAltTitles = System.Net.WebUtility.HtmlDecode(item.Value<string>("alt_titles") ?? string.Empty);
+
             bool titleMatch = !string.IsNullOrEmpty(stitle) &&
-                (SearchNameTo.Equals(itemTitle, stitle) || SearchNameTo.Equals(itemOriginal, stitle));
+                (SearchNameTo.Equals(itemTitle, stitle) ||
+                 SearchNameTo.Equals(itemOriginal, stitle) ||
+                 SearchNameTo.Contains(itemAltTitles, stitle));
             bool originalMatch = !string.IsNullOrEmpty(soriginal) &&
-                (SearchNameTo.Equals(itemTitle, soriginal) || SearchNameTo.Equals(itemOriginal, soriginal));
+                (SearchNameTo.Equals(itemTitle, soriginal) ||
+                 SearchNameTo.Equals(itemOriginal, soriginal) ||
+                 SearchNameTo.Contains(itemAltTitles, soriginal));
             if (!titleMatch && !originalMatch)
                 continue;
 
