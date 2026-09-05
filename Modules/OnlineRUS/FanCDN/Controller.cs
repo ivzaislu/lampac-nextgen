@@ -92,9 +92,12 @@ public class FanCDNController : BaseOnlineController
 
         if (serialRequest)
         {
-            var search = await InvokeCacheResult<string>($"fancdn:v4:serial:search:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
+            // For long-running series the search endpoint can expose the year of a
+            // current season/episode instead of the original premiere year supplied
+            // by TMDB/Kinopoisk. Title/original-title are the stable identifiers here.
+            var search = await InvokeCacheResult<string>($"fancdn:v5:serial:search:{title}:{original_title}", TimeSpan.FromHours(1), onget: async e =>
             {
-                string result = await oninvk.SearchPage(title, original_title, year);
+                string result = await oninvk.SearchPage(title, original_title, 0);
                 if (string.IsNullOrEmpty(result))
                     return e.Fail("search");
 
@@ -106,7 +109,7 @@ public class FanCDNController : BaseOnlineController
 
             if (s <= 0)
             {
-                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v4:seasons:{search.Value}", 30, textJson: true, onget: async e =>
+                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v5:seasons:{search.Value}", 30, textJson: true, onget: async e =>
                 {
                     List<int> result = await oninvk.Seasons(search.Value);
                     if (result == null || result.Count == 0)
@@ -120,7 +123,7 @@ public class FanCDNController : BaseOnlineController
                 );
             }
 
-            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v4:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
+            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v5:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
             {
                 FanCdnSerialSeason result = await oninvk.Serial(search.Value, s);
                 if (result == null)
