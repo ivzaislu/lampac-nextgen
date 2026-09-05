@@ -64,12 +64,21 @@ public class FanCDNController : BaseOnlineController
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/fancdn")]
-    async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title, short year, byte serial)
+    async public Task<ActionResult> Index(
+        string imdb_id,
+        long kinopoisk_id,
+        string title,
+        string original_title,
+        short year = 0,
+        short serial = 0,
+        short s = -1,
+        string voice = null,
+        bool rjson = false)
     {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
-        if (kinopoisk_id == 0 || serial == 1 || cookies == null)
+        if (kinopoisk_id == 0 || cookies == null)
             return OnError();
 
         var oninvk = new FanCDNInvoke
@@ -79,7 +88,65 @@ public class FanCDNController : BaseOnlineController
             (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
         );
 
-        var search = await InvokeCacheResult<(string kp, string key)>($"fancdn:v3:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
+        bool serialRequest = serial == 1 || s > 0;
+
+        if (serialRequest)
+        {
+            var search = await InvokeCacheResult<string>($"fancdn:v4:serial:search:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
+            {
+                string result = await oninvk.SearchPage(title, original_title, year);
+                if (string.IsNullOrEmpty(result))
+                    return e.Fail("search");
+
+                return e.Success(result);
+            });
+
+            if (!search.IsSuccess)
+                return OnError(search.ErrorMsg);
+
+            if (s <= 0)
+            {
+                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v4:seasons:{search.Value}", 30, textJson: true, onget: async e =>
+                {
+                    List<int> result = await oninvk.Seasons(search.Value);
+                    if (result == null || result.Count == 0)
+                        return e.Fail("seasons");
+
+                    return e.Success(result);
+                });
+
+                return ContentTpl(seasons,
+                    () => oninvk.TplSeasons(seasons.Value, host, imdb_id, kinopoisk_id, title, original_title, year, rjson)
+                );
+            }
+
+            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v4:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
+            {
+                FanCdnSerialSeason result = await oninvk.Serial(search.Value, s);
+                if (result == null)
+                    return e.Fail("serial");
+
+                return e.Success(result);
+            });
+
+            return ContentTpl(season,
+                () => oninvk.TplSerial(
+                    season.Value,
+                    host,
+                    imdb_id,
+                    kinopoisk_id,
+                    title,
+                    original_title,
+                    year,
+                    voice,
+                    rjson,
+                    vast: init.vast,
+                    headers: httpHeaders(init)
+                )
+            );
+        }
+
+        var movieSearch = await InvokeCacheResult<(string kp, string key)>($"fancdn:v3:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
         {
             var result = await oninvk.Search(title, original_title, year);
             if (string.IsNullOrEmpty(result.kp) || string.IsNullOrEmpty(result.key))
@@ -88,12 +155,12 @@ public class FanCDNController : BaseOnlineController
             return e.Success(result);
         });
 
-        if (!search.IsSuccess)
-            return OnError(search.ErrorMsg);
+        if (!movieSearch.IsSuccess)
+            return OnError(movieSearch.ErrorMsg);
 
-        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v3:{search.Value.kp}:{search.Value.key}", 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v3:{movieSearch.Value.kp}:{movieSearch.Value.key}", 20, textJson: true, onget: async e =>
         {
-            var result = await oninvk.Embed(search.Value.kp, search.Value.key);
+            var result = await oninvk.Embed(movieSearch.Value.kp, movieSearch.Value.key);
             if (result == null)
                 return e.Fail("embed");
 
