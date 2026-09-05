@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Shared;
 using Shared.Attributes;
-using Shared.Models.Base;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -75,15 +74,15 @@ public class FanCDNController : BaseOnlineController
 
         var oninvk = new FanCDNInvoke
         (
-           init,
-           cookies,
-           (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
+            init,
+            cookies,
+            (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
         );
 
-        var search = await InvokeCacheResult<string>($"fancdn:v2:{title}:{original_title}:{year}", TimeSpan.FromHours(4), onget: async e =>
+        var search = await InvokeCacheResult<(string kp, string key)>($"fancdn:v3:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
         {
-            string result = await oninvk.Search(title, original_title, year);
-            if (string.IsNullOrEmpty(result))
+            var result = await oninvk.Search(title, original_title, year);
+            if (string.IsNullOrEmpty(result.kp) || string.IsNullOrEmpty(result.key))
                 return e.Fail("search");
 
             return e.Success(result);
@@ -92,9 +91,9 @@ public class FanCDNController : BaseOnlineController
         if (!search.IsSuccess)
             return OnError(search.ErrorMsg);
 
-        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v2:{search.Value}", 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v3:{search.Value.kp}:{search.Value.key}", 20, textJson: true, onget: async e =>
         {
-            var result = await oninvk.Embed(search.Value);
+            var result = await oninvk.Embed(search.Value.kp, search.Value.key);
             if (result == null)
                 return e.Fail("embed");
 
