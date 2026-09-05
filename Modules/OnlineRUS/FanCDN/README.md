@@ -8,19 +8,34 @@
 
 ## Условие (`Invoke`)
 
-Источник добавляется при **`args.kinopoisk_id > 0`** и **`args.serial == -1 || args.serial == 0`**. Сериалы (`args.serial == 1`) пока не поддерживаются.
+Источник добавляется при **`args.kinopoisk_id > 0`** и **`args.serial == -1 || args.serial == 0`**. Сериалы (`args.serial == 1`) пока не подключены к маршруту `lite/fancdn`.
 
-Для работы нужны включённый Playwright и непустой **`cookie`** FanSeries. Cookie передаются в браузерную сессию без удаления `PHPSESSID`/`cf_clearance`.
+Для работы нужны включённый Playwright и непустой **`cookie`** авторизованной FanSeries-сессии. Cookie передаются в браузерную сессию без удаления `PHPSESSID`/`cf_clearance`.
 
-## Текущий flow
+## Текущий flow фильмов
 
-1. Загружается каталог FanSeries и ищется карточка `literal__item` по названию/original title и, если год присутствует в карточке, по году.
-2. Загружается страница найденного фильма с пользовательской cookie.
-3. Из страницы извлекаются `window.cdnData[...]` и iframe-плееры.
-4. Для поддерживаемых плееров извлекается поток из `window.playerData.config.video` / `video_new`; для `lomont.site` также поддерживается `data-config.hls`; затем используется безопасный fallback-поиск `.m3u8`/`.mp4`.
-5. Поток и субтитры отдаются через `HostStreamProxy` с `Origin`/`Referer` соответствующего плеера.
+Flow подтверждён сохранённой авторизованной страницей фильма и HAR от `1fanserials.org`.
 
-Поддерживаемые player-hosts на текущем экспериментальном пути: `cdnlbox.club`, `ylitron.pro`, `lomont.site`, `gencit.info`, `ortified.ws`, `vak345.com`, `interkh.com`, `zombie-film.com`.
+1. Поиск выполняется через **`/engine/ajax/msearch.php?q=...`**. Текущий JavaScript FanSeries использует этот же endpoint и ожидает JSON с `title`, `original_title`, `year`, `url`.
+2. Загружается найденная страница фильма с пользовательской cookie.
+3. Из iframe извлекаются **`/movies/{kp}?key={token}`**, `kp` и свежий `key`.
+4. Выполняется **`/film.php?kp={kp}&key={token}`** с `Referer: /movies/{kp}?key=...`.
+5. `film.php` возвращает JSON-массив озвучек с полями `title` и `file`; `file` указывает на `https://cdn.fancdn.net/movies/.../*.m3u8`.
+6. Поток отдаётся через `HostStreamProxy` с `Referer: https://1fanserials.org/` и `Origin: https://1fanserials.org`. FanCDN самостоятельно редиректит master playlist на рабочий `*.cdn.fancdn.net` узел.
+
+Для `key` используется отдельный cache namespace `fancdn:v3`; время кэширования поиска уменьшено до одного часа, чтобы не держать старый player-token слишком долго.
+
+## Что подтверждено для сериалов
+
+Авторизованная страница эпизода содержит `window.cdnData[...]`. Большинство вариантов озвучки уже содержат локальный player URL вида:
+
+```text
+/player/?file=https://cdn.fancdn.net/tvseries/.../hls.m3u8&...
+```
+
+В HAR подтверждён запрос такого HLS и редирект `cdn.fancdn.net` на `*.cdn.fancdn.net`. Отдельный вариант «Субтитры» на проверенной странице использовал `ylitron.pro`.
+
+Эта схема пока **не подключена** к `lite/fancdn`, потому что текущий контроллер и шаблон FanCDN рассчитаны на фильмы (`MovieTpl`).
 
 ## Конфигурация
 
@@ -49,4 +64,4 @@
 
 ## Статус
 
-Парсер переведён со старых `msearch.php` / `film.php` на текущую HTML/player-схему. Требуется runtime-проверка с действующей FanSeries-cookie, потому что доступность сайта и конкретных плееров зависит от сети, авторизации и текущего зеркала.
+Film-flow приведён к фактической схеме сайта на основании авторизованного HTML и HAR. Сетевой контракт `film.php -> cdn.fancdn.net -> HLS` подтверждён браузерным воспроизведением. Компиляция и выполнение самого модуля Lampac всё ещё требуют отдельной runtime-проверки в окружении с .NET/Playwright и действующей cookie.
