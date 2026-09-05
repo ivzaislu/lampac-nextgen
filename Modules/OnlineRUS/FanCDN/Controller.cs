@@ -1,15 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Shared;
 using Shared.Attributes;
-using Shared.Models.Base;
-using Shared.Services.HTTP;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using System.Web;
 using BrowserCookie = Microsoft.Playwright.Cookie;
 
 namespace FanCDN;
@@ -97,9 +92,12 @@ public class FanCDNController : BaseOnlineController
 
         if (serialRequest)
         {
-            var search = await InvokeCacheResult<string>($"fancdn:v6:serial:search:{kinopoisk_id}:{title}:{original_title}", TimeSpan.FromHours(1), onget: async e =>
+            // For long-running series the search endpoint can expose the year of a
+            // current season/episode instead of the original premiere year supplied
+            // by TMDB/Kinopoisk. Title/original-title are the stable identifiers here.
+            var search = await InvokeCacheResult<string>($"fancdn:v5:serial:search:{title}:{original_title}", TimeSpan.FromHours(1), onget: async e =>
             {
-                string result = await SearchSeriesPage(oninvk, title, original_title, kinopoisk_id);
+                string result = await oninvk.SearchPage(title, original_title, 0);
                 if (string.IsNullOrEmpty(result))
                     return e.Fail("search");
 
@@ -111,7 +109,7 @@ public class FanCDNController : BaseOnlineController
 
             if (s <= 0)
             {
-                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v6:seasons:{search.Value}", 30, textJson: true, onget: async e =>
+                var seasons = await InvokeCacheResult<List<int>>($"fancdn:v5:seasons:{search.Value}", 30, textJson: true, onget: async e =>
                 {
                     List<int> result = await oninvk.Seasons(search.Value);
                     if (result == null || result.Count == 0)
@@ -125,7 +123,7 @@ public class FanCDNController : BaseOnlineController
                 );
             }
 
-            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v6:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
+            var season = await InvokeCacheResult<FanCdnSerialSeason>($"fancdn:v5:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
             {
                 FanCdnSerialSeason result = await oninvk.Serial(search.Value, s);
                 if (result == null)
@@ -175,75 +173,5 @@ public class FanCDNController : BaseOnlineController
         return ContentTpl(cache,
             () => oninvk.Tpl(cache.Value, imdb_id, kinopoisk_id, title, original_title, vast: init.vast, headers: httpHeaders(init))
         );
-    }
-
-    async Task<string> SearchSeriesPage(FanCDNInvoke oninvk, string title, string original_title, long kinopoisk_id)
-    {
-        if (string.IsNullOrWhiteSpace(title))
-            return null;
-
-        string host = init.host.TrimEnd('/');
-        string search = await PlaywrightHttp.Get(
-            init,
-            $"{host}/engine/ajax/msearch.php?q={HttpUtility.UrlEncode(title)}",
-            cookies: cookies,
-            headers: HeadersModel.Init(
-                ("referer", $"{host}/"),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "same-origin")
-            )
-        );
-
-        JArray root = null;
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            try
-            {
-                root = JsonConvert.DeserializeObject<JArray>(search);
-            }
-            catch { }
-        }
-
-        if (root != null && root.Count > 0 && Uri.TryCreate(host + "/", UriKind.Absolute, out Uri baseUri))
-        {
-            int checkedPages = 0;
-            foreach (JToken item in root)
-            {
-                if (checkedPages++ >= 8)
-                    break;
-
-                string rawUrl = item.Value<string>("url");
-                if (string.IsNullOrWhiteSpace(rawUrl))
-                    continue;
-
-                string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
-                if (value.StartsWith("//"))
-                    value = baseUri.Scheme + ":" + value;
-
-                if (!Uri.TryCreate(baseUri, value, out Uri uri) || !uri.Host.Equals(baseUri.Host, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                string pageUrl = uri.ToString();
-                string page = await PlaywrightHttp.Get(
-                    init,
-                    pageUrl,
-                    cookies: cookies,
-                    headers: HeadersModel.Init(
-                        ("referer", $"{host}/"),
-                        ("sec-fetch-dest", "document"),
-                        ("sec-fetch-mode", "navigate"),
-                        ("sec-fetch-site", "same-origin")
-                    )
-                );
-
-                if (!string.IsNullOrEmpty(page) && page.Contains($"kp{kinopoisk_id}", StringComparison.OrdinalIgnoreCase))
-                    return pageUrl;
-            }
-        }
-
-        // Compatibility fallback for titles where the search JSON already uses the
-        // exact movie/series name and does not require Kinopoisk verification.
-        return await oninvk.SearchPage(title, original_title, 0);
     }
 }
