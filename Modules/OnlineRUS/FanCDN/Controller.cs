@@ -163,7 +163,7 @@ public class FanCDNController : BaseOnlineController
             EmbedModel result = null;
             for (int attempt = 0; attempt < 2 && result == null; attempt++)
             {
-                result = await oninvk.Embed(movieSearch.Value.kp, movieSearch.Value.key);
+                result = await TryTransient(() => oninvk.Embed(movieSearch.Value.kp, movieSearch.Value.key));
                 if (result == null && attempt == 0)
                     await Task.Delay(250);
             }
@@ -183,13 +183,13 @@ public class FanCDNController : BaseOnlineController
     {
         for (int attempt = 0; attempt < 3; attempt++)
         {
-            var result = await oninvk.Search(title, original_title, year);
+            var result = await TryTransient(() => oninvk.Search(title, original_title, year));
             if (ValidMovieResult(result, kinopoisk_id))
                 return result;
 
             if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
             {
-                result = await oninvk.Search(original_title, title, year);
+                result = await TryTransient(() => oninvk.Search(original_title, title, year));
                 if (ValidMovieResult(result, kinopoisk_id))
                     return result;
             }
@@ -213,13 +213,13 @@ public class FanCDNController : BaseOnlineController
     {
         for (int attempt = 0; attempt < 3; attempt++)
         {
-            string result = await oninvk.SearchPage(title, original_title, 0);
+            string result = await TryTransient(() => oninvk.SearchPage(title, original_title, 0));
             if (await IsUsableSeriesPage(oninvk, result))
                 return result;
 
             if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
             {
-                result = await oninvk.SearchPage(original_title, title, 0);
+                result = await TryTransient(() => oninvk.SearchPage(original_title, title, 0));
                 if (await IsUsableSeriesPage(oninvk, result))
                     return result;
             }
@@ -236,7 +236,7 @@ public class FanCDNController : BaseOnlineController
         if (string.IsNullOrWhiteSpace(pageUrl))
             return false;
 
-        List<int> seasons = await oninvk.Seasons(pageUrl);
+        List<int> seasons = await TryTransient(() => oninvk.Seasons(pageUrl));
         return seasons != null && seasons.Count > 0;
     }
 
@@ -244,7 +244,7 @@ public class FanCDNController : BaseOnlineController
     {
         for (int attempt = 0; attempt < 2; attempt++)
         {
-            List<int> result = await oninvk.Seasons(pageUrl);
+            List<int> result = await TryTransient(() => oninvk.Seasons(pageUrl));
             if (result != null && result.Count > 0)
                 return result;
 
@@ -259,7 +259,7 @@ public class FanCDNController : BaseOnlineController
     {
         for (int attempt = 0; attempt < 2; attempt++)
         {
-            FanCdnSerialSeason result = await oninvk.Serial(pageUrl, season);
+            FanCdnSerialSeason result = await TryTransient(() => oninvk.Serial(pageUrl, season));
             if (result != null)
                 return result;
 
@@ -268,5 +268,25 @@ public class FanCDNController : BaseOnlineController
         }
 
         return null;
+    }
+
+    async Task<T> TryTransient<T>(Func<Task<T>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (OperationCanceledException)
+        {
+            return default;
+        }
+        catch (System.Net.Http.HttpRequestException)
+        {
+            return default;
+        }
+        catch (System.IO.IOException)
+        {
+            return default;
+        }
     }
 }
