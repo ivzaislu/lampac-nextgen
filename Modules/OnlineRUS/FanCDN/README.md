@@ -8,47 +8,60 @@
 
 ## Условие (`Invoke`)
 
-Источник добавляется при **`args.kinopoisk_id > 0`** и **`args.serial == -1 || args.serial == 0`**. Сериалы (`args.serial == 1`) пока не подключены к маршруту `lite/fancdn`.
+Источник добавляется при **`args.kinopoisk_id > 0`** для фильмов и сериалов.
 
-Для работы нужны включённый Playwright и непустой **`cookie`** авторизованной FanSeries-сессии. Cookie передаются в браузерную сессию без удаления `PHPSESSID`/`cf_clearance`.
+Для работы нужны включённый Playwright и непустой **`cookie`** авторизованной FanSeries-сессии. Для проверенной пользовательской сессии оказалось достаточно `dle_user_id` и `dle_password`; модуль при этом не фильтрует другие cookie, если они указаны в конфигурации.
 
-## Текущий flow фильмов
+## Flow фильмов
 
-Flow подтверждён сохранённой авторизованной страницей фильма и HAR от `1fanserials.org`.
+Flow подтверждён сохранённой авторизованной страницей фильма, HAR и реальным воспроизведением через Lampac.
 
-1. Поиск выполняется через **`/engine/ajax/msearch.php?q=...`**. Текущий JavaScript FanSeries использует этот же endpoint и ожидает JSON с `title`, `original_title`, `year`, `url`.
+1. Поиск выполняется через **`/engine/ajax/msearch.php?q=...`**.
 2. Загружается найденная страница фильма с пользовательской cookie.
 3. Из iframe извлекаются **`/movies/{kp}?key={token}`**, `kp` и свежий `key`.
 4. Выполняется **`/film.php?kp={kp}&key={token}`** с `Referer: /movies/{kp}?key=...`.
-5. `film.php` возвращает JSON-массив озвучек с полями `title` и `file`; `file` указывает на `https://cdn.fancdn.net/movies/.../*.m3u8`.
-6. Поток отдаётся через `HostStreamProxy` с `Referer: https://1fanserials.org/` и `Origin: https://1fanserials.org`. FanCDN самостоятельно редиректит master playlist на рабочий `*.cdn.fancdn.net` узел.
+5. `film.php` возвращает JSON-массив озвучек с `title` и `file`.
+6. `file` разрешается только для `cdn.fancdn.net` / `*.cdn.fancdn.net` и отдаётся через `HostStreamProxy` с `Referer: https://1fanserials.org/` и `Origin: https://1fanserials.org`.
 
-Для `key` используется отдельный cache namespace `fancdn:v3`; время кэширования поиска уменьшено до одного часа, чтобы не держать старый player-token слишком долго.
+Для movie-token используется cache namespace `fancdn:v3`; поиск кэшируется на один час.
 
-## Что подтверждено для сериалов
+## Flow сериалов
 
-Авторизованная страница эпизода содержит `window.cdnData[...]`. Большинство вариантов озвучки уже содержат локальный player URL вида:
+Сериал-flow добавлен на основании авторизованной страницы эпизода и HAR.
+
+1. Поиск сериала выполняется тем же **`msearch.php`** и возвращает страницу сериала.
+2. Для выбранного сезона используется URL вида **`/{slug}/{season}-season.html`**.
+3. Из страницы сезона извлекаются ссылки **`/{season}-season/{episode}-episode.html`**.
+4. Каждая страница эпизода разбирает **`window.cdnData[...]`**.
+5. Локальный player URL вида
 
 ```text
 /player/?file=https://cdn.fancdn.net/tvseries/.../hls.m3u8&...
 ```
 
-В HAR подтверждён запрос такого HLS и редирект `cdn.fancdn.net` на `*.cdn.fancdn.net`. Отдельный вариант «Субтитры» на проверенной странице использовал `ylitron.pro`.
+превращается напрямую в HLS без загрузки внутреннего `/player/`.
+6. По озвучкам строится `VoiceTpl`, по сериям — `EpisodeTpl`; HLS идёт через `HostStreamProxy` с теми же `Origin`/`Referer`, которые подтверждены HAR.
 
-Эта схема пока **не подключена** к `lite/fancdn`, потому что текущий контроллер и шаблон FanCDN рассчитаны на фильмы (`MovieTpl`).
+На проверенной странице «Джентльменов» 9 из 10 вариантов были прямыми `cdn.fancdn.net/tvseries/...`; отдельный вариант «Субтитры» использовал внешний `ylitron.pro`. В текущем serial-flow поддерживаются только прямые FanCDN HLS, поэтому внешний `ylitron.pro` пока пропускается.
+
+Если запрос приходит с `s > 0`, сразу строится выбранный сезон. Если передан `serial=1` и `s <= 0`, модуль пытается извлечь список сезонов из страницы сериала и отдать `SeasonTpl`.
+
+Serial cache namespace: **`fancdn:v4`**.
 
 ## Конфигурация
 
 Секция в `init.conf`: **`FanCDN`** (`OnlinesSettings`).
 
-Минимально для проверки:
+Минимально:
 
 ```json
 "FanCDN": {
   "enable": true,
-  "cookie": "<cookie из авторизованной сессии FanSeries>"
+  "cookie": "dle_user_id=<value>; dle_password=<value>"
 }
 ```
+
+Не публикуйте значения cookie в GitHub.
 
 По умолчанию: **`displayindex = 520`**, **`imitationHuman = true`**.
 
@@ -60,8 +73,12 @@ Flow подтверждён сохранённой авторизованной 
 
 | Маршрут | Назначение |
 |---------|------------|
-| **`lite/fancdn`** | Основная выдача фильмов. |
+| **`lite/fancdn`** | Фильмы, сезоны, серии и переключение озвучек. |
+
+Основные serial-параметры: `s` — номер сезона, `voice` — выбранная озвучка, `serial=1` — явный режим сериала.
 
 ## Статус
 
-Film-flow приведён к фактической схеме сайта на основании авторизованного HTML и HAR. Сетевой контракт `film.php -> cdn.fancdn.net -> HLS` подтверждён браузерным воспроизведением. Компиляция и выполнение самого модуля Lampac всё ещё требуют отдельной runtime-проверки в окружении с .NET/Playwright и действующей cookie.
+Film-flow подтверждён реальным воспроизведением в Lampac.
+
+Serial-flow реализован по фактическому `window.cdnData` и HAR с прямыми `cdn.fancdn.net/tvseries` HLS, но страницы списка сезонов/эпизодов ещё требуют runtime-проверки на реальном сериале. Внешний `ylitron.pro` в serial-flow пока не поддерживается.
