@@ -21,7 +21,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
         var online = new List<ModuleOnlineItem>();
 
-        if (args.kinopoisk_id > 0 && (args.serial == -1 || args.serial == 0))
+        if (args.kinopoisk_id > 0)
             online.Add(new(conf));
 
         return online;
