@@ -4,7 +4,6 @@ using Shared.Models.Base;
 using Shared.Models.Online.Settings;
 using Shared.Models.Templates;
 using Shared.Services.HTTP;
-using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -16,6 +15,7 @@ namespace FanCDN;
 
 public struct FanCDNInvoke
 {
+    #region FanCDNInvoke
     static readonly SemaphoreSlim playwrightGate = new(2, 2);
 
     OnlinesSettings init;
@@ -28,194 +28,9 @@ public struct FanCDNInvoke
         this.cookies = cookies;
         this.onstreamfile = onstreamfile;
     }
-
-    #region Search
-    async public Task<string> SearchPage(string title, string original_title, short year)
-    {
-        if (string.IsNullOrWhiteSpace(title))
-            return null;
-
-        string host = init.host.TrimEnd('/');
-        string search = await PlaywrightHttp.Get(
-            init,
-            $"{host}/engine/ajax/msearch.php?q={HttpUtility.UrlEncode(title)}",
-            cookies: cookies,
-            headers: HeadersModel.Init(
-                ("referer", $"{host}/"),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "same-origin")
-            )
-        );
-
-        if (string.IsNullOrWhiteSpace(search))
-            return null;
-
-        JArray root = null;
-        try
-        {
-            root = JsonConvert.DeserializeObject<JArray>(search);
-        }
-        catch { }
-
-        if (root == null || root.Count == 0)
-            return null;
-
-        string stitle = SearchNameTo.Convert(title);
-        string soriginal = SearchNameTo.Convert(original_title);
-        string fallbackUrl = null;
-
-        foreach (JToken item in root)
-        {
-            string itemTitle = item.Value<string>("title");
-            string itemOriginal = item.Value<string>("original_title");
-
-            bool titleMatch = !string.IsNullOrEmpty(stitle) && SearchNameTo.Equals(itemTitle, stitle);
-            bool originalMatch = !string.IsNullOrEmpty(soriginal) && SearchNameTo.Equals(itemOriginal, soriginal);
-            if (!titleMatch && !originalMatch)
-                continue;
-
-            string normalized = NormalizeSiteUrl(item.Value<string>("url"));
-            if (string.IsNullOrEmpty(normalized))
-                continue;
-
-            if (year <= 0)
-                return normalized;
-
-            string itemYearText = item.Value<string>("year");
-            if (!short.TryParse(itemYearText, out short itemYear))
-            {
-                fallbackUrl ??= normalized;
-                continue;
-            }
-
-            if (Math.Abs(itemYear - year) <= 1)
-                return normalized;
-        }
-
-        return fallbackUrl;
-    }
-
-    async public Task<(string kp, string key)> Search(string title, string original_title, short year)
-    {
-        string pageUrl = await SearchPage(title, original_title, year);
-        if (string.IsNullOrEmpty(pageUrl))
-            return default;
-
-        string page = await GetPage(pageUrl);
-        if (string.IsNullOrWhiteSpace(page) || RequiresAuth(page))
-            return default;
-
-        foreach (Match iframe in Regex.Matches(page, "<iframe\\b[^>]*\\bsrc\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
-        {
-            string playerUrl = NormalizeSiteUrl(iframe.Groups[1].Value);
-            if (string.IsNullOrEmpty(playerUrl) || !Uri.TryCreate(playerUrl, UriKind.Absolute, out Uri playerUri))
-                continue;
-
-            Match path = Regex.Match(playerUri.AbsolutePath, "^/movies/([0-9]+)/?$", RegexOptions.IgnoreCase);
-            if (!path.Success)
-                continue;
-
-            string key = HttpUtility.ParseQueryString(playerUri.Query).Get("key");
-            if (string.IsNullOrWhiteSpace(key))
-                continue;
-
-            return (path.Groups[1].Value, key);
-        }
-
-        return default;
-    }
-    #endregion
-
-    #region Movie
-    async public Task<EmbedModel> Embed(string kp, string key)
-    {
-        if (string.IsNullOrWhiteSpace(kp) || !Regex.IsMatch(kp, "^[0-9]+$") || string.IsNullOrWhiteSpace(key))
-            return null;
-
-        string host = init.host.TrimEnd('/');
-        string encodedKey = HttpUtility.UrlEncode(key);
-        string movieUrl = $"{host}/movies/{kp}?key={encodedKey}";
-
-        string json = await PlaywrightHttp.Get(
-            init,
-            $"{host}/film.php?kp={kp}&key={encodedKey}",
-            cookies: cookies,
-            headers: HeadersModel.Init(
-                ("referer", movieUrl),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "same-origin")
-            )
-        );
-
-        if (string.IsNullOrWhiteSpace(json))
-            return null;
-
-        Episode[] source = null;
-        try
-        {
-            source = JsonConvert.DeserializeObject<Episode[]>(json);
-        }
-        catch { }
-
-        if (source == null || source.Length == 0)
-            return null;
-
-        var movies = new List<Episode>(source.Length);
-        foreach (Episode movie in source)
-        {
-            if (movie == null || string.IsNullOrWhiteSpace(movie.file))
-                continue;
-
-            string file = NormalizeFanCdnUrl(movie.file);
-            if (string.IsNullOrEmpty(file))
-                continue;
-
-            movie.file = file;
-            movies.Add(movie);
-        }
-
-        if (movies.Count == 0)
-            return null;
-
-        return new EmbedModel { movies = movies.ToArray() };
-    }
     #endregion
 
     #region Serial
-    async public Task<List<int>> Seasons(string seriesUrl)
-    {
-        string page = await GetPage(seriesUrl);
-        if (string.IsNullOrWhiteSpace(page))
-            return null;
-
-        Uri seriesUri = new Uri(seriesUrl);
-        string rootPath = SeriesRootPath(seriesUri.AbsolutePath);
-        var seasons = new HashSet<int>();
-
-        foreach (Match link in Regex.Matches(page, "href\\s*=\\s*[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase | RegexOptions.Singleline))
-        {
-            string url = NormalizeSiteUrl(link.Groups[1].Value);
-            if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
-                continue;
-
-            if (!uri.AbsolutePath.StartsWith(rootPath + "/", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            Match season = Regex.Match(uri.AbsolutePath.Substring(rootPath.Length), "^/([0-9]+)-season(?:\\.html|/)", RegexOptions.IgnoreCase);
-            if (season.Success && int.TryParse(season.Groups[1].Value, out int number) && number > 0)
-                seasons.Add(number);
-        }
-
-        if (seasons.Count == 0)
-            return null;
-
-        var result = new List<int>(seasons);
-        result.Sort();
-        return result;
-    }
-
     async public Task<FanCdnSerialSeason> Serial(string seriesUrl, short season)
     {
         if (season <= 0 || string.IsNullOrWhiteSpace(seriesUrl))
@@ -272,7 +87,7 @@ public struct FanCDNInvoke
             if (string.IsNullOrWhiteSpace(episodePage) || RequiresAuth(episodePage))
                 return null;
 
-            Dictionary<string, string> streams = ExtractCdnStreams(episodePage, episodeUrl);
+            Dictionary<string, string> streams = ExtractCdnStreams(episodePage);
             if (streams.Count == 0)
                 return null;
 
@@ -317,7 +132,7 @@ public struct FanCDNInvoke
         return result;
     }
 
-    Dictionary<string, string> ExtractCdnStreams(string html, string baseUrl)
+    Dictionary<string, string> ExtractCdnStreams(string html)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(html))
@@ -404,7 +219,7 @@ public struct FanCDNInvoke
     }
     #endregion
 
-    #region Helpers
+    #region HTTP
     async Task<string> GetPage(string url)
     {
         if (string.IsNullOrWhiteSpace(url))
@@ -454,7 +269,9 @@ public struct FanCDNInvoke
             && !html.Contains("challenge-platform", StringComparison.OrdinalIgnoreCase)
             && !html.Contains("Just a moment", StringComparison.OrdinalIgnoreCase);
     }
+    #endregion
 
+    #region Helpers
     string NormalizeSiteUrl(string rawUrl)
     {
         if (string.IsNullOrWhiteSpace(rawUrl) || !Uri.TryCreate(init.host.TrimEnd('/') + "/", UriKind.Absolute, out Uri baseUri))
@@ -488,7 +305,8 @@ public struct FanCDNInvoke
         if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
             return null;
 
-        if (!uri.Host.Equals("cdn.fancdn.net", StringComparison.OrdinalIgnoreCase) && !uri.Host.EndsWith(".cdn.fancdn.net", StringComparison.OrdinalIgnoreCase))
+        if (!uri.Host.Equals("cdn.fancdn.net", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.EndsWith(".cdn.fancdn.net", StringComparison.OrdinalIgnoreCase))
             return null;
 
         return uri.ToString();
@@ -628,8 +446,8 @@ public struct FanCDNInvoke
     }
     #endregion
 
-    #region Html
-    public ITplResult Tpl(EmbedModel root, string imdb_id, long kinopoisk_id, string title, string original_title, VastConf vast = null, IReadOnlyList<HeadersModel> headers = null)
+    #region Tpl
+    public ITplResult Tpl(EmbedModel root, string title, string original_title, VastConf vast = null, IReadOnlyList<HeadersModel> headers = null)
     {
         if (root?.movies == null || root.movies.Length == 0)
             return default;
