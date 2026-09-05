@@ -2,9 +2,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Shared;
 using Shared.Attributes;
+using Shared.Models.Base;
 using System;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using BrowserCookie = Microsoft.Playwright.Cookie;
 
@@ -13,35 +13,53 @@ namespace FanCDN;
 public class FanCDNController : BaseOnlineController
 {
     static List<BrowserCookie> cookies;
+    static string cookiesKey;
 
     public FanCDNController() : base(ModInit.conf)
     {
         requestInitialization += () =>
         {
-            if (cookies == null && !string.IsNullOrEmpty(init.cookie))
+            string currentKey = $"{init.host}|{init.cookie}";
+            if (cookiesKey == currentKey)
+                return;
+
+            cookiesKey = currentKey;
+            cookies = null;
+
+            if (string.IsNullOrWhiteSpace(init.cookie) || !Uri.TryCreate(init.host, UriKind.Absolute, out Uri fanUri))
+                return;
+
+            var result = new List<BrowserCookie>();
+            long expires = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeSeconds();
+
+            foreach (string line in init.cookie.Split(';'))
             {
-                string fanhost = "." + Regex.Replace(init.host, "^https?://", "");
-                var excookie = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeSeconds();
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
 
-                cookies = new List<BrowserCookie>();
+                int separator = line.IndexOf('=');
+                if (separator <= 0)
+                    continue;
 
-                foreach (string line in init.cookie.Split(";"))
+                string name = line.Substring(0, separator).Trim();
+                string value = line.Substring(separator + 1).Trim();
+                if (string.IsNullOrEmpty(name))
+                    continue;
+
+                result.Add(new BrowserCookie
                 {
-                    if (string.IsNullOrEmpty(line) || !line.Contains("=") || line.Contains("cf_clearance") || line.Contains("PHPSESSID"))
-                        continue;
-
-                    cookies.Add(new BrowserCookie()
-                    {
-                        Domain = fanhost,
-                        Expires = excookie,
-                        Path = "/",
-                        HttpOnly = true,
-                        Secure = true,
-                        Name = line.Split("=")[0].Trim(),
-                        Value = line.Split("=")[1].Trim()
-                    });
-                }
+                    Domain = "." + fanUri.Host,
+                    Expires = expires,
+                    Path = "/",
+                    HttpOnly = true,
+                    Secure = fanUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase),
+                    Name = name,
+                    Value = value
+                });
             }
+
+            if (result.Count > 0)
+                cookies = result;
         };
     }
 
@@ -59,13 +77,13 @@ public class FanCDNController : BaseOnlineController
         (
            init,
            cookies,
-           streamfile => HostStreamProxy(streamfile)
+           (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
         );
 
-        var search = await InvokeCacheResult<(string kp, string key)>($"fancdn:{title}:{original_title}:{year}", TimeSpan.FromHours(4), onget: async e =>
+        var search = await InvokeCacheResult<string>($"fancdn:v2:{title}:{original_title}:{year}", TimeSpan.FromHours(4), onget: async e =>
         {
-            var result = await oninvk.Search(title, original_title, year);
-            if (result.key == null)
+            string result = await oninvk.Search(title, original_title, year);
+            if (string.IsNullOrEmpty(result))
                 return e.Fail("search");
 
             return e.Success(result);
@@ -74,9 +92,9 @@ public class FanCDNController : BaseOnlineController
         if (!search.IsSuccess)
             return OnError(search.ErrorMsg);
 
-        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:{search.Value}", 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<EmbedModel>($"fancdn:v2:{search.Value}", 20, textJson: true, onget: async e =>
         {
-            var result = await oninvk.Embed(search.Value.kp, search.Value.key);
+            var result = await oninvk.Embed(search.Value);
             if (result == null)
                 return e.Fail("embed");
 
