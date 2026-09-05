@@ -21,7 +21,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
         var online = new List<ModuleOnlineItem>();
 
-        if (args.kinopoisk_id > 0 && (args.serial == -1 || args.serial == 0))
+        if (args.kinopoisk_id > 0)
             online.Add(new(conf));
 
         return online;
@@ -42,14 +42,14 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     void updateConf()
     {
-        conf = ModuleInvoke.Init("FanCDN", new OnlinesSettings("FanCDN", "https://fanserial.me", streamproxy: true)
+        conf = ModuleInvoke.Init("FanCDN", new OnlinesSettings("FanCDN", "https://1fanserials.org", streamproxy: true)
         {
             enable = false,
             displayindex = 520,
             imitationHuman = true,
             headers_stream = HeadersModel.Init(Http.defaultFullHeaders,
-                ("origin", "https://fanserial.me"),
-                ("referer", "https://fanserial.me/"),
+                ("origin", "https://1fanserials.org"),
+                ("referer", "https://1fanserials.org/"),
                 ("sec-fetch-dest", "empty"),
                 ("sec-fetch-mode", "cors"),
                 ("sec-fetch-site", "cross-site")

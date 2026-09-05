@@ -1,31 +1,98 @@
 # FanCDN
 
-Онлайн-источник **FanCDN** (`https://fanserial.me`), **`streamproxy: true`**. В шаблоне по умолчанию модуль **выключен**: **`enable = false`** — включите в `init.conf`, если нужен источник.
+Онлайн-источник FanCDN / FanSeries для фильмов и сериалов.
 
-## Интерфейс
+Домен по умолчанию: `https://1fanserials.org`. Потоки отдаются через `HostStreamProxy` (`streamproxy: true`). Модуль по умолчанию выключен (`enable = false`) и включается в `init.conf`.
 
-**`IModuleLoaded`**, **`IModuleOnline`**.
+## Требования
 
-## Условие (`Invoke`)
+Для работы нужны:
 
-Запись добавляется при **`args.kinopoisk_id > 0`** и **`args.serial == -1 || args.serial == 0`**.
+- непустая авторизованная `cookie` FanSeries;
+- включённый Playwright — он используется как резервный транспорт, если обычный HTTP-запрос не прошёл.
+
+Источник добавляется для фильмов и сериалов при `kinopoisk_id > 0`.
+
+## Поиск и HTTP
+
+Поиск выполняется через:
+
+```text
+/engine/ajax/msearch.php?q=...
+```
+
+Запросы к поиску, страницам контента и API сначала выполняются обычным HTTP с cookie. Если ответ пустой, похож на anti-bot challenge или не соответствует ожидаемому формату, используется Playwright fallback.
+
+Одновременно допускается не более двух Playwright-загрузок внутри FanCDN, чтобы не создавать лишний пик памяти.
+
+Поиск учитывает как `title`, так и `original_title`. Оба значения сопоставляются с обоими полями результата поиска, поэтому работают случаи, когда локализованное название на FanSeries отличается от названия в каталоге Lampa.
+
+## Фильмы
+
+Flow:
+
+1. `msearch.php` находит страницу фильма.
+2. Из страницы извлекается iframe `/movies/{kp}?key=...`.
+3. `kp` сверяется с запрошенным `kinopoisk_id`.
+4. `/film.php?kp={kp}&key=...` возвращает JSON с вариантами воспроизведения.
+5. Разрешаются только прямые `cdn.fancdn.net` / `*.cdn.fancdn.net`.
+6. HLS и субтитры отдаются через `HostStreamProxy`.
+
+Если быстрый HTTP получил страницу фильма, но player iframe в ней отсутствует, та же страница перечитывается через Playwright fallback.
+
+## Сериалы
+
+Flow:
+
+1. `msearch.php` находит сериал.
+2. Для URL вида `/index.php?newsid=...` загружается страница и извлекается canonical URL.
+3. Если на странице присутствует Kinopoisk-маркер, он сверяется с запрошенным `kinopoisk_id`.
+4. Из той же страницы по возможности сразу извлекается список сезонов.
+5. Страница выбранного сезона даёт ссылки на эпизоды.
+6. Страницы эпизодов загружаются HTTP-first с ограниченным параллелизмом.
+7. Из `window.cdnData[...]` извлекаются озвучка и прямой FanCDN HLS.
+8. Список эпизодов сортируется и дедуплицируется по номеру.
+9. По озвучкам строится `VoiceTpl`, по сериям — `EpisodeTpl`.
+
+Локальный player URL вида:
+
+```text
+/player/?file=https://cdn.fancdn.net/tvseries/.../hls.m3u8&...
+```
+
+разбирается напрямую, без отдельной загрузки `/player/`.
+
+Внешние видеохосты, например `ylitron.pro`, не используются: serial-flow принимает только прямые FanCDN HLS.
 
 ## Конфигурация
 
-Секция в `init.conf`: **`FanCDN`** (`OnlinesSettings`).
+Минимальный пример:
 
-По умолчанию: **`displayindex = 520`**, **`httpversion = 2`**, **`rch_access = apk`**, **`rhub_safety = false`**, **`imitationHuman = true`**, отдельные **`headers`** и **`headers_stream`** для сайта и потока.
+```json
+"FanCDN": {
+  "enable": true,
+  "cookie": "dle_user_id=<value>; dle_password=<value>"
+}
+```
 
-## Подпись качества
+Не публикуйте значения cookie.
 
-**`OnlineApiQuality`**: при **`e.balanser == "fancdn"`** → **` ~ 1080p`**.
+Параметры по умолчанию:
 
-## HTTP
+- `displayindex = 520`
+- `imitationHuman = true`
+- `streamproxy = true`
 
-| Маршрут | Назначение |
-|---------|------------|
-| **`lite/fancdn`** | Основная выдача. |
+## Маршрут
 
-## Файлы
+```text
+GET /lite/fancdn
+```
 
-**`ModInit.cs`**, **`Controller.cs`**.
+Основные параметры сериалов:
+
+- `serial=1` — режим сериала;
+- `s` — номер сезона;
+- `voice` — выбранная озвучка.
+
+`OnlineApiQuality` для `fancdn`: ` ~ 1080p`.

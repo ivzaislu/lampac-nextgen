@@ -17,7 +17,6 @@ public class Episode
 
     public string subtitles { get; set; }
 
-
     public Dictionary<string, Episode> folder { get; set; }
 }
 
@@ -30,4 +29,20 @@ public class Voice
     public Dictionary<string, Episode> folder { get; set; }
 
     public int seasons { get; set; }
+}
+
+public class FanCdnSerialSeason
+{
+    public short season { get; set; }
+
+    public FanCdnSerialEpisode[] episodes { get; set; }
+}
+
+public class FanCdnSerialEpisode
+{
+    public int episode { get; set; }
+
+    public string title { get; set; }
+
+    public Dictionary<string, string> streams { get; set; }
 }
