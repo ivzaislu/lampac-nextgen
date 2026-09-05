@@ -75,6 +75,35 @@ public class FanCDNController : BaseOnlineController
         string voice = null,
         bool rjson = false)
     {
+        try
+        {
+            return await IndexCore(imdb_id, kinopoisk_id, title, original_title, year, serial, s, voice, rjson);
+        }
+        catch (OperationCanceledException)
+        {
+            return OnError("timeout", gbcache: false);
+        }
+        catch (System.Net.Http.HttpRequestException)
+        {
+            return OnError("network", gbcache: false);
+        }
+        catch (System.IO.IOException)
+        {
+            return OnError("network", gbcache: false);
+        }
+    }
+
+    async Task<ActionResult> IndexCore(
+        string imdb_id,
+        long kinopoisk_id,
+        string title,
+        string original_title,
+        short year,
+        short serial,
+        short s,
+        string voice,
+        bool rjson)
+    {
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
