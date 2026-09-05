@@ -17,6 +17,11 @@ public class Episode
 
     public string subtitles { get; set; }
 
+    public Dictionary<string, string> subtitle_tracks { get; set; }
+
+    public string referer { get; set; }
+
+    public string origin { get; set; }
 
     public Dictionary<string, Episode> folder { get; set; }
 }
