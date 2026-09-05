@@ -443,6 +443,10 @@ public struct FanCDNInvoke
         if (value.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
             value = value.Substring(0, value.Length - 5);
 
+        Match serialPath = Regex.Match(value, "^(.*?)/[0-9]+-season(?:/[0-9]+-episode)?$", RegexOptions.IgnoreCase);
+        if (serialPath.Success && !string.IsNullOrEmpty(serialPath.Groups[1].Value))
+            value = serialPath.Groups[1].Value;
+
         return string.IsNullOrEmpty(value) ? "/" : value;
     }
 
