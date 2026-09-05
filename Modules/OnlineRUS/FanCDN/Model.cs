@@ -33,7 +33,7 @@ public class Voice
 
 public class FanCdnSerialSeason
 {
-    public int season { get; set; }
+    public short season { get; set; }
 
     public FanCdnSerialEpisode[] episodes { get; set; }
 }
