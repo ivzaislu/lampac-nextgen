@@ -134,7 +134,7 @@ public class FanCDNController : BaseOnlineController
         {
             List<int> preloadedSeasons = null;
 
-            var search = await InvokeCacheResult<string>($"fancdn:v16:serial:search:{kinopoisk_id}:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
+            var search = await InvokeCacheResult<string>($"fancdn:v17:serial:search:{kinopoisk_id}:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
             {
                 var resolved = await SearchSeriesPageFast(kinopoisk_id, title, original_title, year);
                 preloadedSeasons = resolved.seasons;
@@ -221,7 +221,7 @@ public class FanCDNController : BaseOnlineController
     #endregion
 
     #region Search
-    async Task<List<(string url, short? year, int order)>> SearchCandidatesHttp(string title, string original_title)
+    async Task<List<(string url, short? year, int order, int matchRank)>> SearchCandidatesHttp(string title, string original_title, bool allowPartial = false)
     {
         if (string.IsNullOrWhiteSpace(title))
             return null;
@@ -255,7 +255,7 @@ public class FanCDNController : BaseOnlineController
 
         string stitle = SearchNameTo.Convert(title);
         string soriginal = SearchNameTo.Convert(original_title);
-        var candidates = new List<(string url, short? year, int order)>();
+        var candidates = new List<(string url, short? year, int order, int matchRank)>();
         int order = 0;
 
         foreach (JToken item in root)
@@ -264,15 +264,23 @@ public class FanCDNController : BaseOnlineController
             string itemOriginal = item.Value<string>("original_title");
             string itemAltTitles = System.Net.WebUtility.HtmlDecode(item.Value<string>("alt_titles") ?? string.Empty);
 
-            bool titleMatch = !string.IsNullOrEmpty(stitle) &&
+            bool titleExact = !string.IsNullOrEmpty(stitle) &&
                 (SearchNameTo.Equals(itemTitle, stitle) ||
                  SearchNameTo.Equals(itemOriginal, stitle) ||
                  SearchNameTo.Contains(itemAltTitles, stitle));
-            bool originalMatch = !string.IsNullOrEmpty(soriginal) &&
+            bool originalExact = !string.IsNullOrEmpty(soriginal) &&
                 (SearchNameTo.Equals(itemTitle, soriginal) ||
                  SearchNameTo.Equals(itemOriginal, soriginal) ||
                  SearchNameTo.Contains(itemAltTitles, soriginal));
-            if (!titleMatch && !originalMatch)
+
+            bool titlePartial = allowPartial && !string.IsNullOrEmpty(stitle) && stitle.Length >= 4 &&
+                (SearchNameTo.Contains(itemTitle, stitle) ||
+                 SearchNameTo.Contains(itemOriginal, stitle));
+            bool originalPartial = allowPartial && !string.IsNullOrEmpty(soriginal) && soriginal.Length >= 4 &&
+                (SearchNameTo.Contains(itemTitle, soriginal) ||
+                 SearchNameTo.Contains(itemOriginal, soriginal));
+
+            if (!titleExact && !originalExact && !titlePartial && !originalPartial)
                 continue;
 
             string normalized = FanCDNHelper.NormalizeSiteUrl(init.host, item.Value<string>("url"));
@@ -282,8 +290,9 @@ public class FanCDNController : BaseOnlineController
             short? itemYear = short.TryParse(item.Value<string>("year"), out short parsedYear)
                 ? parsedYear
                 : null;
+            int matchRank = titleExact || originalExact ? 0 : 1;
 
-            candidates.Add((normalized, itemYear, order++));
+            candidates.Add((normalized, itemYear, order++, matchRank));
         }
 
         return candidates.Count == 0 ? null : candidates;
@@ -291,7 +300,7 @@ public class FanCDNController : BaseOnlineController
 
     async Task<string> SearchPageHttp(string title, string original_title, short year)
     {
-        List<(string url, short? year, int order)> candidates = await SearchCandidatesHttp(title, original_title);
+        List<(string url, short? year, int order, int matchRank)> candidates = await SearchCandidatesHttp(title, original_title);
         if (candidates == null || candidates.Count == 0)
             return null;
 
@@ -452,12 +461,16 @@ public class FanCDNController : BaseOnlineController
 
         foreach (var searchName in FanCDNHelper.SearchNames(title, original_title))
         {
-            List<(string url, short? year, int order)> candidates = await SearchCandidatesHttp(searchName.title, searchName.originalTitle);
+            List<(string url, short? year, int order, int matchRank)> candidates = await SearchCandidatesHttp(searchName.title, searchName.originalTitle, allowPartial: true);
             if (candidates == null || candidates.Count == 0)
                 continue;
 
             candidates.Sort((a, b) =>
             {
+                int matchCompare = a.matchRank.CompareTo(b.matchRank);
+                if (matchCompare != 0)
+                    return matchCompare;
+
                 int rankA = year <= 0
                     ? 0
                     : a.year.HasValue ? Math.Abs(a.year.Value - year) : int.MaxValue;
@@ -474,7 +487,7 @@ public class FanCDNController : BaseOnlineController
                 if (!tried.Add(candidate.url))
                     continue;
 
-                var resolved = await ResolveSeriesPage(candidate.url, kinopoisk_id);
+                var resolved = await ResolveSeriesPage(candidate.url, kinopoisk_id, requireKpMarker: candidate.matchRank > 0);
                 if (!string.IsNullOrEmpty(resolved.url))
                     return resolved;
             }
@@ -483,7 +496,7 @@ public class FanCDNController : BaseOnlineController
         return default;
     }
 
-    async Task<(string url, List<int> seasons)> ResolveSeriesPage(string candidate, long kinopoisk_id)
+    async Task<(string url, List<int> seasons)> ResolveSeriesPage(string candidate, long kinopoisk_id, bool requireKpMarker = false)
     {
         if (string.IsNullOrWhiteSpace(candidate) || !Uri.TryCreate(candidate, UriKind.Absolute, out Uri candidateUri))
             return default;
@@ -492,12 +505,15 @@ public class FanCDNController : BaseOnlineController
             !candidateUri.Host.Equals(baseUri.Host, StringComparison.OrdinalIgnoreCase))
             return default;
 
-        if (IsSeriesContentPath(candidateUri.AbsolutePath))
-            return (candidateUri.ToString(), null);
+        bool directContent = IsSeriesContentPath(candidateUri.AbsolutePath);
+        bool newsPage = candidateUri.AbsolutePath.Equals("/index.php", StringComparison.OrdinalIgnoreCase) &&
+            Regex.IsMatch(candidateUri.Query, @"(?:^\?|&)newsid=\d+(?:&|$)", RegexOptions.IgnoreCase);
 
-        if (!candidateUri.AbsolutePath.Equals("/index.php", StringComparison.OrdinalIgnoreCase) ||
-            !Regex.IsMatch(candidateUri.Query, @"(?:^\?|&)newsid=\d+(?:&|$)", RegexOptions.IgnoreCase))
+        if (!directContent && !newsPage)
             return default;
+
+        if (directContent && !requireKpMarker)
+            return (candidateUri.ToString(), null);
 
         string host = init.host.TrimEnd('/');
         var headers = FanCDNHelper.DocumentHeaders(init.host);
@@ -511,8 +527,18 @@ public class FanCDNController : BaseOnlineController
             @"getElementById\s*\(\s*[""']kp(?<id>\d+)[""']\s*\)",
             RegexOptions.IgnoreCase
         );
-        if (kpMarker.Success && kinopoisk_id > 0 && kpMarker.Groups["id"].Value != kinopoisk_id.ToString())
-            return default;
+
+        if (kinopoisk_id > 0)
+        {
+            if (requireKpMarker && (!kpMarker.Success || kpMarker.Groups["id"].Value != kinopoisk_id.ToString()))
+                return default;
+
+            if (kpMarker.Success && kpMarker.Groups["id"].Value != kinopoisk_id.ToString())
+                return default;
+        }
+
+        if (directContent)
+            return (candidateUri.ToString(), ParseSeasonsFromPage(page, candidateUri));
 
         foreach (Match tag in Regex.Matches(page, @"<link\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
         {
