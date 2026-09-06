@@ -340,27 +340,13 @@ public class FanCDNController : BaseOnlineController
             return default;
         }
 
-        string page = await Shared.Services.Http.Get(
+        string page = await SiteGetFast(
             pageUrl,
-            cookie: init.cookie,
-            referer: $"{host}/",
-            timeoutSeconds: 8,
-            headers: headers
+            headers,
+            $"{host}/",
+            expectJson: false,
+            contentValidator: value => !string.IsNullOrEmpty(ParsePlayer(value).kp)
         );
-
-        var result = ParsePlayer(page);
-        if (!string.IsNullOrEmpty(result.kp))
-            return result;
-
-        await browserGate.WaitAsync();
-        try
-        {
-            page = await PlaywrightHttp.Get(init, pageUrl, cookies: cookies, headers: headers);
-        }
-        finally
-        {
-            browserGate.Release();
-        }
 
         return ParsePlayer(page);
     }
@@ -550,7 +536,12 @@ public class FanCDNController : BaseOnlineController
     #endregion
 
     #region HTTP
-    async Task<string> SiteGetFast(string url, IReadOnlyList<HeadersModel> headers, string referer, bool expectJson)
+    async Task<string> SiteGetFast(
+        string url,
+        IReadOnlyList<HeadersModel> headers,
+        string referer,
+        bool expectJson,
+        Func<string, bool> contentValidator = null)
     {
         string direct = await Shared.Services.Http.Get(
             url,
@@ -560,13 +551,17 @@ public class FanCDNController : BaseOnlineController
             headers: headers
         );
 
-        if (UsableResponse(direct, expectJson))
+        if (UsableResponse(direct, expectJson) && (contentValidator == null || contentValidator(direct)))
             return direct;
 
         await browserGate.WaitAsync();
         try
         {
-            return await PlaywrightHttp.Get(init, url, cookies: cookies, headers: headers);
+            string browser = await PlaywrightHttp.Get(init, url, cookies: cookies, headers: headers);
+            if (!UsableResponse(browser, expectJson))
+                return null;
+
+            return contentValidator == null || contentValidator(browser) ? browser : null;
         }
         finally
         {
