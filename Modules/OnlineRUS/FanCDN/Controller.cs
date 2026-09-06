@@ -298,13 +298,9 @@ public class FanCDNController : BaseOnlineController
     #region Movie
     async Task<(string kp, string key)> SearchMovieFast(long kinopoisk_id, string title, string original_title, short year)
     {
-        var result = await SearchMovieHttp(title, original_title, year);
-        if (ValidMovieResult(result, kinopoisk_id))
-            return result;
-
-        if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
+        foreach (var searchName in FanCDNHelper.SearchNames(title, original_title))
         {
-            result = await SearchMovieHttp(original_title, title, year);
+            var result = await SearchMovieHttp(searchName.title, searchName.originalTitle, year);
             if (ValidMovieResult(result, kinopoisk_id))
                 return result;
         }
@@ -319,12 +315,7 @@ public class FanCDNController : BaseOnlineController
             return default;
 
         string host = init.host.TrimEnd('/');
-        var headers = HeadersModel.Init(
-            ("referer", $"{host}/"),
-            ("sec-fetch-dest", "document"),
-            ("sec-fetch-mode", "navigate"),
-            ("sec-fetch-site", "same-origin")
-        );
+        var headers = FanCDNHelper.DocumentHeaders(init.host);
 
         (string kp, string key) ParsePlayer(string page)
         {
@@ -437,15 +428,12 @@ public class FanCDNController : BaseOnlineController
     #region Serial
     async Task<(string url, List<int> seasons)> SearchSeriesPageFast(long kinopoisk_id, string title, string original_title, short year)
     {
-        string candidate = await SearchPageHttp(title, original_title, year);
-        var resolved = await ResolveSeriesPage(candidate, kinopoisk_id);
-        if (!string.IsNullOrEmpty(resolved.url))
-            return resolved;
-
-        if (!string.IsNullOrWhiteSpace(original_title) && !original_title.Equals(title, StringComparison.OrdinalIgnoreCase))
+        foreach (var searchName in FanCDNHelper.SearchNames(title, original_title))
         {
-            candidate = await SearchPageHttp(original_title, title, year);
-            return await ResolveSeriesPage(candidate, kinopoisk_id);
+            string candidate = await SearchPageHttp(searchName.title, searchName.originalTitle, year);
+            var resolved = await ResolveSeriesPage(candidate, kinopoisk_id);
+            if (!string.IsNullOrEmpty(resolved.url))
+                return resolved;
         }
 
         return default;
@@ -468,12 +456,7 @@ public class FanCDNController : BaseOnlineController
             return default;
 
         string host = init.host.TrimEnd('/');
-        var headers = HeadersModel.Init(
-            ("referer", $"{host}/"),
-            ("sec-fetch-dest", "document"),
-            ("sec-fetch-mode", "navigate"),
-            ("sec-fetch-site", "same-origin")
-        );
+        var headers = FanCDNHelper.DocumentHeaders(init.host);
 
         string page = await SiteGetFast(candidateUri.ToString(), headers, $"{host}/", expectJson: false);
         if (string.IsNullOrWhiteSpace(page))
@@ -516,12 +499,7 @@ public class FanCDNController : BaseOnlineController
             return null;
 
         string host = init.host.TrimEnd('/');
-        var headers = HeadersModel.Init(
-            ("referer", $"{host}/"),
-            ("sec-fetch-dest", "document"),
-            ("sec-fetch-mode", "navigate"),
-            ("sec-fetch-site", "same-origin")
-        );
+        var headers = FanCDNHelper.DocumentHeaders(init.host);
 
         string page = await SiteGetFast(seriesUrl, headers, $"{host}/", expectJson: false);
         return ParseSeasonsFromPage(page, uri);

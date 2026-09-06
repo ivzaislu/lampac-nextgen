@@ -226,12 +226,7 @@ public struct FanCDNInvoke
             return null;
 
         string host = init.host.TrimEnd('/');
-        var headers = HeadersModel.Init(
-            ("referer", $"{host}/"),
-            ("sec-fetch-dest", "document"),
-            ("sec-fetch-mode", "navigate"),
-            ("sec-fetch-site", "same-origin")
-        );
+        var headers = FanCDNHelper.DocumentHeaders(init.host);
 
         string direct = await Shared.Services.Http.Get(
             url,

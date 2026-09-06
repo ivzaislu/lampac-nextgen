@@ -1,4 +1,6 @@
+using Shared.Models.Base;
 using System;
+using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Web;
 
@@ -6,6 +8,17 @@ namespace FanCDN;
 
 internal static class FanCDNHelper
 {
+    #region Search
+    public static IEnumerable<(string title, string originalTitle)> SearchNames(string title, string originalTitle)
+    {
+        yield return (title, originalTitle);
+
+        if (!string.IsNullOrWhiteSpace(originalTitle) &&
+            !originalTitle.Equals(title, StringComparison.OrdinalIgnoreCase))
+            yield return (originalTitle, title);
+    }
+    #endregion
+
     #region HTTP
     public static bool IsChallengeResponse(string value)
     {
@@ -25,6 +38,20 @@ internal static class FanCDNHelper
         return html.Contains("требуется вход в систему", StringComparison.OrdinalIgnoreCase)
             || html.Contains("для доступа к видеоконтенту необходимо иметь учётную запись", StringComparison.OrdinalIgnoreCase)
             || html.Contains("для доступа к видеоконтенту необходимо иметь учетную запись", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static IReadOnlyList<HeadersModel> DocumentHeaders(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+            return null;
+
+        string root = host.TrimEnd('/');
+        return HeadersModel.Init(
+            ("referer", $"{root}/"),
+            ("sec-fetch-dest", "document"),
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-site", "same-origin")
+        );
     }
     #endregion
 
