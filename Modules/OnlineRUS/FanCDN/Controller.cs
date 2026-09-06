@@ -134,7 +134,7 @@ public class FanCDNController : BaseOnlineController
         {
             List<int> preloadedSeasons = null;
 
-            var search = await InvokeCacheResult<string>($"fancdn:v15:serial:search:{kinopoisk_id}:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
+            var search = await InvokeCacheResult<string>($"fancdn:v16:serial:search:{kinopoisk_id}:{title}:{original_title}:{year}", TimeSpan.FromHours(1), onget: async e =>
             {
                 var resolved = await SearchSeriesPageFast(kinopoisk_id, title, original_title, year);
                 preloadedSeasons = resolved.seasons;
@@ -221,7 +221,7 @@ public class FanCDNController : BaseOnlineController
     #endregion
 
     #region Search
-    async Task<string> SearchPageHttp(string title, string original_title, short year)
+    async Task<List<(string url, short? year, int order)>> SearchCandidatesHttp(string title, string original_title)
     {
         if (string.IsNullOrWhiteSpace(title))
             return null;
@@ -255,7 +255,8 @@ public class FanCDNController : BaseOnlineController
 
         string stitle = SearchNameTo.Convert(title);
         string soriginal = SearchNameTo.Convert(original_title);
-        string fallbackUrl = null;
+        var candidates = new List<(string url, short? year, int order)>();
+        int order = 0;
 
         foreach (JToken item in root)
         {
@@ -278,17 +279,36 @@ public class FanCDNController : BaseOnlineController
             if (string.IsNullOrEmpty(normalized))
                 continue;
 
-            if (year <= 0)
-                return normalized;
+            short? itemYear = short.TryParse(item.Value<string>("year"), out short parsedYear)
+                ? parsedYear
+                : null;
 
-            if (!short.TryParse(item.Value<string>("year"), out short itemYear))
+            candidates.Add((normalized, itemYear, order++));
+        }
+
+        return candidates.Count == 0 ? null : candidates;
+    }
+
+    async Task<string> SearchPageHttp(string title, string original_title, short year)
+    {
+        List<(string url, short? year, int order)> candidates = await SearchCandidatesHttp(title, original_title);
+        if (candidates == null || candidates.Count == 0)
+            return null;
+
+        string fallbackUrl = null;
+        foreach (var candidate in candidates)
+        {
+            if (year <= 0)
+                return candidate.url;
+
+            if (!candidate.year.HasValue)
             {
-                fallbackUrl ??= normalized;
+                fallbackUrl ??= candidate.url;
                 continue;
             }
 
-            if (Math.Abs(itemYear - year) <= 1)
-                return normalized;
+            if (Math.Abs(candidate.year.Value - year) <= 1)
+                return candidate.url;
         }
 
         return fallbackUrl;
@@ -428,12 +448,36 @@ public class FanCDNController : BaseOnlineController
     #region Serial
     async Task<(string url, List<int> seasons)> SearchSeriesPageFast(long kinopoisk_id, string title, string original_title, short year)
     {
+        var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var searchName in FanCDNHelper.SearchNames(title, original_title))
         {
-            string candidate = await SearchPageHttp(searchName.title, searchName.originalTitle, year);
-            var resolved = await ResolveSeriesPage(candidate, kinopoisk_id);
-            if (!string.IsNullOrEmpty(resolved.url))
-                return resolved;
+            List<(string url, short? year, int order)> candidates = await SearchCandidatesHttp(searchName.title, searchName.originalTitle);
+            if (candidates == null || candidates.Count == 0)
+                continue;
+
+            candidates.Sort((a, b) =>
+            {
+                int rankA = year <= 0
+                    ? 0
+                    : a.year.HasValue ? Math.Abs(a.year.Value - year) : int.MaxValue;
+                int rankB = year <= 0
+                    ? 0
+                    : b.year.HasValue ? Math.Abs(b.year.Value - year) : int.MaxValue;
+
+                int rankCompare = rankA.CompareTo(rankB);
+                return rankCompare != 0 ? rankCompare : a.order.CompareTo(b.order);
+            });
+
+            foreach (var candidate in candidates)
+            {
+                if (!tried.Add(candidate.url))
+                    continue;
+
+                var resolved = await ResolveSeriesPage(candidate.url, kinopoisk_id);
+                if (!string.IsNullOrEmpty(resolved.url))
+                    return resolved;
+            }
         }
 
         return default;
