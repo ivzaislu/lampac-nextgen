@@ -32,16 +32,17 @@ public class TmdbScheduleSnapshot
         if (season <= 0)
             return 0;
 
+        int dueNext = 0;
+        if (NextSeason == season && NextAirDate.HasValue && NextAirDate.Value.Date <= now.Date)
+            dueNext = Math.Max(1, NextEpisode);
+
         if (LastSeason > season)
-            return SeasonEpisodeCounts.TryGetValue(season, out int count) ? Math.Max(0, count) : 0;
+            return SeasonEpisodeCounts.TryGetValue(season, out int count) ? Math.Max(0, count) : dueNext;
 
         if (LastSeason == season)
-            return Math.Max(0, LastEpisode);
+            return Math.Max(Math.Max(0, LastEpisode), dueNext);
 
-        if (NextSeason == season && NextAirDate.HasValue && NextAirDate.Value.Date <= now.Date)
-            return Math.Max(1, NextEpisode);
-
-        return 0;
+        return dueNext;
     }
 }
 
@@ -77,7 +78,8 @@ public static class TmdbScheduleService
                 SyncedAt = DateTime.Now
             };
 
-            if (root["last_episode_to_air"] is JObject last)
+            var last = root["last_episode_to_air"] as JObject;
+            if (last != null)
             {
                 result.LastSeason = last.Value<int?>("season_number") ?? 0;
                 result.LastEpisode = last.Value<int?>("episode_number") ?? 0;
@@ -88,18 +90,21 @@ public static class TmdbScheduleService
                 result.LastAirDate = ParseDate(root.Value<string>("last_air_date"));
             }
 
-            if (root["next_episode_to_air"] is JObject next)
+            var next = root["next_episode_to_air"] as JObject;
+            if (next != null)
             {
                 result.NextSeason = next.Value<int?>("season_number") ?? 0;
                 result.NextEpisode = next.Value<int?>("episode_number") ?? 0;
                 result.NextAirDate = ParseDate(next.Value<string>("air_date"));
             }
 
-            if (root["seasons"] is JArray seasons)
+            var seasons = root["seasons"] as JArray;
+            if (seasons != null)
             {
                 foreach (var token in seasons)
                 {
-                    if (token is not JObject season)
+                    var season = token as JObject;
+                    if (season == null)
                         continue;
 
                     int number = season.Value<int?>("season_number") ?? 0;
