@@ -35,9 +35,10 @@ public class ModInit : IModuleLoaded
     {
         conf = ModuleInvoke.Init("TranslationSub", new ModuleConf());
 
-        // Start() идемпотентно делает Stop() перед созданием нового Timer.
-        // Поэтому изменение check_interval_minutes применяется сразу, без рестарта Lampac.
-        TranslationSubscriptionService.Start();
+        if (conf?.enable == true)
+            TranslationSubscriptionService.Start();
+        else
+            TranslationSubscriptionService.Stop();
     }
 
     static StringBuilder appReplace(string type, EventAppReplace e)
