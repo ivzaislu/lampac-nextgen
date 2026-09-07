@@ -45,6 +45,12 @@ public class TranslationSubSettingsController : BaseController
 
         string userKey = body?.Value<string>("userKey") ?? "local";
         int interval = body?.Value<int?>("checkIntervalHours") ?? 1;
+        bool? useTmdbSchedule = body?["useTmdbSchedule"]?.Type == JTokenType.Null
+            ? null
+            : body?.Value<bool?>("useTmdbSchedule");
+        int? tmdbRefreshHours = body?.Value<int?>("tmdbRefreshHours");
+        int? endedRefreshDays = body?.Value<int?>("endedRefreshDays");
+        string newSeasonMode = body?.Value<string>("newSeasonMode");
         var sources = new List<string>();
 
         if (body?["sources"] is JArray arr)
@@ -63,7 +69,15 @@ public class TranslationSubSettingsController : BaseController
                 sources.AddRange(rawSources.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()));
         }
 
-        var settings = TranslationSettingsStore.Set(userKey, interval, sources);
+        var settings = TranslationSettingsStore.Set(
+            userKey,
+            interval,
+            sources,
+            useTmdbSchedule,
+            tmdbRefreshHours,
+            endedRefreshDays,
+            newSeasonMode);
+
         return ContentTo(JsonConvert.SerializeObject(new { success = true, settings }));
     }
 }
