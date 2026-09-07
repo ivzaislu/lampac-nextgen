@@ -13,6 +13,7 @@ public class TranslationSubscription
     public string KpId { get; set; }
     public string ImdbId { get; set; }
     public string TmdbId { get; set; }
+    public string Poster { get; set; }
     public int? Year { get; set; }
     public bool IsSerial { get; set; } = true;
     public string Source { get; set; }
