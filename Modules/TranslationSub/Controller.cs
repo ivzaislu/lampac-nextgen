@@ -310,12 +310,17 @@ public class TranslationSubController : BaseController
     TranslationSubscription FromJson(JObject j)
     {
         int.TryParse(j.Value<string>("currentSeason"), out int currentSeason);
-        int.TryParse(j.Value<string>("currentEpisode"), out int currentEpisode);
+        int.TryParse(j.Value<string>("currentEpisode"), out int legacyAvailableEpisode);
         int.TryParse(j.Value<string>("availableEpisode"), out int availableEpisode);
+        int.TryParse(j.Value<string>("watchedEpisode"), out int watchedEpisode);
         int.TryParse(j.Value<string>("year"), out int year);
         bool.TryParse(j.Value<string>("isSerial"), out bool isSerialBool);
 
-        int latestEpisode = availableEpisode > 0 ? availableEpisode : currentEpisode;
+        // Старый клиент отправляет variant.episode в currentEpisode. Это не просмотр,
+        // а последняя доступная серия озвучки. Реальный просмотр приходит отдельно
+        // через watchedEpisode или позже через /translationsub/watched.
+        int latestEpisode = availableEpisode > 0 ? availableEpisode : legacyAvailableEpisode;
+        int watched = Math.Max(0, watchedEpisode);
 
         var sub = new TranslationSubscription
         {
@@ -333,10 +338,10 @@ public class TranslationSubController : BaseController
             TranslationId = j.Value<string>("translationId"),
             TranslationName = j.Value<string>("translationName"),
             CurrentSeason = currentSeason > 0 ? currentSeason : 1,
-            CurrentEpisode = currentEpisode > 0 ? currentEpisode : 0,
+            CurrentEpisode = watched,
             LastSeason = currentSeason > 0 ? currentSeason : 1,
             LastEpisode = latestEpisode > 0 ? latestEpisode : 0,
-            Notified = latestEpisode <= currentEpisode
+            Notified = latestEpisode <= watched
         };
 
         if (j["sources"] is JArray arr)
