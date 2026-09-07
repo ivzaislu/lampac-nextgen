@@ -19,4 +19,8 @@ public class ModuleConf
 
     public string zetflixdb_apihost { get; set; } = "https://54243ba5.obrut.show";
     public string videohub_host { get; set; } = "https://plapi.cdnvideohub.com";
+
+    // Same public TMDB API used by Lampa. Can be overridden in init.conf if needed.
+    public string tmdb_apihost { get; set; } = "https://api.themoviedb.org/3";
+    public string tmdb_apikey { get; set; } = "4ef0d7355d9ffb5151e987764708ce96";
 }
