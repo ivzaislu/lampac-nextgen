@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using TranslationSub.Models;
 using TranslationSub.Providers;
 
 namespace TranslationSub.Services;
@@ -71,7 +72,7 @@ public static class TranslationSubscriptionService
                     var best = matches.OrderByDescending(x => x.episode).FirstOrDefault();
                     if (best?.Sources != null && best.Sources.Count > 0)
                     {
-                        sub.Sources = best.Sources.Select(x => new Models.TranslationSubscriptionSource
+                        sub.Sources = best.Sources.Select(x => new TranslationSubscriptionSource
                         {
                             Source = x.Source,
                             Path = x.Path,
