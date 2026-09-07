@@ -17,8 +17,8 @@ public static class TranslationSubscriptionService
     {
         Stop();
 
-        // This is only a cheap scheduler wake-up. External requests are made only
-        // when TMDB/user settings say a subscription is due.
+        // Cheap scheduler wake-up only. External requests happen only when
+        // TMDB/user settings say a subscription is actually due.
         timer = new Timer(async _ => await Tick(), null,
             TimeSpan.FromSeconds(15),
             TimeSpan.FromMinutes(Math.Max(5, ModInit.conf?.check_interval_minutes ?? 15)));
@@ -59,17 +59,21 @@ public static class TranslationSubscriptionService
 
                         if (smartTmdb)
                         {
-                            if (ShouldRefreshTmdb(sub, settings, now))
+                            // If another subscription for the same show refreshed TMDB in
+                            // this tick, reuse it. This is important when several voices are
+                            // subscribed for the same series.
+                            if (tmdbCache.TryGetValue(sub.TmdbId, out tmdb))
                             {
-                                if (!tmdbCache.TryGetValue(sub.TmdbId, out tmdb))
-                                {
-                                    tmdb = await TmdbScheduleService.Get(sub.TmdbId).ConfigureAwait(false);
-                                    if (tmdb != null)
-                                        tmdbCache[sub.TmdbId] = tmdb;
-                                }
-
+                                ApplyTmdbState(sub.Id, tmdb, settings, now);
+                                CopyTmdbState(sub, tmdb, settings, now);
+                                HandleNewSeason(sub, tmdb, settings, now);
+                            }
+                            else if (ShouldRefreshTmdb(sub, settings, now))
+                            {
+                                tmdb = await TmdbScheduleService.Get(sub.TmdbId).ConfigureAwait(false);
                                 if (tmdb != null)
                                 {
+                                    tmdbCache[sub.TmdbId] = tmdb;
                                     ApplyTmdbState(sub.Id, tmdb, settings, now);
                                     CopyTmdbState(sub, tmdb, settings, now);
                                     HandleNewSeason(sub, tmdb, settings, now);
@@ -144,8 +148,8 @@ public static class TranslationSubscriptionService
                             latestEpisode = Math.Max(latestEpisode, 1);
 
                         // TMDB is authoritative for what has actually aired. This also
-                        // protects against a balancer returning a numeric key as E13 when
-                        // TMDB says only E10 has aired.
+                        // fixes old bad data such as a balancer reporting E13 while TMDB
+                        // says the season has only aired through E10.
                         if (smartTmdb && expectedAired > 0)
                             latestEpisode = Math.Min(latestEpisode, expectedAired);
 
@@ -179,8 +183,6 @@ public static class TranslationSubscriptionService
                                 current.LastSeason = isSerial ? season : 0;
                             }
 
-                            // If older bad data said the voice had more episodes than TMDB
-                            // says have aired, correct it instead of preserving the bad max.
                             if (smartTmdb && expectedAired > 0 && current.LastEpisode.GetValueOrDefault(0) > expectedAired)
                                 current.LastEpisode = expectedAired;
 
@@ -215,6 +217,19 @@ public static class TranslationSubscriptionService
     {
         if (!sub.TmdbLastSyncedAt.HasValue)
             return true;
+
+        // A known release date is a hard wake-up point. Do not wait another
+        // TmdbRefreshHours after the calendar reaches that date.
+        if (sub.TmdbNextAirDate.HasValue && sub.TmdbNextAirDate.Value.Date <= now.Date)
+        {
+            int lastSeason = sub.TmdbLastSeason.GetValueOrDefault(0);
+            int lastEpisode = sub.TmdbLastEpisode.GetValueOrDefault(0);
+            int nextSeason = sub.TmdbNextSeason.GetValueOrDefault(0);
+            int nextEpisode = sub.TmdbNextEpisode.GetValueOrDefault(0);
+
+            if (nextSeason > lastSeason || (nextSeason == lastSeason && nextEpisode > lastEpisode))
+                return true;
+        }
 
         bool ended = IsEndedStatus(sub.TmdbStatus);
         TimeSpan interval = ended
@@ -295,8 +310,8 @@ public static class TranslationSubscriptionService
             if (expected > 0 && current.LastEpisode.GetValueOrDefault(0) > expected)
                 current.LastEpisode = expected;
 
-            bool newerSeason = tmdb.LastSeason > season && tmdb.LastAirDate.HasValue && tmdb.LastAirDate.Value.Date <= now.Date;
-            current.TmdbNewSeasonAvailable = newerSeason && string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase);
+            current.TmdbNewSeasonAvailable = NewSeasonStarted(tmdb, season, now)
+                && string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase);
         });
     }
 
@@ -314,9 +329,7 @@ public static class TranslationSubscriptionService
         sub.TmdbNextAirDate = tmdb.NextAirDate;
         sub.TmdbTargetSeasonEpisodes = expected > 0 ? expected : null;
         sub.TmdbLastSyncedAt = tmdb.SyncedAt;
-        sub.TmdbNewSeasonAvailable = tmdb.LastSeason > season
-            && tmdb.LastAirDate.HasValue
-            && tmdb.LastAirDate.Value.Date <= now.Date
+        sub.TmdbNewSeasonAvailable = NewSeasonStarted(tmdb, season, now)
             && string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase);
 
         if (expected > 0 && sub.LastEpisode.GetValueOrDefault(0) > expected)
@@ -358,16 +371,17 @@ public static class TranslationSubscriptionService
         if (tmdb == null || season <= 0)
             return 0;
 
+        int dueNext = 0;
+        if (tmdb.NextSeason == season && tmdb.NextAirDate.HasValue && tmdb.NextAirDate.Value.Date <= now.Date)
+            dueNext = Math.Max(1, tmdb.NextEpisode);
+
         if (tmdb.LastSeason > season)
-            return tmdb.SeasonEpisodeCounts.TryGetValue(season, out int count) ? Math.Max(0, count) : 0;
+            return tmdb.SeasonEpisodeCounts.TryGetValue(season, out int count) ? Math.Max(0, count) : dueNext;
 
         if (tmdb.LastSeason == season)
-            return Math.Max(0, tmdb.LastEpisode);
+            return Math.Max(Math.Max(0, tmdb.LastEpisode), dueNext);
 
-        if (tmdb.NextSeason == season && tmdb.NextAirDate.HasValue && tmdb.NextAirDate.Value.Date <= now.Date)
-            return Math.Max(1, tmdb.NextEpisode);
-
-        return 0;
+        return dueNext;
     }
 
     static bool ShouldPollBalancersSmart(
@@ -393,21 +407,13 @@ public static class TranslationSubscriptionService
             return false;
         }
 
-        if (tmdb.NextAirDate.HasValue && tmdb.NextAirDate.Value.Date <= now.Date
-            && (tmdb.NextSeason == season || tmdb.NextSeason == 0)
-            && tmdb.NextEpisode > available)
-        {
-            state = "active_dubbing";
-            return IntervalDue(sub.LastCheckedAt, settings.CheckIntervalHours, now);
-        }
-
         if (IsEndedStatus(tmdb.Status))
         {
             state = "ended";
             return false;
         }
 
-        if (tmdb.LastSeason > season)
+        if (NewSeasonStarted(tmdb, season, now))
         {
             state = string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase)
                 ? "new_season"
@@ -439,12 +445,25 @@ public static class TranslationSubscriptionService
         if (IsEndedStatus(tmdb.Status))
             return "ended";
 
-        if (tmdb.LastSeason > current.CurrentSeason.GetValueOrDefault(1))
+        if (NewSeasonStarted(tmdb, current.CurrentSeason.GetValueOrDefault(1), now))
             return string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase)
                 ? "new_season"
                 : "season_complete";
 
         return "waiting_tmdb";
+    }
+
+    static bool NewSeasonStarted(TmdbScheduleSnapshot tmdb, int currentSeason, DateTime now)
+    {
+        if (tmdb == null)
+            return false;
+
+        if (tmdb.LastSeason > currentSeason && tmdb.LastAirDate.HasValue && tmdb.LastAirDate.Value.Date <= now.Date)
+            return true;
+
+        return tmdb.NextSeason > currentSeason
+            && tmdb.NextAirDate.HasValue
+            && tmdb.NextAirDate.Value.Date <= now.Date;
     }
 
     static bool IsEndedStatus(string status)
@@ -468,17 +487,21 @@ public static class TranslationSubscriptionService
 
     static void HandleNewSeason(TranslationSubscription sub, TmdbScheduleSnapshot tmdb, TranslationUserSettings settings, DateTime now)
     {
-        if (!sub.IsSerial || tmdb == null || tmdb.LastSeason <= sub.CurrentSeason.GetValueOrDefault(1))
+        if (!sub.IsSerial || tmdb == null)
             return;
 
-        if (!tmdb.LastAirDate.HasValue || tmdb.LastAirDate.Value.Date > now.Date)
+        int currentSeason = sub.CurrentSeason.GetValueOrDefault(1);
+        if (!NewSeasonStarted(tmdb, currentSeason, now))
             return;
 
         string mode = settings.NewSeasonMode ?? "auto";
         if (!string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase))
             return;
 
-        int newSeason = tmdb.LastSeason;
+        int newSeason = tmdb.LastSeason > currentSeason ? tmdb.LastSeason : tmdb.NextSeason;
+        if (newSeason <= currentSeason)
+            return;
+
         int expected = ExpectedAiredEpisode(tmdb, newSeason, now);
         string normalizedVoice = VoiceNormalize.Normalize(sub.TranslationName);
 
@@ -526,8 +549,8 @@ public static class TranslationSubscriptionService
                 }).ToList() ?? new List<TranslationSubscriptionSource>(),
                 CreatedAt = now,
                 TmdbStatus = tmdb.Status,
-                TmdbLastSeason = tmdb.LastSeason,
-                TmdbLastEpisode = tmdb.LastEpisode,
+                TmdbLastSeason = tmdb.LastSeason > 0 ? tmdb.LastSeason : null,
+                TmdbLastEpisode = tmdb.LastEpisode > 0 ? tmdb.LastEpisode : null,
                 TmdbLastAirDate = tmdb.LastAirDate,
                 TmdbNextSeason = tmdb.NextSeason > 0 ? tmdb.NextSeason : null,
                 TmdbNextEpisode = tmdb.NextEpisode > 0 ? tmdb.NextEpisode : null,
