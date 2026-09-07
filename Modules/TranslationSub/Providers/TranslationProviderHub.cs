@@ -23,7 +23,11 @@ public static class TranslationProviderHub
         if (ModInit.conf?.enable != true)
             return new TranslationVariantsResponse();
 
-        var tasks = providers.Select(async provider =>
+        IEnumerable<IVoiceProvider> activeProviders = providers;
+        if (query?.Sources != null)
+            activeProviders = activeProviders.Where(p => query.Sources.Contains(p.Source));
+
+        var tasks = activeProviders.Select(async provider =>
         {
             List<TranslationVariant> values;
 
@@ -36,8 +40,6 @@ public static class TranslationProviderHub
                 values = new List<TranslationVariant>();
             }
 
-            // Защита от провайдера, который случайно вернул серии другого сезона.
-            // Когда пользователь выбрал сезон, наружу могут выйти только его варианты.
             if (query.IsSerial && query.Season > 0)
                 values = values.Where(x => x != null && x.season == query.Season).ToList();
 
