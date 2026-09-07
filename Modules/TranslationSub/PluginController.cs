@@ -20,7 +20,13 @@ public class TranslationSubPluginController : BaseController
         if (!System.IO.File.Exists(path))
             return NotFound();
 
+        string script = System.IO.File.ReadAllText(path);
+        string pagePath = Path.Combine(ModInit.modpath, "translationsub-page.js");
+
+        if (System.IO.File.Exists(pagePath))
+            script += "\n;\n" + System.IO.File.ReadAllText(pagePath);
+
         Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-        return Content(System.IO.File.ReadAllText(path), "application/javascript; charset=utf-8");
+        return Content(script, "application/javascript; charset=utf-8");
     }
 }
