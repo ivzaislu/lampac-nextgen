@@ -168,7 +168,7 @@ public class TranslationSubController : BaseController
         if (string.IsNullOrWhiteSpace(sub.UserKey))
             sub.UserKey = "local";
 
-        bool subscribed = SubscriptionStore.Mutate(list =>
+        bool subscribed = SubscriptionStore.MutateResult(list =>
         {
             var exists = list.FirstOrDefault(x =>
                 x.UserKey == sub.UserKey &&
@@ -276,7 +276,10 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/remove")]
     public ActionResult Remove(string id)
     {
-        SubscriptionStore.Mutate(list => list.RemoveAll(x => x.Id == id));
+        SubscriptionStore.Mutate(list =>
+        {
+            list.RemoveAll(x => x.Id == id);
+        });
         return ContentTo("{\"success\":true}");
     }
 
