@@ -22,8 +22,6 @@ public class ModInit : IModuleLoaded
         updateConf();
         EventListener.UpdateInitFile += updateConf;
         EventListener.AppReplace += appReplace;
-
-        TranslationSubscriptionService.Start();
     }
 
     public void Dispose()
@@ -36,6 +34,10 @@ public class ModInit : IModuleLoaded
     static void updateConf()
     {
         conf = ModuleInvoke.Init("TranslationSub", new ModuleConf());
+
+        // Start() идемпотентно делает Stop() перед созданием нового Timer.
+        // Поэтому изменение check_interval_minutes применяется сразу, без рестарта Lampac.
+        TranslationSubscriptionService.Start();
     }
 
     static StringBuilder appReplace(string type, EventAppReplace e)
