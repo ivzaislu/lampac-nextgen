@@ -36,8 +36,6 @@ public static class SubscriptionStore
         string json = JsonConvert.SerializeObject(list ?? new List<TranslationSubscription>(), Formatting.Indented);
         string temp = path + ".tmp";
 
-        // Пишем сначала во временный файл, чтобы subscriptions.json не остался
-        // наполовину записанным при аварийном завершении процесса.
         File.WriteAllText(temp, json);
         File.Move(temp, path, true);
     }
@@ -67,7 +65,7 @@ public static class SubscriptionStore
         }
     }
 
-    public static T Mutate<T>(Func<List<TranslationSubscription>, T> action)
+    public static T MutateResult<T>(Func<List<TranslationSubscription>, T> action)
     {
         if (action == null)
             return default;
