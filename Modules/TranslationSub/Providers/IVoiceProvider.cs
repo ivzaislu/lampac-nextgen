@@ -13,6 +13,7 @@ public class VoiceProviderQuery
     public int Year { get; set; }
     public bool IsSerial { get; set; }
     public int Season { get; set; }
+    public HashSet<string> Sources { get; set; }
 }
 
 public interface IVoiceProvider
