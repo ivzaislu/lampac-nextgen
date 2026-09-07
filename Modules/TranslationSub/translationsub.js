@@ -92,8 +92,35 @@
         }
     }
 
+    function storageSet(name, value) {
+        try {
+            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
+                Lampa.Storage.set(name, value);
+                return;
+            }
+        } catch (e) {}
+
+        try { localStorage.setItem(name, value); } catch (e2) {}
+    }
+
+    function lampacUid() {
+        var uid = String(storageGet('lampac_unic_id', '') || '');
+        if (uid) return uid;
+
+        try {
+            if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
+                uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
+        } catch (e) {}
+
+        if (!uid)
+            uid = Math.random().toString(36).slice(2, 10).toLowerCase();
+
+        storageSet('lampac_unic_id', uid);
+        return uid;
+    }
+
     function userKey() {
-        return String(storageGet('client_uid', storageGet('lampac_unic_id', 'local')) || 'local');
+        return String(storageGet('client_uid', '') || lampacUid() || 'local');
     }
 
     function query(params) {
@@ -291,7 +318,7 @@
             imdbId: String(imdbId || ''),
             year: String(year || ''),
             isSerial: isSerial,
-            season: isSerial ? 0 : 0
+            season: 0
         };
     }
 
@@ -310,7 +337,10 @@
             id: context.tmdbId || context.contentId,
             serial: context.isSerial ? 1 : 0,
             imdb_id: context.imdbId,
-            kinopoisk_id: context.kpId
+            kinopoisk_id: context.kpId,
+            account_email: storageGet('account_email', ''),
+            uid: lampacUid(),
+            nws_id: storageGet('lampac_nws_id', '')
         }, null, function (ids) {
             ids = ids || {};
             context.kpId = String(ids.kinopoisk_id || ids.kp_id || context.kpId || '');
