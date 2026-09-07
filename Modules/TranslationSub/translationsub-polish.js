@@ -37,13 +37,13 @@
             '.translationsub-notice .notice[data-translationsub-update].focus .notice__descr>div:first-child{background:rgba(0,0,0,.07)}' +
             '.translationsub-notice .notice[data-translationsub-update].focus .notice__descr>div:nth-child(2){color:#b85020}' +
 
-            /* Верх страницы: счётчики слева, единственное действие справа. */
-            '.translationsub-page__top{display:flex;align-items:center;justify-content:space-between;gap:.8em 1.2em;flex-wrap:wrap;margin:0 0 1.15em}' +
+            /* Верх страницы занимает место старого дублирующего заголовка. */
+            '.translationsub-page__top{display:flex;align-items:center;justify-content:flex-start;gap:.7em 1em;flex-wrap:wrap;margin:0 0 1.15em}' +
             '.translationsub-page__top .translationsub-summary-v2{margin:0!important}' +
             '.translationsub-page__top .translationsub-toolbar{margin:0!important}' +
             '.translationsub-page__top .translationsub-toolbar__item{margin:0!important}' +
 
-            /* Иконка раздела настроек должна выглядеть как остальные системные outline-иконки. */
+            /* Иконка раздела настроек в стиле системных outline-иконок Lampa. */
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
                 'width:1.2em!important;height:1.2em!important;display:block!important;fill:none!important;' +
             '}' +
@@ -59,7 +59,7 @@
                 '.translationsub-notice .notice[data-translationsub-update]{border-radius:.7em}' +
                 '.translationsub-notice .notice[data-translationsub-update] .notice__time{font-size:.74em}' +
                 '.translationsub-page__top{align-items:flex-start;gap:.65em;margin-bottom:.9em}' +
-                '.translationsub-page__top .translationsub-summary-v2{width:100%}' +
+                '.translationsub-page__top .translationsub-toolbar{width:100%}' +
             '}';
 
         (document.head || document.documentElement).appendChild(style);
@@ -87,8 +87,8 @@
         }
 
         var summary = root.find('.translationsub-summary-v2').first();
-        if (summary.length) top.append(summary.detach());
         if (toolbar.length) top.append(toolbar.detach());
+        if (summary.length) top.append(summary.detach());
     }
 
     function cleanPages() {
