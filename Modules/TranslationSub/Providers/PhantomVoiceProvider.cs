@@ -36,7 +36,7 @@ public class PhantomVoiceProvider : IVoiceProvider
         if (!query.IsSerial)
         {
             JToken theatrical = all["theatrical"] ?? all;
-            CollectVoices(theatrical, result, 0, 1);
+            CollectAnyVoices(theatrical, result, 0, 1);
         }
         else
         {
@@ -50,6 +50,7 @@ public class PhantomVoiceProvider : IVoiceProvider
 
         return result
             .Where(x => !string.IsNullOrWhiteSpace(x.translation))
+            .Where(x => !query.IsSerial || query.Season <= 0 || x.season == query.Season)
             .GroupBy(x => $"{x.season}:{x.translation_id}:{VoiceNormalize.Normalize(x.translation)}")
             .Select(g => g.OrderByDescending(x => x.episode).First())
             .OrderBy(x => x.season)
@@ -158,39 +159,81 @@ public class PhantomVoiceProvider : IVoiceProvider
 
     void ExtractSeason(JToken all, List<TranslationVariant> result, int season)
     {
+        if (all == null || season <= 0)
+            return;
+
         string key = season.ToString();
         bool found = false;
 
-        if (all?[key] != null)
+        // Основной формат Phantom: all[season] -> episodes -> voices.
+        if (all[key] != null)
         {
-            CollectVoices(all[key], result, season, 0);
+            CollectSeasonNode(all[key], result, season);
             found = true;
         }
 
-        if (all?["seasons"]?[key] != null)
+        // В некоторых ответах сезоны лежат под all.seasons.
+        if (all["seasons"]?[key] != null)
         {
-            CollectVoices(all["seasons"][key], result, season, 0);
+            CollectSeasonNode(all["seasons"][key], result, season);
             found = true;
         }
 
+        // Translation-first формат: t... -> file -> season -> episodes.
         if (all is JObject obj)
         {
-            foreach (var prop in obj.Properties())
+            foreach (var translation in obj.Properties())
             {
-                var file = prop.Value?["file"];
-                if (file?[key] == null)
+                JToken seasonNode = translation.Value?["file"]?[key];
+                if (seasonNode == null)
                     continue;
 
-                CollectVoices(file[key], result, season, 0);
+                CollectSeasonNode(seasonNode, result, season);
                 found = true;
             }
         }
 
+        // Безопасный fallback: берём только объекты, где season указан явно.
         if (!found)
-            CollectVoices(all, result, season, 0, onlySeason: season);
+            CollectExplicitSeasonVoices(all, result, season);
     }
 
-    void CollectVoices(JToken node, List<TranslationVariant> result, int season, int episodeHint, int onlySeason = 0)
+    void CollectSeasonNode(JToken node, List<TranslationVariant> result, int season)
+    {
+        if (node == null)
+            return;
+
+        if (node is JArray arr)
+        {
+            for (int i = 0; i < arr.Count; i++)
+            {
+                // В массивном формате номер серии обычно есть внутри voice. Если его нет,
+                // индекс массива является единственным безопасным fallback на уровне серии.
+                CollectEpisodeContainer(arr[i], result, season, i + 1);
+            }
+            return;
+        }
+
+        if (node is JObject obj)
+        {
+            if (obj["translation"] != null)
+            {
+                int episode = obj.Value<int?>("episode") ?? 0;
+                AddVariant(obj, result, season, episode);
+                return;
+            }
+
+            // Здесь числовой ключ действительно является ключом СЕРИИ,
+            // потому что мы уже находимся внутри конкретного сезона.
+            foreach (var episodeNode in obj.Properties())
+            {
+                int episode = int.TryParse(episodeNode.Name, out int parsed) && parsed > 0 ? parsed : 0;
+                CollectEpisodeContainer(episodeNode.Value, result, season, episode);
+            }
+        }
+    }
+
+    void CollectEpisodeContainer(JToken node, List<TranslationVariant> result, int season, int episodeHint)
     {
         if (node == null)
             return;
@@ -199,28 +242,72 @@ public class PhantomVoiceProvider : IVoiceProvider
         {
             if (obj["translation"] != null)
             {
-                int objectSeason = obj.Value<int?>("season") ?? season;
-                if (onlySeason > 0 && objectSeason > 0 && objectSeason != onlySeason)
-                    return;
-
                 int episode = obj.Value<int?>("episode") ?? episodeHint;
-                AddVariant(obj, result, objectSeason, episode);
+                AddVariant(obj, result, season, episode);
                 return;
             }
 
-            foreach (var prop in obj.Properties())
-            {
-                int nextHint = episodeHint;
-                if (int.TryParse(prop.Name, out int numeric) && numeric > 0)
-                    nextHint = numeric;
-
-                CollectVoices(prop.Value, result, season, nextHint, onlySeason);
-            }
+            // Ниже уровня серии числовые ключи могут быть ID озвучки/файла,
+            // поэтому НЕ используем их как episodeHint.
+            foreach (var child in obj.Properties())
+                CollectEpisodeContainer(child.Value, result, season, episodeHint);
         }
         else if (node is JArray arr)
         {
             foreach (var child in arr)
-                CollectVoices(child, result, season, episodeHint, onlySeason);
+                CollectEpisodeContainer(child, result, season, episodeHint);
+        }
+    }
+
+    void CollectExplicitSeasonVoices(JToken node, List<TranslationVariant> result, int targetSeason)
+    {
+        if (node == null)
+            return;
+
+        if (node is JObject obj)
+        {
+            if (obj["translation"] != null)
+            {
+                int objectSeason = obj.Value<int?>("season") ?? 0;
+                if (objectSeason == targetSeason)
+                {
+                    int episode = obj.Value<int?>("episode") ?? 0;
+                    AddVariant(obj, result, targetSeason, episode);
+                }
+                return;
+            }
+
+            foreach (var child in obj.Properties())
+                CollectExplicitSeasonVoices(child.Value, result, targetSeason);
+        }
+        else if (node is JArray arr)
+        {
+            foreach (var child in arr)
+                CollectExplicitSeasonVoices(child, result, targetSeason);
+        }
+    }
+
+    void CollectAnyVoices(JToken node, List<TranslationVariant> result, int season, int episodeHint)
+    {
+        if (node == null)
+            return;
+
+        if (node is JObject obj)
+        {
+            if (obj["translation"] != null)
+            {
+                int episode = obj.Value<int?>("episode") ?? episodeHint;
+                AddVariant(obj, result, season, episode);
+                return;
+            }
+
+            foreach (var child in obj.Properties())
+                CollectAnyVoices(child.Value, result, season, episodeHint);
+        }
+        else if (node is JArray arr)
+        {
+            foreach (var child in arr)
+                CollectAnyVoices(child, result, season, episodeHint);
         }
     }
 
@@ -231,24 +318,37 @@ public class PhantomVoiceProvider : IVoiceProvider
         if (all is not JObject obj)
             return seasons;
 
-        foreach (var prop in obj.Properties())
+        // Такой же выбор структуры, как в штатном PhantomController.
+        if (obj["seasons"] is JObject seasonsObj)
         {
-            if (int.TryParse(prop.Name, out int direct) && direct > 0)
-                seasons.Add(direct);
+            foreach (var season in seasonsObj.Properties())
+                if (int.TryParse(season.Name, out int n) && n > 0)
+                    seasons.Add(n);
 
-            if (prop.Name == "seasons" && prop.Value is JObject seasonsObj)
+            if (seasons.Count > 0)
+                return seasons;
+        }
+
+        var first = obj.Properties().FirstOrDefault();
+        bool translationFirst = first != null && first.Name.StartsWith("t", StringComparison.OrdinalIgnoreCase);
+
+        if (translationFirst)
+        {
+            foreach (var translation in obj.Properties())
             {
-                foreach (var seasonProp in seasonsObj.Properties())
-                    if (int.TryParse(seasonProp.Name, out int n) && n > 0)
+                if (translation.Value?["file"] is not JObject file)
+                    continue;
+
+                foreach (var season in file.Properties())
+                    if (int.TryParse(season.Name, out int n) && n > 0)
                         seasons.Add(n);
             }
-
-            if (prop.Value?["file"] is JObject file)
-            {
-                foreach (var seasonProp in file.Properties())
-                    if (int.TryParse(seasonProp.Name, out int n) && n > 0)
-                        seasons.Add(n);
-            }
+        }
+        else
+        {
+            foreach (var season in obj.Properties())
+                if (int.TryParse(season.Name, out int n) && n > 0)
+                    seasons.Add(n);
         }
 
         return seasons;
