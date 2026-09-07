@@ -7,8 +7,8 @@
     var META = {
         component: 'translationsub',
         name: 'Подписки на озвучки',
-        version: '1.0.0',
-        description: 'Подписки на выбранные озвучки и уведомления о новых сериях',
+        version: '1.1.0',
+        description: 'Подписки на озвучки из нескольких источников и уведомления о новых сериях',
         type: 'other'
     };
 
@@ -17,7 +17,16 @@
         updates: '/translationsub/updates',
         variants: '/translationsub/variants',
         toggle: '/translationsub/toggle',
-        notified: '/translationsub/notified'
+        notified: '/translationsub/notified',
+        externalids: '/externalids'
+    };
+
+    var SOURCE_NAMES = {
+        flixcdn: 'FlixCDN',
+        phantom: 'Phantom',
+        zetflixdb: 'ZetflixDB',
+        cdnvideohub: 'VideoHUB',
+        multi: 'Несколько источников'
     };
 
     var state = {
@@ -56,9 +65,8 @@
                 }
             }
 
-            if (script && script.src && typeof URL === 'function') {
+            if (script && script.src && typeof URL === 'function')
                 return new URL(script.src, window.location.href).origin;
-            }
         } catch (e) {}
 
         try {
@@ -85,7 +93,7 @@
     }
 
     function userKey() {
-        return String(storageGet('client_uid', 'local') || 'local');
+        return String(storageGet('client_uid', storageGet('lampac_unic_id', 'local')) || 'local');
     }
 
     function query(params) {
@@ -118,33 +126,23 @@
 
         var qs = query(params);
         var url = HOST + path + (qs ? (path.indexOf('?') === -1 ? '?' : '&') + qs : '');
-        var payload = body || null;
 
-        try {
-            if (window.Lampa && Lampa.Reguest) {
-                if (!state.network && typeof Lampa.Reguest === 'function')
-                    state.network = new Lampa.Reguest();
+        if (method === 'GET') {
+            try {
+                if (window.Lampa && Lampa.Reguest) {
+                    if (!state.network && typeof Lampa.Reguest === 'function')
+                        state.network = new Lampa.Reguest();
 
-                if (state.network && method === 'GET' && typeof state.network.silent === 'function') {
-                    state.network.silent(url, function (result) {
-                        onSuccess(parseJson(result));
-                    }, onError);
-                    return;
+                    if (state.network && typeof state.network.silent === 'function') {
+                        state.network.silent(url, function (result) {
+                            onSuccess(parseJson(result));
+                        }, onError);
+                        return;
+                    }
                 }
-
-                if (state.network && typeof state.network.send === 'function') {
-                    state.network.send(url, function (result) {
-                        onSuccess(parseJson(result));
-                    }, onError, {
-                        method: method,
-                        data: payload,
-                        headers: { 'Content-Type': 'application/json; charset=utf-8' }
-                    });
-                    return;
-                }
+            } catch (e) {
+                log('Lampa.Reguest fallback', e);
             }
-        } catch (e) {
-            log('Lampa.Reguest fallback', e);
         }
 
         if (typeof fetch === 'function') {
@@ -153,7 +151,7 @@
                 headers: { 'Content-Type': 'application/json; charset=utf-8' }
             };
 
-            if (payload && method !== 'GET') options.body = JSON.stringify(payload);
+            if (body && method !== 'GET') options.body = JSON.stringify(body);
 
             fetch(url, options)
                 .then(function (response) {
@@ -165,7 +163,19 @@
             return;
         }
 
-        onError(new Error('request transport is unavailable'));
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
+            xhr.setRequestHeader('Content-Type', 'application/json; charset=utf-8');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) return;
+                if (xhr.status >= 200 && xhr.status < 300) onSuccess(parseJson(xhr.responseText));
+                else onError(new Error('HTTP ' + xhr.status));
+            };
+            xhr.send(body && method !== 'GET' ? JSON.stringify(body) : null);
+        } catch (e2) {
+            onError(e2);
+        }
     }
 
     function notify(text) {
@@ -262,7 +272,7 @@
         var method = object.method || card.method || '';
         var isSerial = method === 'tv' || method === 'serial' || !!card.first_air_date || !!card.name || !!card.number_of_seasons;
 
-        var tmdbId = card.id || card.tmdb_id || card.tmdbId || '';
+        var tmdbId = card.tmdb_id || card.tmdbId || card.id || '';
         var kpId = card.kinopoisk_id || card.kp_id || card.kpId || (card.external_ids && card.external_ids.kinopoisk_id) || '';
         var imdbId = card.imdb_id || card.imdbId || (card.external_ids && card.external_ids.imdb_id) || '';
         var title = card.title || card.name || object.title || '';
@@ -281,8 +291,35 @@
             imdbId: String(imdbId || ''),
             year: String(year || ''),
             isSerial: isSerial,
-            season: 1
+            season: isSerial ? 0 : 0
         };
+    }
+
+    function ensureExternalIds(context, done) {
+        if (!context || (!context.tmdbId && !context.contentId)) {
+            done(context);
+            return;
+        }
+
+        if (context.kpId && context.imdbId) {
+            done(context);
+            return;
+        }
+
+        request('GET', API.externalids, {
+            id: context.tmdbId || context.contentId,
+            serial: context.isSerial ? 1 : 0,
+            imdb_id: context.imdbId,
+            kinopoisk_id: context.kpId
+        }, null, function (ids) {
+            ids = ids || {};
+            context.kpId = String(ids.kinopoisk_id || ids.kp_id || context.kpId || '');
+            context.imdbId = String(ids.imdb_id || context.imdbId || '');
+            if (ids.tmdb_id) context.tmdbId = String(ids.tmdb_id);
+            done(context);
+        }, function () {
+            done(context);
+        });
     }
 
     function injectFullButton(object) {
@@ -340,7 +377,44 @@
     }
 
     function subscriptionKey(item) {
-        return [String(item.ContentId || item.contentId || ''), String(item.TranslationId || item.translationId || ''), String(item.CurrentSeason || item.currentSeason || 1)].join('|');
+        return [
+            String(item.ContentId || item.contentId || ''),
+            String(item.TranslationId || item.translationId || ''),
+            String(item.CurrentSeason || item.currentSeason || 1)
+        ].join('|');
+    }
+
+    function variantSources(variant) {
+        var sources = variant.Sources || variant.sources || [];
+        if (Array.isArray(sources) && sources.length) return sources;
+
+        return [{
+            Source: variant.source || variant.Source || '',
+            Path: variant.path || variant.Path || '',
+            TranslationId: variant.translation_id || variant.Id || variant.id || '',
+            TranslationName: variant.translation || variant.Name || variant.name || '',
+            Season: variant.season || 0,
+            Episode: variant.episode || 0,
+            Quality: variant.quality || ''
+        }];
+    }
+
+    function sourceName(source) {
+        source = String(source || '').toLowerCase();
+        return SOURCE_NAMES[source] || source || 'Источник';
+    }
+
+    function sourceSummary(variant) {
+        var sources = variantSources(variant);
+        var names = [];
+
+        sources.forEach(function (item) {
+            var raw = item.Source || item.source || '';
+            var name = sourceName(raw);
+            if (name && names.indexOf(name) === -1) names.push(name);
+        });
+
+        return names.join(', ');
     }
 
     function openForItem(context) {
@@ -350,7 +424,56 @@
             return;
         }
 
-        notify('Загружаю озвучки…');
+        ensureExternalIds(context, function (resolved) {
+            state.current = resolved;
+
+            if (resolved.isSerial && (!resolved.season || resolved.season <= 0)) {
+                openSeasonSelect(resolved);
+                return;
+            }
+
+            openVoiceSelect(resolved);
+        });
+    }
+
+    function openSeasonSelect(context) {
+        notify('Ищу сезоны и озвучки…');
+
+        loadVariants(context, function (response) {
+            var seasons = response.Seasons || response.seasons || [];
+            if (!Array.isArray(seasons) || !seasons.length) {
+                var variants = response.Translations || response.translations || [];
+                seasons = [];
+                (Array.isArray(variants) ? variants : []).forEach(function (variant) {
+                    var season = Number(variant.season || 0);
+                    if (season > 0 && seasons.indexOf(season) === -1) seasons.push(season);
+                });
+                seasons.sort(function (a, b) { return a - b; });
+            }
+
+            if (!seasons.length) {
+                notify('Сезоны или озвучки не найдены');
+                return;
+            }
+
+            var items = seasons.map(function (season) {
+                return {
+                    title: season + ' сезон',
+                    onclick: function () {
+                        var selected = Object.assign({}, context, { season: Number(season) });
+                        openVoiceSelect(selected);
+                    }
+                };
+            });
+
+            showSelect('Сезон', items);
+        }, function () {
+            notify('Не удалось получить сезоны');
+        });
+    }
+
+    function openVoiceSelect(context) {
+        notify('Собираю озвучки…');
 
         request('GET', API.list, { userKey: userKey() }, null, function (subscriptions) {
             subscriptions = Array.isArray(subscriptions) ? subscriptions : [];
@@ -370,17 +493,18 @@
                     var season = Number(variant.season || context.season || 1) || 1;
                     var episode = Number(variant.episode || 0) || 0;
                     var quality = variant.quality ? ' · ' + variant.quality : '';
+                    var sources = sourceSummary(variant);
                     var isSubscribed = !!subscribed[[context.contentId, id, season].join('|')];
 
                     return {
                         title: (isSubscribed ? '✓ ' : '') + name + quality,
-                        subtitle: episode > 0 ? ('Серия ' + episode) : '',
+                        subtitle: (episode > 0 ? ('Серия ' + episode) : '') + (sources ? ((episode > 0 ? ' · ' : '') + sources) : ''),
                         variant: variant,
                         subscribed: isSubscribed,
                         onclick: function () {
                             toggle(context, variant, function (enabled) {
                                 notify(enabled ? ('Подписка: ' + name) : ('Подписка удалена: ' + name));
-                                openForItem(context);
+                                openVoiceSelect(context);
                             });
                         }
                     };
@@ -397,6 +521,7 @@
                     var name = variant.Name || variant.name || variant.translation || 'Озвучка';
                     return {
                         title: name,
+                        subtitle: sourceSummary(variant),
                         variant: variant,
                         onclick: function () { toggle(context, variant); }
                     };
@@ -407,6 +532,17 @@
     }
 
     function toggle(context, variant, done) {
+        var sources = variantSources(variant);
+        var bodySources = sources.map(function (source) {
+            return {
+                source: source.Source || source.source || '',
+                path: source.Path || source.path || '',
+                translationId: String(source.TranslationId || source.translationId || ''),
+                translationName: source.TranslationName || source.translationName || variant.translation || variant.Name || ''
+            };
+        });
+
+        var mainSource = bodySources.length > 1 ? 'multi' : (bodySources.length ? bodySources[0].source : (variant.source || 'multi'));
         var body = {
             userKey: userKey(),
             contentId: context.contentId,
@@ -417,17 +553,12 @@
             tmdbId: context.tmdbId,
             year: context.year,
             isSerial: context.isSerial,
-            source: 'mirage',
+            source: mainSource,
             translationId: String(variant.Id || variant.id || variant.translation_id || ''),
             translationName: variant.Name || variant.name || variant.translation || '',
-            currentSeason: String(variant.season || context.season || 1),
+            currentSeason: String(context.isSerial ? (variant.season || context.season || 1) : 1),
             currentEpisode: String(variant.episode || 0),
-            sources: [{
-                source: 'mirage',
-                path: '/lite/mirage',
-                translationId: String(variant.Id || variant.id || variant.translation_id || ''),
-                translationName: variant.Name || variant.name || variant.translation || ''
-            }]
+            sources: bodySources
         };
 
         request('POST', API.toggle, null, body, function (result) {
@@ -491,7 +622,7 @@
     }
 
     function forceCheckUpdatesUI() {
-        notify('Проверяю обновления…');
+        notify('Проверяю четыре источника…');
         refreshUpdates(true, function (updates) {
             notify(updates.length ? ('Новых серий: ' + updates.length) : 'Новых серий нет');
         });
@@ -505,10 +636,14 @@
                 var voice = item.TranslationName || item.translationName || '';
                 var season = item.CurrentSeason || item.currentSeason || 1;
                 var episode = item.LastEpisode || item.lastEpisode || item.CurrentEpisode || item.currentEpisode || 0;
+                var sources = item.Sources || item.sources || [];
+                var sourceText = Array.isArray(sources) && sources.length
+                    ? sources.map(function (x) { return sourceName(x.Source || x.source); }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(', ')
+                    : sourceName(item.Source || item.source);
 
                 return {
                     title: title,
-                    subtitle: (voice ? voice + ' · ' : '') + 'S' + season + (episode ? ' E' + episode : ''),
+                    subtitle: (voice ? voice + ' · ' : '') + 'S' + season + (episode ? ' E' + episode : '') + (sourceText ? ' · ' + sourceText : ''),
                     onclick: function () {
                         notify(title + (voice ? ' · ' + voice : ''));
                     }
@@ -521,7 +656,7 @@
 
     function openHeadMenu() {
         var items = [
-            { title: 'Проверить обновления', onclick: forceCheckUpdatesUI },
+            { title: 'Проверить обновления', subtitle: 'FlixCDN · Phantom · ZetflixDB · VideoHUB', onclick: forceCheckUpdatesUI },
             { title: 'Мои подписки', onclick: openSubscriptions }
         ];
 
