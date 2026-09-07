@@ -34,10 +34,11 @@ public static class TranslationSubscriptionService
 
         try
         {
-            var list = SubscriptionStore.Load();
-            bool changed = false;
+            // Снимок нужен только для сетевых запросов. Результаты никогда не сохраняем
+            // обратно целиком, чтобы не затереть параллельный watched/toggle/remove.
+            var snapshot = SubscriptionStore.Load();
 
-            foreach (var sub in list)
+            foreach (var sub in snapshot)
             {
                 if (!string.IsNullOrWhiteSpace(userKey) && sub.UserKey != userKey)
                     continue;
@@ -84,38 +85,47 @@ public static class TranslationSubscriptionService
                         latestEpisode = Math.Max(latestEpisode, 1);
 
                     var best = matches.OrderByDescending(x => x.episode).FirstOrDefault();
-                    if (best?.Sources != null && best.Sources.Count > 0)
+                    var newSources = best?.Sources?.Where(x => x != null).Select(x => new TranslationSubscriptionSource
                     {
-                        sub.Sources = best.Sources.Select(x => new TranslationSubscriptionSource
+                        Source = x.Source,
+                        Path = x.Path,
+                        TranslationId = x.TranslationId,
+                        TranslationName = x.TranslationName
+                    }).ToList();
+
+                    string subscriptionId = sub.Id;
+                    bool isSerial = sub.IsSerial;
+
+                    SubscriptionStore.Mutate(list =>
+                    {
+                        var current = list.FirstOrDefault(x => x.Id == subscriptionId);
+                        if (current == null)
+                            return;
+
+                        if (newSources != null && newSources.Count > 0)
                         {
-                            Source = x.Source,
-                            Path = x.Path,
-                            TranslationId = x.TranslationId,
-                            TranslationName = x.TranslationName
-                        }).ToList();
+                            current.Sources = newSources;
+                            current.Source = newSources.Count > 1 ? "multi" : newSources[0].Source;
+                        }
 
-                        sub.Source = sub.Sources.Count > 1 ? "multi" : sub.Sources[0].Source;
-                    }
+                        if (latestEpisode > current.LastEpisode.GetValueOrDefault(0))
+                        {
+                            current.LastEpisode = latestEpisode;
+                            current.LastSeason = isSerial ? season : 0;
+                        }
 
-                    if (latestEpisode > sub.LastEpisode.GetValueOrDefault(0))
-                    {
-                        sub.LastEpisode = latestEpisode;
-                        sub.LastSeason = sub.IsSerial ? season : 0;
-                    }
-
-                    // CurrentEpisode = реально просмотрено в Lampa.
-                    // LastEpisode = сколько уже доступно в выбранной озвучке.
-                    // Пока между ними есть разрыв, подписка остаётся в обновлениях.
-                    sub.Notified = sub.LastEpisode.GetValueOrDefault(0) <= sub.CurrentEpisode.GetValueOrDefault(0);
-
-                    sub.LastCheckedAt = DateTime.Now;
-                    changed = true;
+                        // CurrentEpisode мог измениться, пока выполнялся сетевой запрос,
+                        // поэтому Notified вычисляем только по актуальной записи.
+                        current.Notified = current.LastEpisode.GetValueOrDefault(0)
+                            <= current.CurrentEpisode.GetValueOrDefault(0);
+                        current.LastCheckedAt = DateTime.Now;
+                    });
                 }
-                catch { }
+                catch
+                {
+                    // Ошибка одного балансера/подписки не должна прерывать весь цикл.
+                }
             }
-
-            if (changed)
-                SubscriptionStore.Save(list);
         }
         finally
         {
