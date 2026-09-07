@@ -27,6 +27,20 @@ public class TranslationSubscription
     public List<TranslationSubscriptionSource> Sources { get; set; } = new();
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime? LastCheckedAt { get; set; }
+
+    // TMDB is the scheduling source: it tells us when there is actually
+    // something new to look for in the voice balancers.
+    public string TmdbStatus { get; set; }
+    public int? TmdbLastSeason { get; set; }
+    public int? TmdbLastEpisode { get; set; }
+    public DateTime? TmdbLastAirDate { get; set; }
+    public int? TmdbNextSeason { get; set; }
+    public int? TmdbNextEpisode { get; set; }
+    public DateTime? TmdbNextAirDate { get; set; }
+    public int? TmdbTargetSeasonEpisodes { get; set; }
+    public DateTime? TmdbLastSyncedAt { get; set; }
+    public string ScheduleState { get; set; }
+    public bool TmdbNewSeasonAvailable { get; set; }
 }
 
 public class TranslationSubscriptionSource
