@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,7 +27,7 @@ public static class TranslationSubscriptionService
         timer = null;
     }
 
-    public static async Task Tick()
+    public static async Task Tick(string userKey = null, HashSet<string> enabledSources = null)
     {
         if (Interlocked.Exchange(ref running, 1) == 1)
             return;
@@ -38,12 +39,24 @@ public static class TranslationSubscriptionService
 
             foreach (var sub in list)
             {
+                if (!string.IsNullOrWhiteSpace(userKey) && sub.UserKey != userKey)
+                    continue;
+
                 try
                 {
                     long.TryParse(sub.KpId, out long kp);
                     int season = sub.IsSerial ? sub.CurrentSeason.GetValueOrDefault(1) : 0;
                     if (sub.IsSerial && season <= 0)
                         season = 1;
+
+                    HashSet<string> sources = enabledSources;
+                    if (sources == null && sub.Sources != null && sub.Sources.Count > 0)
+                    {
+                        sources = sub.Sources
+                            .Where(x => !string.IsNullOrWhiteSpace(x.Source))
+                            .Select(x => x.Source)
+                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    }
 
                     var response = await TranslationProviderHub.GetVariants(new VoiceProviderQuery
                     {
@@ -53,7 +66,8 @@ public static class TranslationSubscriptionService
                         OriginalTitle = sub.OriginalTitle,
                         Year = sub.Year.GetValueOrDefault(0),
                         IsSerial = sub.IsSerial,
-                        Season = season
+                        Season = season,
+                        Sources = sources
                     }).ConfigureAwait(false);
 
                     var matches = response.Translations.Where(x =>
