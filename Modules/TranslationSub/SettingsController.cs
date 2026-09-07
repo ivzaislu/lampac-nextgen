@@ -51,7 +51,7 @@ public class TranslationSubSettingsController : BaseController
         {
             foreach (var item in arr)
             {
-                string value = item?.Value<string>();
+                string value = item?.ToString();
                 if (!string.IsNullOrWhiteSpace(value))
                     sources.Add(value);
             }
