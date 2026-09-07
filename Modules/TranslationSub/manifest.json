@@ -3,6 +3,7 @@
   "dynamic": true,
   "tree": [
     "Controller.cs",
+    "PluginController.cs",
     "ModInit.cs",
     "ModuleConf.cs",
     "Models/TranslationSubscription.cs",
