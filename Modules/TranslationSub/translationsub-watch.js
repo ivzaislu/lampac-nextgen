@@ -11,6 +11,7 @@
     var debounceTimer = null;
     var syncing = false;
     var queued = false;
+    var callbacks = [];
 
     function storageGet(name, fallback) {
         try {
@@ -21,9 +22,7 @@
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
+        } catch (e2) { return fallback; }
     }
 
     function storageSet(name, value) {
@@ -33,19 +32,16 @@
                 return;
             }
         } catch (e) {}
-
         try { localStorage.setItem(name, typeof value === 'string' ? value : JSON.stringify(value)); } catch (e2) {}
     }
 
     function lampacUid() {
         var uid = String(storageGet('lampac_unic_id', '') || '');
         if (uid) return uid;
-
         try {
             if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
                 uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
         } catch (e) {}
-
         if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
         storageSet('lampac_unic_id', uid);
         return uid;
@@ -59,9 +55,7 @@
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) {
-            return '';
-        }
+        } catch (e) { return ''; }
     }
 
     function request(method, path, body, success, error) {
@@ -70,10 +64,7 @@
         var url = host() + path;
 
         if (typeof fetch === 'function') {
-            var options = {
-                method: method,
-                headers: { 'Content-Type': 'application/json; charset=utf-8' }
-            };
+            var options = { method: method, headers: { 'Content-Type': 'application/json; charset=utf-8' } };
             if (body && method !== 'GET') options.body = JSON.stringify(body);
 
             fetch(url, options)
@@ -98,14 +89,10 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                     try { success(xhr.responseText ? JSON.parse(xhr.responseText) : {}); }
                     catch (e) { success({}); }
-                } else {
-                    error(new Error('HTTP ' + xhr.status));
-                }
+                } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(body && method !== 'GET' ? JSON.stringify(body) : null);
-        } catch (e2) {
-            error(e2);
-        }
+        } catch (e2) { error(e2); }
     }
 
     function notify(text) {
@@ -115,7 +102,6 @@
                 return;
             }
         } catch (e) {}
-
         try { console.log('[TranslationSub]', text); } catch (e2) {}
     }
 
@@ -134,7 +120,6 @@
         var names = [];
         var original = String(value(item, 'OriginalTitle', 'originalTitle', '') || '').trim();
         var title = String(value(item, 'Title', 'title', '') || '').trim();
-
         if (original) names.push(original);
         if (title && names.indexOf(title) === -1) names.push(title);
         return names;
@@ -142,28 +127,23 @@
 
     function episodePercent(names, season, episode) {
         var percent = 0;
-
         names.forEach(function (name) {
             try {
-                var card = {
-                    original_name: name,
-                    original_title: name
-                };
+                var card = { original_name: name, original_title: name };
                 var current = Number(Lampa.Timeline.watchedEpisode(card, season, episode) || 0);
                 if (current > percent) percent = current;
             } catch (e) {}
         });
-
         return percent;
     }
 
-    function highestWatched(group) {
-        if (!group.length || !timelineAvailable()) return 0;
+    function groupInfo(group) {
+        if (!group.length || !timelineAvailable()) return { watched: 0, previous: 0 };
 
         var first = group[0];
         var season = Number(value(first, 'CurrentSeason', 'currentSeason', 1) || 1);
         var names = titleCandidates(first);
-        if (!names.length || season <= 0) return 0;
+        if (!names.length || season <= 0) return { watched: 0, previous: 0 };
 
         var available = 0;
         var previous = 0;
@@ -173,19 +153,16 @@
         });
 
         var scanTo = Math.min(MAX_EPISODES_SCAN, Math.max(32, available + 8, previous + 8));
-        var highest = 0;
-
+        var watched = 0;
         for (var episode = 1; episode <= scanTo; episode++) {
-            if (episodePercent(names, season, episode) >= WATCHED_PERCENT)
-                highest = episode;
+            if (episodePercent(names, season, episode) >= WATCHED_PERCENT) watched = episode;
         }
 
-        return highest;
+        return { watched: watched, previous: previous };
     }
 
     function groupSubscriptions(list) {
         var groups = {};
-
         (Array.isArray(list) ? list : []).forEach(function (item) {
             var isSerial = value(item, 'IsSerial', 'isSerial', true);
             if (isSerial === false || isSerial === 'false') return;
@@ -198,38 +175,42 @@
             if (!groups[key]) groups[key] = [];
             groups[key].push(item);
         });
-
         return groups;
     }
 
     function syncGroup(group, done) {
         if (!group || !group.length) {
-            done();
+            done(false);
             return;
         }
 
         var first = group[0];
         var contentId = String(value(first, 'ContentId', 'contentId', '') || '');
         var season = Number(value(first, 'CurrentSeason', 'currentSeason', 1) || 1);
-        var watched = highestWatched(group);
+        var info = groupInfo(group);
+
+        // Не пишем JSON на сервер каждую минуту, если Timeline вообще не изменился.
+        if (info.watched === info.previous) {
+            done(false);
+            return;
+        }
 
         request('POST', '/translationsub/watched', {
             userKey: userKey(),
             contentId: contentId,
             season: season,
-            episode: watched
-        }, function () { done(); }, function () { done(); });
+            episode: info.watched
+        }, function () { done(true); }, function () { done(false); });
     }
 
     function loadNoticeState() {
         var state = storageGet('translationsub_watch_notices', {});
         if (state && typeof state === 'object') return state;
-
-        try { return JSON.parse(String(state || '{}')); }
-        catch (e) { return {}; }
+        try { return JSON.parse(String(state || '{}')); } catch (e) { return {}; }
     }
 
-    function showGapNotifications() {
+    function showGapNotifications(done) {
+        done = typeof done === 'function' ? done : function () {};
         request('GET', '/translationsub/updates?userKey=' + encodeURIComponent(userKey()), null, function (updates) {
             updates = Array.isArray(updates) ? updates : [];
             var seen = loadNoticeState();
@@ -239,19 +220,15 @@
                 var id = String(value(item, 'Id', 'id', '') || '');
                 var title = String(value(item, 'Title', 'title', 'Сериал') || 'Сериал');
                 var voice = String(value(item, 'TranslationName', 'translationName', '') || '');
-                var season = Number(value(item, 'Season', 'season', value(item, 'CurrentSeason', 'currentSeason', 1)) || 1);
                 var from = Number(value(item, 'FromEpisode', 'fromEpisode', 0) || 0);
                 var to = Number(value(item, 'ToEpisode', 'toEpisode', value(item, 'AvailableEpisode', 'availableEpisode', 0)) || 0);
                 var count = Number(value(item, 'NewCount', 'newCount', Math.max(0, to - from + 1)) || 0);
 
                 if (!id || !to || to <= 0 || from <= 0) return;
-
-                // Уведомляем повторно только когда в озвучке появилась ещё более новая серия.
                 if (Number(seen[id] || 0) >= to) return;
 
                 seen[id] = to;
                 changed = true;
-
                 var range = from === to ? ('серия ' + from) : ('серии ' + from + '–' + to);
                 var text = title + (voice ? ' · ' + voice : '') + ': доступны ' + range;
                 if (count > 1) text += ' (' + count + ')';
@@ -259,16 +236,44 @@
             });
 
             if (changed) storageSet('translationsub_watch_notices', seen);
+            done();
+        }, done);
+    }
 
-            try {
-                if (window.TranslationSub && typeof window.TranslationSub.checkUpdates === 'function')
-                    window.TranslationSub.checkUpdates();
-            } catch (e) {}
+    function flushCallbacks() {
+        var pending = callbacks.splice(0, callbacks.length);
+        pending.forEach(function (callback) {
+            try { callback(); } catch (e) {}
         });
     }
 
-    function syncAll() {
-        if (!timelineAvailable()) return;
+    function finishSync(changedProgress) {
+        syncing = false;
+
+        showGapNotifications(function () {
+            if (changedProgress) {
+                try {
+                    if (window.TranslationSubNotice && typeof window.TranslationSubNotice.refresh === 'function')
+                        window.TranslationSubNotice.refresh();
+                } catch (e) {}
+            }
+
+            flushCallbacks();
+
+            if (queued) {
+                queued = false;
+                scheduleSync(300);
+            }
+        });
+    }
+
+    function syncAll(done) {
+        if (typeof done === 'function') callbacks.push(done);
+
+        if (!timelineAvailable()) {
+            flushCallbacks();
+            return;
+        }
 
         if (syncing) {
             queued = true;
@@ -279,52 +284,54 @@
         request('GET', '/translationsub/list?userKey=' + encodeURIComponent(userKey()), null, function (list) {
             var groups = groupSubscriptions(list);
             var keys = Object.keys(groups);
+            var changedProgress = false;
 
             if (!keys.length) {
-                syncing = false;
+                finishSync(false);
                 return;
             }
 
-            var pending = keys.length;
-            keys.forEach(function (key) {
-                syncGroup(groups[key], function () {
-                    pending--;
-                    if (pending > 0) return;
+            function next(index) {
+                if (index >= keys.length) {
+                    finishSync(changedProgress);
+                    return;
+                }
 
-                    syncing = false;
-                    showGapNotifications();
-
-                    if (queued) {
-                        queued = false;
-                        scheduleSync(500);
-                    }
+                // Последовательно: не запускаем несколько read-modify-write запросов /watched одновременно.
+                syncGroup(groups[keys[index]], function (changed) {
+                    if (changed) changedProgress = true;
+                    next(index + 1);
                 });
-            });
+            }
+
+            next(0);
         }, function () {
             syncing = false;
+            flushCallbacks();
+            if (queued) {
+                queued = false;
+                scheduleSync(500);
+            }
         });
     }
 
     function scheduleSync(delay) {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(syncAll, typeof delay === 'number' ? delay : 1200);
+        debounceTimer = setTimeout(function () { syncAll(); }, typeof delay === 'number' ? delay : 1200);
     }
 
     function bindTimeline() {
         try {
             if (Lampa.Timeline && Lampa.Timeline.listener && typeof Lampa.Timeline.listener.follow === 'function') {
-                Lampa.Timeline.listener.follow('update', function () {
-                    scheduleSync(1200);
-                });
+                Lampa.Timeline.listener.follow('update', function () { scheduleSync(900); });
             }
         } catch (e) {}
 
         try {
             if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('state:changed', function (event) {
-                    if (event && event.target === 'timeline') scheduleSync(1200);
+                    if (event && event.target === 'timeline') scheduleSync(900);
                 });
-
                 Lampa.Listener.follow('app', function (event) {
                     if (event && event.type === 'ready') scheduleSync(3000);
                 });
@@ -334,12 +341,10 @@
 
     function start() {
         if (!window.Lampa) return;
-
         bindTimeline();
         scheduleSync(5000);
-
         if (syncTimer) clearInterval(syncTimer);
-        syncTimer = setInterval(syncAll, SYNC_INTERVAL);
+        syncTimer = setInterval(function () { syncAll(); }, SYNC_INTERVAL);
 
         window.TranslationSubWatch = {
             sync: syncAll,
@@ -347,18 +352,15 @@
         };
     }
 
-    if (window.Lampa) {
-        start();
-    } else {
+    if (window.Lampa) start();
+    else {
         var attempts = 0;
         var wait = setInterval(function () {
             attempts++;
             if (window.Lampa) {
                 clearInterval(wait);
                 start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
+            } else if (attempts > 80) clearInterval(wait);
         }, 250);
     }
 })();
