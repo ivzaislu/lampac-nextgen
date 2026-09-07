@@ -34,7 +34,8 @@
         try {
             return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
         } catch (e) {
-            return date.getDate() + '.' + String(date.getMonth() + 1).padStart(2, '0');
+            var month = date.getMonth() + 1;
+            return date.getDate() + '.' + (month < 10 ? '0' : '') + month;
         }
     }
 
