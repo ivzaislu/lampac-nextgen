@@ -101,8 +101,12 @@ public static class TranslationSubscriptionService
                     {
                         sub.LastEpisode = latestEpisode;
                         sub.LastSeason = sub.IsSerial ? season : 0;
-                        sub.Notified = false;
                     }
+
+                    // CurrentEpisode = реально просмотрено в Lampa.
+                    // LastEpisode = сколько уже доступно в выбранной озвучке.
+                    // Пока между ними есть разрыв, подписка остаётся в обновлениях.
+                    sub.Notified = sub.LastEpisode.GetValueOrDefault(0) <= sub.CurrentEpisode.GetValueOrDefault(0);
 
                     sub.LastCheckedAt = DateTime.Now;
                     changed = true;
