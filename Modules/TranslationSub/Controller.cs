@@ -168,28 +168,26 @@ public class TranslationSubController : BaseController
         if (string.IsNullOrWhiteSpace(sub.UserKey))
             sub.UserKey = "local";
 
-        var list = SubscriptionStore.Load();
-        var exists = list.FirstOrDefault(x =>
-            x.UserKey == sub.UserKey &&
-            x.ContentId == sub.ContentId &&
-            x.TranslationId == sub.TranslationId &&
-            (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1));
+        bool subscribed = SubscriptionStore.Mutate(list =>
+        {
+            var exists = list.FirstOrDefault(x =>
+                x.UserKey == sub.UserKey &&
+                x.ContentId == sub.ContentId &&
+                x.TranslationId == sub.TranslationId &&
+                (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1));
 
-        bool subscribed;
-        if (exists != null)
-        {
-            list.Remove(exists);
-            subscribed = false;
-        }
-        else
-        {
+            if (exists != null)
+            {
+                list.Remove(exists);
+                return false;
+            }
+
             sub.Id = Guid.NewGuid().ToString("N");
             sub.CreatedAt = DateTime.Now;
             list.Add(sub);
-            subscribed = true;
-        }
+            return true;
+        });
 
-        SubscriptionStore.Save(list);
         return ContentTo(JsonConvert.SerializeObject(new { success = true, subscribed }));
     }
 
@@ -204,15 +202,15 @@ public class TranslationSubController : BaseController
             return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
 
         var sub = FromJson(body);
-        var list = SubscriptionStore.Load();
-
-        if (!list.Any(x => x.UserKey == sub.UserKey && x.ContentId == sub.ContentId && x.TranslationId == sub.TranslationId && (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1)))
+        SubscriptionStore.Mutate(list =>
         {
+            if (list.Any(x => x.UserKey == sub.UserKey && x.ContentId == sub.ContentId && x.TranslationId == sub.TranslationId && (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1)))
+                return;
+
             sub.Id = Guid.NewGuid().ToString("N");
             sub.CreatedAt = DateTime.Now;
             list.Add(sub);
-            SubscriptionStore.Save(list);
-        }
+        });
 
         return ContentTo("{\"success\":true}");
     }
@@ -235,35 +233,34 @@ public class TranslationSubController : BaseController
         if (string.IsNullOrWhiteSpace(contentId) || season <= 0)
             return ContentTo("{\"success\":false,\"error\":\"invalid progress\"}");
 
-        var list = SubscriptionStore.Load();
-        var matches = list.Where(x =>
-            x.IsSerial &&
-            x.UserKey == userKey &&
-            x.ContentId == contentId &&
-            x.CurrentSeason.GetValueOrDefault(1) == season
-        ).ToList();
-
+        int updated = 0;
         int available = 0;
-        foreach (var item in matches)
+
+        SubscriptionStore.Mutate(list =>
         {
-            item.CurrentSeason = season;
-            item.CurrentEpisode = episode;
+            var matches = list.Where(x =>
+                x.IsSerial &&
+                x.UserKey == userKey &&
+                x.ContentId == contentId &&
+                x.CurrentSeason.GetValueOrDefault(1) == season
+            ).ToList();
 
-            int itemAvailable = item.LastEpisode.GetValueOrDefault(0);
-            available = Math.Max(available, itemAvailable);
+            updated = matches.Count;
+            foreach (var item in matches)
+            {
+                item.CurrentSeason = season;
+                item.CurrentEpisode = episode;
 
-            // Пока в выбранной озвучке есть серии после просмотренной,
-            // подписка остаётся активным уведомлением.
-            item.Notified = itemAvailable <= episode;
-        }
-
-        if (matches.Count > 0)
-            SubscriptionStore.Save(list);
+                int itemAvailable = item.LastEpisode.GetValueOrDefault(0);
+                available = Math.Max(available, itemAvailable);
+                item.Notified = itemAvailable <= episode;
+            }
+        });
 
         return ContentTo(JsonConvert.SerializeObject(new
         {
             success = true,
-            updated = matches.Count,
+            updated,
             season,
             watchedEpisode = episode,
             availableEpisode = available,
@@ -279,9 +276,7 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/remove")]
     public ActionResult Remove(string id)
     {
-        var list = SubscriptionStore.Load();
-        list.RemoveAll(x => x.Id == id);
-        SubscriptionStore.Save(list);
+        SubscriptionStore.Mutate(list => list.RemoveAll(x => x.Id == id));
         return ContentTo("{\"success\":true}");
     }
 
@@ -291,13 +286,12 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/notified")]
     public ActionResult Notified(string id)
     {
-        var list = SubscriptionStore.Load();
-        var item = list.FirstOrDefault(x => x.Id == id);
-        if (item != null)
+        SubscriptionStore.Mutate(list =>
         {
-            item.Notified = true;
-            SubscriptionStore.Save(list);
-        }
+            var item = list.FirstOrDefault(x => x.Id == id);
+            if (item != null)
+                item.Notified = true;
+        });
         return ContentTo("{\"success\":true}");
     }
 
