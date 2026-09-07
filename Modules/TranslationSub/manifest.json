@@ -8,6 +8,11 @@
     "ModuleConf.cs",
     "Models",
     "Services",
-    "Providers"
+    "Providers/IVoiceProvider.cs",
+    "Providers/TranslationProviderHub.cs",
+    "Providers/FlixCdnVoiceProvider.cs",
+    "Providers/PhantomVoiceProvider.cs",
+    "Providers/ZetflixDbVoiceProvider.cs",
+    "Providers/CdnVideoHubVoiceProvider.cs"
   ]
 }
