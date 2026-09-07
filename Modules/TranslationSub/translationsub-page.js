@@ -13,16 +13,12 @@
 
     function storageGet(name, fallback) {
         try {
-            if (Lampa.Storage && typeof Lampa.Storage.get === 'function')
-                return Lampa.Storage.get(name, fallback);
+            if (Lampa.Storage && typeof Lampa.Storage.get === 'function') return Lampa.Storage.get(name, fallback);
         } catch (e) {}
-
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
+        } catch (e2) { return fallback; }
     }
 
     function userKey() {
@@ -33,35 +29,26 @@
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) {
-            return '';
-        }
+        } catch (e) { return ''; }
     }
 
     function escapeHtml(value) {
         try {
-            if (Lampa.Utils && typeof Lampa.Utils.escape === 'function')
-                return Lampa.Utils.escape(String(value || ''));
+            if (Lampa.Utils && typeof Lampa.Utils.escape === 'function') return Lampa.Utils.escape(String(value || ''));
         } catch (e) {}
-
         return String(value || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
     function notify(text) {
-        try {
-            if (Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text);
-        } catch (e) {}
+        try { if (Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text); } catch (e) {}
     }
 
     function request(method, path, success, error) {
-        var url = host() + path;
         success = success || function () {};
         error = error || function () {};
+        var url = host() + path;
 
         if (typeof fetch === 'function') {
             fetch(url, { method: method })
@@ -85,14 +72,10 @@
                 if (xhr.status >= 200 && xhr.status < 300) {
                     try { success(xhr.responseText ? JSON.parse(xhr.responseText) : {}); }
                     catch (e) { success({}); }
-                } else {
-                    error(new Error('HTTP ' + xhr.status));
-                }
+                } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
-        } catch (e2) {
-            error(e2);
-        }
+        } catch (e2) { error(e2); }
     }
 
     function sourceName(value) {
@@ -104,43 +87,29 @@
         path = String(path || '');
         if (!path) return '';
         if (/^https?:\/\//i.test(path)) return path;
-
-        try {
-            if (Lampa.Api && typeof Lampa.Api.img === 'function') return Lampa.Api.img(path, 'w300');
-        } catch (e) {}
-
+        try { if (Lampa.Api && typeof Lampa.Api.img === 'function') return Lampa.Api.img(path, 'w300'); } catch (e) {}
         return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
     }
 
-    function showActions(title, items, onBack) {
-        if (!Lampa.Select || typeof Lampa.Select.show !== 'function') return;
-
-        Lampa.Select.show({
-            title: title,
-            items: items,
-            onSelect: function (item) {
-                if (item && typeof item.onclick === 'function') item.onclick();
-            },
-            onBack: function () {
-                if (onBack) onBack();
-                else Lampa.Controller.toggle('content');
-            }
-        });
-    }
-
-    function syncWatched() {
+    function syncWatched(done) {
+        done = typeof done === 'function' ? done : function () {};
         try {
-            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function')
-                window.TranslationSubWatch.sync();
+            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
+                window.TranslationSubWatch.sync(done);
+                return;
+            }
         } catch (e) {}
+        done();
     }
 
-    function SubscriptionPage(object) {
+    function SubscriptionPage() {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="translationsub-page"></div>');
         var self = this;
         var initialized = false;
         var destroyed = false;
+        var requestVersion = 0;
+        var reloadRef = null;
 
         this.create = function () {
             scroll.minus();
@@ -148,15 +117,10 @@
             return this.render();
         };
 
-        this.render = function () {
-            return scroll.render();
-        };
-
+        this.render = function () { return scroll.render(); };
         this.pause = function () {};
         this.stop = function () {};
-        this.back = function () {
-            Lampa.Activity.backward();
-        };
+        this.back = function () { Lampa.Activity.backward(); };
 
         this.start = function () {
             if (Lampa.Activity.active().activity !== this.activity) return;
@@ -190,25 +154,31 @@
 
         this.destroy = function () {
             destroyed = true;
+            requestVersion++;
+            if (window.TranslationSubPageRefresh === reloadRef) window.TranslationSubPageRefresh = null;
             try { scroll.destroy(); } catch (e) {}
             html.remove();
         };
 
-        function focusFirst() {
+        function focusAfterRender(subscriptionId) {
             setTimeout(function () {
                 if (destroyed) return;
                 try {
                     Lampa.Controller.collectionSet(scroll.render(), html);
-                    var first = html.find('.selector')[0];
-                    if (first) Lampa.Controller.collectionFocus(first, scroll.render());
+                    var target = subscriptionId
+                        ? html.find('.translationsub-card[data-subscription-id="' + subscriptionId + '"]')[0]
+                        : null;
+                    if (!target) target = html.find('.selector')[0];
+                    if (target) Lampa.Controller.collectionFocus(target, scroll.render());
                 } catch (e) {}
-            }, 50);
+            }, 40);
         }
 
         function render(list) {
             if (destroyed) return;
             list = Array.isArray(list) ? list : [];
 
+            var focusedId = String(html.find('.translationsub-card.focus').attr('data-subscription-id') || '');
             html.empty();
             html.append('<div class="translationsub-page__title">Подписки на озвучки</div>');
             html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampa · подписок: ' + list.length + '</div>');
@@ -216,27 +186,22 @@
             var toolbar = $('<div class="translationsub-toolbar"></div>');
             var reload = $('<div class="translationsub-toolbar__item selector"><span>Обновить прогресс</span></div>');
             reload.on('hover:enter', function () {
-                syncWatched();
-                setTimeout(load, 1200);
+                syncWatched(function () { load(); });
             });
             toolbar.append(reload);
 
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
             check.on('hover:enter', function () {
-                syncWatched();
-                setTimeout(function () {
+                syncWatched(function () {
                     if (window.TranslationSub && typeof window.TranslationSub.forceCheckUpdatesUI === 'function') {
                         window.TranslationSub.forceCheckUpdatesUI(function () { load(); });
-                    } else {
-                        load();
-                    }
-                }, 900);
+                    } else load();
+                });
             });
             toolbar.append(check);
             html.append(toolbar);
 
             var container = $('<div class="translationsub-list"></div>');
-
             if (!list.length) {
                 container.append('<div class="translationsub-empty">Подписок пока нет. Откройте сериал, нажмите «Озвучки» и выберите нужную озвучку.</div>');
             }
@@ -251,30 +216,25 @@
                 var newCount = Math.max(0, available - watched);
                 var poster = posterUrl(item.Poster || item.poster || '');
                 var sources = item.Sources || item.sources || [];
-                var sourceText = '';
+                var names = [];
 
-                if (Array.isArray(sources) && sources.length) {
-                    var names = [];
+                if (Array.isArray(sources)) {
                     sources.forEach(function (source) {
                         var name = sourceName(source.Source || source.source);
-                        if (names.indexOf(name) === -1) names.push(name);
+                        if (name && names.indexOf(name) === -1) names.push(name);
                     });
-                    sourceText = names.join(', ');
-                } else {
-                    sourceText = sourceName(item.Source || item.source);
                 }
+                if (!names.length) names.push(sourceName(item.Source || item.source));
+
+                var progressText = 'S' + season + ' · просмотрено E' + watched + ' · озвучка до E' + available;
+                if (newCount > 0) progressText += ' · доступны E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '');
+                if (names.length) progressText += ' · ' + names.join(', ');
 
                 var posterHtml = poster
                     ? '<img src="' + escapeHtml(poster) + '" alt="">'
                     : '<div class="translationsub-card__poster-empty"></div>';
 
-                var progressText = 'S' + season + ' · просмотрено E' + watched + ' · озвучка до E' + available;
-                if (newCount > 0) {
-                    progressText += ' · доступны E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '');
-                }
-                if (sourceText) progressText += ' · ' + sourceText;
-
-                var card = $('<div class="translationsub-card selector">' +
+                var card = $('<div class="translationsub-card selector" data-subscription-id="' + escapeHtml(id) + '">' +
                     '<div class="translationsub-card__poster">' + posterHtml + '</div>' +
                     '<div class="translationsub-card__body">' +
                         '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
@@ -287,71 +247,51 @@
                 card.on('hover:focus', function (event) {
                     try { scroll.update($(event.target), true); } catch (e) {}
                 });
-
-                card.on('hover:enter', function () {
-                    var actions = [];
-
-                    if (newCount > 0) {
-                        actions.push({
-                            title: 'Доступны серии ' + (watched + 1) + (available > watched + 1 ? '–' + available : ''),
-                            subtitle: 'Просмотрено до ' + watched + ' серии',
-                            onclick: function () {
-                                notify(title + ': доступно новых серий — ' + newCount);
-                            }
-                        });
-                    }
-
-                    actions.push({
-                        title: 'Обновить прогресс просмотра',
-                        onclick: function () {
-                            syncWatched();
-                            setTimeout(load, 1200);
-                        }
-                    });
-
-                    actions.push({
-                        title: 'Удалить подписку',
-                        onclick: function () {
-                            request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
-                                notify('Подписка удалена');
-                                load();
-                            }, function () {
-                                notify('Не удалось удалить подписку');
-                            });
-                        }
-                    });
-
-                    showActions(title, actions, function () { Lampa.Controller.toggle('content'); });
-                });
-
                 container.append(card);
             });
 
             html.append(container);
+
+            try {
+                if (window.TranslationSubCardSource && typeof window.TranslationSubCardSource.bindPage === 'function')
+                    window.TranslationSubCardSource.bindPage(html, list);
+            } catch (e) {}
+
+            try {
+                if (window.TranslationSubUi && typeof window.TranslationSubUi.refresh === 'function')
+                    window.TranslationSubUi.refresh();
+            } catch (e2) {}
+
             Lampa.Controller.enable('content');
-            focusFirst();
+            focusAfterRender(focusedId);
         }
 
         function load() {
             if (destroyed) return;
+            var version = ++requestVersion;
             try { self.activity.loader(true); } catch (e) {}
 
             request('GET', '/translationsub/list?userKey=' + encodeURIComponent(userKey()), function (list) {
+                if (destroyed || version !== requestVersion) return;
                 try { self.activity.loader(false); } catch (e) {}
                 render(list);
-                try { self.activity.toggle(); } catch (e) {}
+                try { self.activity.toggle(); } catch (e2) {}
             }, function () {
+                if (destroyed || version !== requestVersion) return;
                 try { self.activity.loader(false); } catch (e) {}
                 render([]);
-                try { self.activity.toggle(); } catch (e) {}
+                try { self.activity.toggle(); } catch (e2) {}
                 notify('Не удалось загрузить подписки');
             });
         }
 
+        reloadRef = load;
+        window.TranslationSubPageRefresh = reloadRef;
+
         this.initialize = function () {
-            load();
-            syncWatched();
-            setTimeout(load, 1500);
+            // Один цикл: сначала синхронизируем Timeline, затем один раз рисуем страницу.
+            // Старого load -> sync -> load через 1.5 секунды больше нет.
+            syncWatched(function () { load(); });
         };
     }
 
