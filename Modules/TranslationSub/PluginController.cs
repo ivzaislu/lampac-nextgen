@@ -28,6 +28,7 @@ public class TranslationSubPluginController : BaseController
         AppendScript(ref script, "translationsub-card.js");
         AppendScript(ref script, "translationsub-source.js");
         AppendScript(ref script, "translationsub-notice.js");
+        AppendScript(ref script, "translationsub-mobile.js");
 
         Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
         return Content(script, "application/javascript; charset=utf-8");
