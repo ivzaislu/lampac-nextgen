@@ -11,6 +11,12 @@ public class TranslationUserSettings
     public string UserKey { get; set; }
     public int CheckIntervalHours { get; set; } = 1;
     public List<string> Sources { get; set; } = new() { "flixcdn", "phantom", "zetflixdb", "cdnvideohub" };
+
+    public bool UseTmdbSchedule { get; set; } = true;
+    public int TmdbRefreshHours { get; set; } = 24;
+    public int EndedRefreshDays { get; set; } = 7;
+    public string NewSeasonMode { get; set; } = "auto";
+
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 }
 
@@ -18,6 +24,7 @@ public static class TranslationSettingsStore
 {
     static readonly object locker = new();
     static readonly string[] allowedSources = { "flixcdn", "phantom", "zetflixdb", "cdnvideohub" };
+    static readonly string[] allowedNewSeasonModes = { "auto", "notify", "off" };
     static string path => "database/translationsub/settings.json";
 
     static List<TranslationUserSettings> LoadUnsafe()
@@ -47,11 +54,19 @@ public static class TranslationSettingsStore
         File.Move(temp, path, true);
     }
 
-    static TranslationUserSettings Normalize(TranslationUserSettings value, string userKey = null)
+    static TranslationUserSettings Normalize(TranslationUserSettings value, string userKey = null, bool touchUpdatedAt = false)
     {
         value ??= new TranslationUserSettings();
         value.UserKey = string.IsNullOrWhiteSpace(value.UserKey) ? (userKey ?? "local") : value.UserKey;
         value.CheckIntervalHours = Math.Max(1, Math.Min(24, value.CheckIntervalHours));
+        value.TmdbRefreshHours = Math.Max(6, Math.Min(168, value.TmdbRefreshHours <= 0 ? 24 : value.TmdbRefreshHours));
+        value.EndedRefreshDays = Math.Max(1, Math.Min(90, value.EndedRefreshDays <= 0 ? 7 : value.EndedRefreshDays));
+
+        value.NewSeasonMode = string.IsNullOrWhiteSpace(value.NewSeasonMode)
+            ? "auto"
+            : value.NewSeasonMode.Trim().ToLowerInvariant();
+        if (!allowedNewSeasonModes.Contains(value.NewSeasonMode))
+            value.NewSeasonMode = "auto";
 
         value.Sources = (value.Sources ?? new List<string>())
             .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -60,8 +75,25 @@ public static class TranslationSettingsStore
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        value.UpdatedAt = DateTime.Now;
+        if (touchUpdatedAt)
+            value.UpdatedAt = DateTime.Now;
+
         return value;
+    }
+
+    static TranslationUserSettings Clone(TranslationUserSettings value)
+    {
+        return new TranslationUserSettings
+        {
+            UserKey = value.UserKey,
+            CheckIntervalHours = value.CheckIntervalHours,
+            Sources = value.Sources?.ToList() ?? new List<string>(),
+            UseTmdbSchedule = value.UseTmdbSchedule,
+            TmdbRefreshHours = value.TmdbRefreshHours,
+            EndedRefreshDays = value.EndedRefreshDays,
+            NewSeasonMode = value.NewSeasonMode,
+            UpdatedAt = value.UpdatedAt
+        };
     }
 
     public static TranslationUserSettings Get(string userKey)
@@ -74,17 +106,18 @@ public static class TranslationSettingsStore
             if (current == null)
                 return Normalize(new TranslationUserSettings { UserKey = userKey }, userKey);
 
-            return Normalize(new TranslationUserSettings
-            {
-                UserKey = current.UserKey,
-                CheckIntervalHours = current.CheckIntervalHours,
-                Sources = current.Sources?.ToList(),
-                UpdatedAt = current.UpdatedAt
-            }, userKey);
+            return Normalize(Clone(current), userKey);
         }
     }
 
-    public static TranslationUserSettings Set(string userKey, int checkIntervalHours, IEnumerable<string> sources)
+    public static TranslationUserSettings Set(
+        string userKey,
+        int checkIntervalHours,
+        IEnumerable<string> sources,
+        bool? useTmdbSchedule = null,
+        int? tmdbRefreshHours = null,
+        int? endedRefreshDays = null,
+        string newSeasonMode = null)
     {
         userKey = string.IsNullOrWhiteSpace(userKey) ? "local" : userKey;
 
@@ -100,16 +133,15 @@ public static class TranslationSettingsStore
 
             current.CheckIntervalHours = checkIntervalHours;
             current.Sources = sources?.ToList() ?? new List<string>();
-            Normalize(current, userKey);
+            if (useTmdbSchedule.HasValue) current.UseTmdbSchedule = useTmdbSchedule.Value;
+            if (tmdbRefreshHours.HasValue) current.TmdbRefreshHours = tmdbRefreshHours.Value;
+            if (endedRefreshDays.HasValue) current.EndedRefreshDays = endedRefreshDays.Value;
+            if (!string.IsNullOrWhiteSpace(newSeasonMode)) current.NewSeasonMode = newSeasonMode;
+
+            Normalize(current, userKey, true);
             SaveUnsafe(list);
 
-            return new TranslationUserSettings
-            {
-                UserKey = current.UserKey,
-                CheckIntervalHours = current.CheckIntervalHours,
-                Sources = current.Sources.ToList(),
-                UpdatedAt = current.UpdatedAt
-            };
+            return Clone(current);
         }
     }
 }
