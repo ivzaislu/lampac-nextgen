@@ -16,8 +16,6 @@ namespace TranslationSub;
 
 public class TranslationSubController : BaseController
 {
-    static readonly MirageVoiceProvider provider = new();
-
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/list")]
@@ -60,6 +58,7 @@ public class TranslationSubController : BaseController
                 currentSeason = x.CurrentSeason,
                 currentEpisode = x.CurrentEpisode,
                 source = x.Source,
+                sources = x.Sources,
                 translationId = x.TranslationId,
                 translationName = x.TranslationName,
                 lastCheckedAt = x.LastCheckedAt
@@ -109,36 +108,22 @@ public class TranslationSubController : BaseController
         if (!string.IsNullOrWhiteSpace(isSerial))
             isTv = isSerial == "1" || isSerial.Equals("true", StringComparison.OrdinalIgnoreCase);
 
-        int s = season.GetValueOrDefault(1);
-        if (s <= 0) s = 1;
+        int.TryParse(year, out int contentYear);
 
-        string name = !string.IsNullOrWhiteSpace(title) ? title : originalTitle;
+        int targetSeason = isTv ? season.GetValueOrDefault(0) : 0;
+        if (targetSeason < 0)
+            targetSeason = 0;
 
-        var variants = await provider.GetVariants(imdbId, kp, name, isTv, s);
-
-        foreach (var v in variants)
+        var response = await TranslationProviderHub.GetVariants(new VoiceProviderQuery
         {
-            v.KpId = kpId;
-            v.ImdbId = imdbId;
-        }
-
-        var block = new TranslationSourceBlock
-        {
-            Source = "mirage",
-            Path = "/lite/mirage",
-            Translations = variants
-                .GroupBy(x => x.translation_id > 0 ? x.translation_id.ToString() : VoiceNormalize.Normalize(x.translation))
-                .Select(x => x.First())
-                .OrderBy(x => x.Name)
-                .ToList()
-        };
-
-        var response = new TranslationVariantsResponse
-        {
-            Source = block.Source,
-            Translations = block.Translations,
-            Items = block.Translations.Count > 0 ? new() { block } : new()
-        };
+            ImdbId = imdbId,
+            KpId = kp,
+            Title = title,
+            OriginalTitle = originalTitle,
+            Year = contentYear,
+            IsSerial = isTv,
+            Season = targetSeason
+        });
 
         return ContentTo(JsonConvert.SerializeObject(response));
     }
@@ -257,6 +242,7 @@ public class TranslationSubController : BaseController
     {
         int.TryParse(j.Value<string>("currentSeason"), out int currentSeason);
         int.TryParse(j.Value<string>("currentEpisode"), out int currentEpisode);
+        int.TryParse(j.Value<string>("year"), out int year);
         bool.TryParse(j.Value<string>("isSerial"), out bool isSerialBool);
 
         var sub = new TranslationSubscription
@@ -268,8 +254,9 @@ public class TranslationSubController : BaseController
             KpId = j.Value<string>("kpId"),
             ImdbId = j.Value<string>("imdbId"),
             TmdbId = j.Value<string>("tmdbId"),
+            Year = year > 0 ? year : null,
             IsSerial = j["isSerial"]?.Type == JTokenType.Boolean ? j.Value<bool>("isSerial") : isSerialBool,
-            Source = j.Value<string>("source") ?? "mirage",
+            Source = j.Value<string>("source") ?? "multi",
             TranslationId = j.Value<string>("translationId"),
             TranslationName = j.Value<string>("translationName"),
             CurrentSeason = currentSeason > 0 ? currentSeason : 1,
