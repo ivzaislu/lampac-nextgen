@@ -4,8 +4,10 @@ namespace TranslationSub.Models;
 
 public class TranslationVariant
 {
+    public string source { get; set; }
+    public string path { get; set; }
     public string translation { get; set; }
-    public int translation_id { get; set; }
+    public string translation_id { get; set; }
     public int season { get; set; }
     public int episode { get; set; }
     public string quality { get; set; }
@@ -13,8 +15,8 @@ public class TranslationVariant
 
     public string Id
     {
-        get => translation_id.ToString();
-        set { if (int.TryParse(value, out int v)) translation_id = v; }
+        get => translation_id;
+        set => translation_id = value;
     }
 
     public string Name
@@ -25,6 +27,19 @@ public class TranslationVariant
 
     public string KpId { get; set; }
     public string ImdbId { get; set; }
+
+    public List<TranslationVariantSource> Sources { get; set; } = new();
+}
+
+public class TranslationVariantSource
+{
+    public string Source { get; set; }
+    public string Path { get; set; }
+    public string TranslationId { get; set; }
+    public string TranslationName { get; set; }
+    public int Season { get; set; }
+    public int Episode { get; set; }
+    public string Quality { get; set; }
 }
 
 public class TranslationSourceBlock
@@ -36,7 +51,8 @@ public class TranslationSourceBlock
 
 public class TranslationVariantsResponse
 {
-    public string Source { get; set; }
+    public string Source { get; set; } = "multi";
+    public List<int> Seasons { get; set; } = new();
     public List<TranslationVariant> Translations { get; set; } = new();
     public List<TranslationSourceBlock> Items { get; set; } = new();
 }
