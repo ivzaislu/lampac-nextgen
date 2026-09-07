@@ -10,7 +10,6 @@ public static class TranslationSubscriptionService
 {
     static Timer timer;
     static int running;
-    static readonly MirageVoiceProvider provider = new();
 
     public static void Start()
     {
@@ -41,31 +40,57 @@ public static class TranslationSubscriptionService
                 try
                 {
                     long.TryParse(sub.KpId, out long kp);
-                    int season = sub.CurrentSeason.GetValueOrDefault(1);
-                    if (season <= 0) season = 1;
+                    int season = sub.IsSerial ? sub.CurrentSeason.GetValueOrDefault(1) : 0;
+                    if (sub.IsSerial && season <= 0)
+                        season = 1;
 
-                    var variants = await provider.GetVariants(sub.ImdbId, kp, sub.Title, sub.IsSerial, season);
-                    int.TryParse(sub.TranslationId, out int tid);
+                    var response = await TranslationProviderHub.GetVariants(new VoiceProviderQuery
+                    {
+                        ImdbId = sub.ImdbId,
+                        KpId = kp,
+                        Title = sub.Title,
+                        OriginalTitle = sub.OriginalTitle,
+                        Year = sub.Year.GetValueOrDefault(0),
+                        IsSerial = sub.IsSerial,
+                        Season = season
+                    }).ConfigureAwait(false);
 
-                    var matches = variants.Where(x =>
-                        (tid > 0 && x.translation_id == tid) ||
-                        (!string.IsNullOrWhiteSpace(sub.TranslationName) &&
-                         VoiceNormalize.Normalize(x.translation) == VoiceNormalize.Normalize(sub.TranslationName))
+                    var matches = response.Translations.Where(x =>
+                        (!sub.IsSerial || x.season == season) &&
+                        (
+                            (!string.IsNullOrWhiteSpace(sub.TranslationId) && x.translation_id == sub.TranslationId) ||
+                            (!string.IsNullOrWhiteSpace(sub.TranslationName) &&
+                             VoiceNormalize.Normalize(x.translation) == VoiceNormalize.Normalize(sub.TranslationName))
+                        )
                     ).ToList();
 
                     int latestEpisode = matches.Select(x => x.episode).DefaultIfEmpty(0).Max();
                     if (!sub.IsSerial && matches.Count > 0)
                         latestEpisode = Math.Max(latestEpisode, 1);
 
+                    var best = matches.OrderByDescending(x => x.episode).FirstOrDefault();
+                    if (best?.Sources != null && best.Sources.Count > 0)
+                    {
+                        sub.Sources = best.Sources.Select(x => new Models.TranslationSubscriptionSource
+                        {
+                            Source = x.Source,
+                            Path = x.Path,
+                            TranslationId = x.TranslationId,
+                            TranslationName = x.TranslationName
+                        }).ToList();
+
+                        sub.Source = sub.Sources.Count > 1 ? "multi" : sub.Sources[0].Source;
+                    }
+
                     if (latestEpisode > sub.LastEpisode.GetValueOrDefault(0))
                     {
                         sub.LastEpisode = latestEpisode;
-                        sub.LastSeason = season;
+                        sub.LastSeason = sub.IsSerial ? season : 0;
                         sub.Notified = false;
-                        changed = true;
                     }
 
                     sub.LastCheckedAt = DateTime.Now;
+                    changed = true;
                 }
                 catch { }
             }
