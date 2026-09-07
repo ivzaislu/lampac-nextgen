@@ -45,26 +45,37 @@ public class TranslationSubController : BaseController
 
         var updates = list
             .Where(x => !x.Notified && x.LastEpisode.GetValueOrDefault(0) > x.CurrentEpisode.GetValueOrDefault(0))
-            .Select(x => new
+            .Select(x =>
             {
-                id = x.Id,
-                userKey = x.UserKey,
-                contentId = x.ContentId,
-                title = x.Title,
-                originalTitle = x.OriginalTitle,
-                kpId = x.KpId,
-                imdbId = x.ImdbId,
-                tmdbId = x.TmdbId,
-                poster = x.Poster,
-                season = x.LastSeason ?? x.CurrentSeason ?? 1,
-                episode = x.LastEpisode ?? 0,
-                currentSeason = x.CurrentSeason,
-                currentEpisode = x.CurrentEpisode,
-                source = x.Source,
-                sources = x.Sources,
-                translationId = x.TranslationId,
-                translationName = x.TranslationName,
-                lastCheckedAt = x.LastCheckedAt
+                int watched = x.CurrentEpisode.GetValueOrDefault(0);
+                int available = x.LastEpisode.GetValueOrDefault(0);
+
+                return new
+                {
+                    id = x.Id,
+                    userKey = x.UserKey,
+                    contentId = x.ContentId,
+                    title = x.Title,
+                    originalTitle = x.OriginalTitle,
+                    kpId = x.KpId,
+                    imdbId = x.ImdbId,
+                    tmdbId = x.TmdbId,
+                    poster = x.Poster,
+                    season = x.LastSeason ?? x.CurrentSeason ?? 1,
+                    episode = available,
+                    currentSeason = x.CurrentSeason,
+                    currentEpisode = watched,
+                    watchedEpisode = watched,
+                    availableEpisode = available,
+                    fromEpisode = watched + 1,
+                    toEpisode = available,
+                    newCount = Math.Max(0, available - watched),
+                    source = x.Source,
+                    sources = x.Sources,
+                    translationId = x.TranslationId,
+                    translationName = x.TranslationName,
+                    lastCheckedAt = x.LastCheckedAt
+                };
             })
             .ToList();
 
@@ -208,6 +219,62 @@ public class TranslationSubController : BaseController
 
     [HttpPost]
     [AllowAnonymous]
+    [Route("translationsub/watched")]
+    [Route("transsubscribe/watched")]
+    async public Task<ActionResult> Watched()
+    {
+        var body = await ReadBody();
+        if (body == null)
+            return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
+
+        string userKey = body.Value<string>("userKey") ?? "local";
+        string contentId = body.Value<string>("contentId");
+        int season = body.Value<int?>("season") ?? 0;
+        int episode = Math.Max(0, body.Value<int?>("episode") ?? 0);
+
+        if (string.IsNullOrWhiteSpace(contentId) || season <= 0)
+            return ContentTo("{\"success\":false,\"error\":\"invalid progress\"}");
+
+        var list = SubscriptionStore.Load();
+        var matches = list.Where(x =>
+            x.IsSerial &&
+            x.UserKey == userKey &&
+            x.ContentId == contentId &&
+            x.CurrentSeason.GetValueOrDefault(1) == season
+        ).ToList();
+
+        int available = 0;
+        foreach (var item in matches)
+        {
+            item.CurrentSeason = season;
+            item.CurrentEpisode = episode;
+
+            int itemAvailable = item.LastEpisode.GetValueOrDefault(0);
+            available = Math.Max(available, itemAvailable);
+
+            // Пока в выбранной озвучке есть серии после просмотренной,
+            // подписка остаётся активным уведомлением.
+            item.Notified = itemAvailable <= episode;
+        }
+
+        if (matches.Count > 0)
+            SubscriptionStore.Save(list);
+
+        return ContentTo(JsonConvert.SerializeObject(new
+        {
+            success = true,
+            updated = matches.Count,
+            season,
+            watchedEpisode = episode,
+            availableEpisode = available,
+            fromEpisode = available > episode ? episode + 1 : 0,
+            toEpisode = available,
+            newCount = Math.Max(0, available - episode)
+        }));
+    }
+
+    [HttpPost]
+    [AllowAnonymous]
     [Route("translationsub/remove")]
     [Route("transsubscribe/remove")]
     public ActionResult Remove(string id)
@@ -247,8 +314,11 @@ public class TranslationSubController : BaseController
     {
         int.TryParse(j.Value<string>("currentSeason"), out int currentSeason);
         int.TryParse(j.Value<string>("currentEpisode"), out int currentEpisode);
+        int.TryParse(j.Value<string>("availableEpisode"), out int availableEpisode);
         int.TryParse(j.Value<string>("year"), out int year);
         bool.TryParse(j.Value<string>("isSerial"), out bool isSerialBool);
+
+        int latestEpisode = availableEpisode > 0 ? availableEpisode : currentEpisode;
 
         var sub = new TranslationSubscription
         {
@@ -268,8 +338,8 @@ public class TranslationSubController : BaseController
             CurrentSeason = currentSeason > 0 ? currentSeason : 1,
             CurrentEpisode = currentEpisode > 0 ? currentEpisode : 0,
             LastSeason = currentSeason > 0 ? currentSeason : 1,
-            LastEpisode = currentEpisode > 0 ? currentEpisode : 0,
-            Notified = true
+            LastEpisode = latestEpisode > 0 ? latestEpisode : 0,
+            Notified = latestEpisode <= currentEpisode
         };
 
         if (j["sources"] is JArray arr)
