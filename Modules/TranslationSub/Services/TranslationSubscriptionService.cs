@@ -32,12 +32,15 @@ public static class TranslationSubscriptionService
         if (Interlocked.Exchange(ref running, 1) == 1)
             return;
 
+        // Вызов с userKey идёт от ручной проверки клиента и всегда выполняется сразу.
+        // Фоновый Timer вызывает Tick() без userKey и соблюдает интервал 1-24 часа
+        // из TranslationSettingsStore для каждого пользователя.
+        bool force = !string.IsNullOrWhiteSpace(userKey);
+
         try
         {
             try
             {
-                // Снимок нужен только для сетевых запросов. Результаты никогда не сохраняем
-                // обратно целиком, чтобы не затереть параллельный watched/toggle/remove.
                 var snapshot = SubscriptionStore.Load();
 
                 foreach (var sub in snapshot)
@@ -47,19 +50,41 @@ public static class TranslationSubscriptionService
 
                     try
                     {
+                        var userSettings = TranslationSettingsStore.Get(sub.UserKey);
+
+                        if (!force && sub.LastCheckedAt.HasValue)
+                        {
+                            int hours = Math.Max(1, Math.Min(24, userSettings.CheckIntervalHours));
+                            if (DateTime.Now - sub.LastCheckedAt.Value < TimeSpan.FromHours(hours))
+                                continue;
+                        }
+
+                        HashSet<string> sources = enabledSources;
+
+                        if (sources == null)
+                        {
+                            if (!force)
+                            {
+                                sources = (userSettings.Sources ?? new List<string>())
+                                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                            }
+                            else if (sub.Sources != null && sub.Sources.Count > 0)
+                            {
+                                sources = sub.Sources
+                                    .Where(x => !string.IsNullOrWhiteSpace(x.Source))
+                                    .Select(x => x.Source)
+                                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                            }
+                        }
+
+                        if (sources != null && sources.Count == 0)
+                            continue;
+
                         long.TryParse(sub.KpId, out long kp);
                         int season = sub.IsSerial ? sub.CurrentSeason.GetValueOrDefault(1) : 0;
                         if (sub.IsSerial && season <= 0)
                             season = 1;
-
-                        HashSet<string> sources = enabledSources;
-                        if (sources == null && sub.Sources != null && sub.Sources.Count > 0)
-                        {
-                            sources = sub.Sources
-                                .Where(x => !string.IsNullOrWhiteSpace(x.Source))
-                                .Select(x => x.Source)
-                                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                        }
 
                         var response = await TranslationProviderHub.GetVariants(new VoiceProviderQuery
                         {
