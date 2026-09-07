@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -33,10 +34,10 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/updates")]
     [Route("transsubscribe/updates")]
-    async public Task<ActionResult> Updates(string userKey = null, bool force = false)
+    async public Task<ActionResult> Updates(string userKey = null, bool force = false, string sources = null)
     {
         if (force)
-            await TranslationSubscriptionService.Tick();
+            await TranslationSubscriptionService.Tick(userKey, ParseSources(sources));
 
         var list = SubscriptionStore.Load();
         if (!string.IsNullOrWhiteSpace(userKey))
@@ -53,6 +54,8 @@ public class TranslationSubController : BaseController
                 originalTitle = x.OriginalTitle,
                 kpId = x.KpId,
                 imdbId = x.ImdbId,
+                tmdbId = x.TmdbId,
+                poster = x.Poster,
                 season = x.LastSeason ?? x.CurrentSeason ?? 1,
                 episode = x.LastEpisode ?? 0,
                 currentSeason = x.CurrentSeason,
@@ -95,6 +98,7 @@ public class TranslationSubController : BaseController
         string year,
         string isSerial,
         string uid,
+        string sources,
         int? season,
         long kinopoisk_id = 0,
         bool serial = true
@@ -122,7 +126,8 @@ public class TranslationSubController : BaseController
             OriginalTitle = originalTitle,
             Year = contentYear,
             IsSerial = isTv,
-            Season = targetSeason
+            Season = targetSeason,
+            Sources = ParseSources(sources)
         });
 
         return ContentTo(JsonConvert.SerializeObject(response));
@@ -132,9 +137,9 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/check")]
     [Route("transsubscribe/check")]
-    async public Task<ActionResult> Check()
+    async public Task<ActionResult> Check(string userKey = null, string sources = null)
     {
-        await TranslationSubscriptionService.Tick();
+        await TranslationSubscriptionService.Tick(userKey, ParseSources(sources));
         return ContentTo("{\"success\":true}");
     }
 
@@ -254,6 +259,7 @@ public class TranslationSubController : BaseController
             KpId = j.Value<string>("kpId"),
             ImdbId = j.Value<string>("imdbId"),
             TmdbId = j.Value<string>("tmdbId"),
+            Poster = j.Value<string>("poster"),
             Year = year > 0 ? year : null,
             IsSerial = j["isSerial"]?.Type == JTokenType.Boolean ? j.Value<bool>("isSerial") : isSerialBool,
             Source = j.Value<string>("source") ?? "multi",
@@ -281,5 +287,24 @@ public class TranslationSubController : BaseController
         }
 
         return sub;
+    }
+
+    static HashSet<string> ParseSources(string sources)
+    {
+        if (sources == null)
+            return null;
+
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (sources.Equals("none", StringComparison.OrdinalIgnoreCase))
+            return result;
+
+        foreach (string source in sources.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string value = source.Trim();
+            if (value is "flixcdn" or "phantom" or "zetflixdb" or "cdnvideohub")
+                result.Add(value);
+        }
+
+        return result;
     }
 }
