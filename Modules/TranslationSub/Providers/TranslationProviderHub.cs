@@ -20,6 +20,9 @@ public static class TranslationProviderHub
 
     public static async Task<TranslationVariantsResponse> GetVariants(VoiceProviderQuery query)
     {
+        if (ModInit.conf?.enable != true)
+            return new TranslationVariantsResponse();
+
         var tasks = providers.Select(async provider =>
         {
             List<TranslationVariant> values;
