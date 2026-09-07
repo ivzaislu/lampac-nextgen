@@ -7,22 +7,16 @@
     var SETTINGS_COMPONENT = 'translationsub_settings';
     var SOURCE_SETTING = 'translationsub_card_source';
     var settingsAdded = false;
-    var listCache = [];
-    var listCacheTime = 0;
-    var enhanceTimer = null;
 
     function storageGet(name, fallback) {
         try {
             if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
                 return Lampa.Storage.get(name, fallback);
         } catch (e) {}
-
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
+        } catch (e2) { return fallback; }
     }
 
     function selectedSource() {
@@ -35,10 +29,7 @@
 
     function notify(text) {
         try {
-            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') {
-                Lampa.Noty.show(text);
-                return;
-            }
+            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text);
         } catch (e) {}
     }
 
@@ -51,10 +42,7 @@
                 param: {
                     name: SOURCE_SETTING,
                     type: 'select',
-                    values: {
-                        tmdb: 'TMDB',
-                        cub: 'CUB'
-                    },
+                    values: { tmdb: 'TMDB', cub: 'CUB' },
                     'default': 'tmdb'
                 },
                 field: {
@@ -75,18 +63,7 @@
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function userKey() {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function') {
-                return String(Lampa.Storage.get('client_uid', '') || Lampa.Storage.get('lampac_unic_id', '') || 'local');
-            }
-        } catch (e) {}
-        return 'local';
+        } catch (e) { return ''; }
     }
 
     function request(method, path, success, error) {
@@ -119,63 +96,7 @@
                 } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
-        } catch (e2) {
-            error(e2);
-        }
-    }
-
-    function normalize(value) {
-        return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    }
-
-    function itemSeason(item) {
-        return Number(item.CurrentSeason || item.currentSeason || 1) || 1;
-    }
-
-    function itemTitle(item) {
-        return normalize(item.Title || item.title || '');
-    }
-
-    function itemVoice(item) {
-        return normalize(item.TranslationName || item.translationName || 'Озвучка');
-    }
-
-    function cardSeason(card) {
-        var text = card.find('.translationsub-card__meta').text();
-        var match = String(text || '').match(/S(\d+)/i);
-        return match ? (Number(match[1]) || 1) : 1;
-    }
-
-    function findItem(card, list, used) {
-        var title = normalize(card.find('.translationsub-card__title').text());
-        var voice = normalize(card.find('.translationsub-card__voice').text());
-        var season = cardSeason(card);
-        var index = -1;
-
-        for (var i = 0; i < list.length; i++) {
-            if (used[i]) continue;
-            if (itemTitle(list[i]) === title && itemVoice(list[i]) === voice && itemSeason(list[i]) === season) {
-                index = i;
-                break;
-            }
-        }
-
-        if (index < 0) {
-            for (var j = 0; j < list.length; j++) {
-                if (used[j]) continue;
-                if (itemTitle(list[j]) === title && itemVoice(list[j]) === voice) {
-                    index = j;
-                    break;
-                }
-            }
-        }
-
-        if (index >= 0) {
-            used[index] = true;
-            return list[index];
-        }
-
-        return null;
+        } catch (e2) { error(e2); }
     }
 
     function tmdbId(item) {
@@ -206,17 +127,24 @@
             source: source,
             id: numericId,
             method: isSerial ? 'tv' : 'movie',
-            card: {
-                id: numericId,
-                source: source
-            }
+            card: { id: numericId, source: source }
         });
     }
 
-    function syncWatched() {
+    function syncWatched(done) {
+        done = typeof done === 'function' ? done : function () {};
         try {
-            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function')
-                window.TranslationSubWatch.sync();
+            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
+                window.TranslationSubWatch.sync(done);
+                return;
+            }
+        } catch (e) {}
+        done();
+    }
+
+    function refreshPage() {
+        try {
+            if (typeof window.TranslationSubPageRefresh === 'function') window.TranslationSubPageRefresh();
         } catch (e) {}
     }
 
@@ -227,22 +155,10 @@
         var title = item.Title || item.title || 'Подписка';
         var watched = Number(item.CurrentEpisode || item.currentEpisode || 0) || 0;
         var available = Number(item.LastEpisode || item.lastEpisode || 0) || 0;
-        var actions = [
-            {
-                title: 'Открыть карточку · ' + sourceTitle(selectedSource()),
-                onclick: function () { openCard(item); }
-            },
-            {
-                title: 'Обновить прогресс просмотра',
-                onclick: function () {
-                    syncWatched();
-                    notify('Обновляю прогресс просмотра');
-                }
-            }
-        ];
+        var actions = [];
 
         if (available > watched) {
-            actions.unshift({
+            actions.push({
                 title: 'Доступны серии ' + (watched + 1) + (available > watched + 1 ? '–' + available : ''),
                 subtitle: 'Просмотрено до ' + watched + ' серии',
                 onclick: function () { openCard(item); }
@@ -250,14 +166,24 @@
         }
 
         actions.push({
+            title: 'Открыть карточку · ' + sourceTitle(selectedSource()),
+            onclick: function () { openCard(item); }
+        });
+
+        actions.push({
+            title: 'Обновить прогресс просмотра',
+            onclick: function () {
+                syncWatched(function () { refreshPage(); });
+            }
+        });
+
+        actions.push({
             title: 'Удалить подписку',
             onclick: function () {
                 if (!id) return;
                 request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
-                    listCacheTime = 0;
-                    card.remove();
                     notify('Подписка удалена');
-                    scheduleEnhance(true);
+                    refreshPage();
                 }, function () {
                     notify('Не удалось удалить подписку');
                 });
@@ -276,18 +202,25 @@
         });
     }
 
-    function bindCards(root, list) {
-        var cards = root.find('.translationsub-card');
-        var used = {};
+    function bindPage(root, list) {
+        if (typeof $ !== 'function') return;
+        root = root && root.jquery ? root : $(root);
+        list = Array.isArray(list) ? list : [];
 
-        cards.each(function () {
+        var byId = {};
+        list.forEach(function (item) {
+            var id = String(item.Id || item.id || '');
+            if (id) byId[id] = item;
+        });
+
+        root.find('.translationsub-card').each(function () {
             var card = $(this);
-            var item = findItem(card, list, used);
+            var id = String(card.attr('data-subscription-id') || '');
+            var item = byId[id];
             if (!item) return;
 
             card.attr('data-translationsub-card-source', selectedSource());
-            card.off('hover:enter');
-            card.off('hover:long');
+            card.off('.translationsubSource');
 
             card.on('hover:enter.translationsubSource', function () {
                 openCard(item);
@@ -299,65 +232,21 @@
         });
     }
 
-    function loadList(done, force) {
-        var now = Date.now ? Date.now() : new Date().getTime();
-        if (!force && listCacheTime && now - listCacheTime < 3000) {
-            done(listCache);
-            return;
-        }
-
-        request('GET', '/translationsub/list?userKey=' + encodeURIComponent(userKey()), function (list) {
-            listCache = Array.isArray(list) ? list : [];
-            listCacheTime = now;
-            done(listCache);
-        }, function () {
-            done(listCache || []);
-        });
-    }
-
-    function enhancePages(force) {
-        if (typeof $ !== 'function') return;
-        var pages = $('.translationsub-page');
-        if (!pages.length) return;
-
-        loadList(function (list) {
-            pages.each(function () {
-                bindCards($(this), list);
-            });
-        }, !!force);
-    }
-
-    function scheduleEnhance(force) {
-        clearTimeout(enhanceTimer);
-        enhanceTimer = setTimeout(function () { enhancePages(force); }, 80);
-    }
-
     function start() {
         addSetting();
-        scheduleEnhance(true);
 
         try {
             if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') {
-                        addSetting();
-                        scheduleEnhance(true);
-                    }
+                    if (event && event.type === 'ready') addSetting();
                 });
             }
         } catch (e) {}
 
-        try {
-            var observer = new MutationObserver(function () { scheduleEnhance(false); });
-            observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        } catch (e2) {
-            setInterval(function () { scheduleEnhance(false); }, 1200);
-        }
-
         window.TranslationSubCardSource = {
             get: selectedSource,
             open: openCard,
-            refresh: function () { scheduleEnhance(true); }
+            bindPage: bindPage
         };
     }
 
