@@ -128,6 +128,13 @@
         });
     }
 
+    function syncWatched() {
+        try {
+            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function')
+                window.TranslationSubWatch.sync();
+        } catch (e) {}
+    }
+
     function SubscriptionPage(object) {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="translationsub-page"></div>');
@@ -204,20 +211,26 @@
 
             html.empty();
             html.append('<div class="translationsub-page__title">Подписки на озвучки</div>');
-            html.append('<div class="translationsub-page__subtitle">Подписок: ' + list.length + '</div>');
+            html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampa · подписок: ' + list.length + '</div>');
 
             var toolbar = $('<div class="translationsub-toolbar"></div>');
-            var reload = $('<div class="translationsub-toolbar__item selector"><span>Обновить список</span></div>');
-            reload.on('hover:enter', load);
+            var reload = $('<div class="translationsub-toolbar__item selector"><span>Обновить прогресс</span></div>');
+            reload.on('hover:enter', function () {
+                syncWatched();
+                setTimeout(load, 1200);
+            });
             toolbar.append(reload);
 
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
             check.on('hover:enter', function () {
-                if (window.TranslationSub && typeof window.TranslationSub.forceCheckUpdatesUI === 'function') {
-                    window.TranslationSub.forceCheckUpdatesUI(function () { load(); });
-                } else {
-                    load();
-                }
+                syncWatched();
+                setTimeout(function () {
+                    if (window.TranslationSub && typeof window.TranslationSub.forceCheckUpdatesUI === 'function') {
+                        window.TranslationSub.forceCheckUpdatesUI(function () { load(); });
+                    } else {
+                        load();
+                    }
+                }, 900);
             });
             toolbar.append(check);
             html.append(toolbar);
@@ -233,7 +246,9 @@
                 var title = item.Title || item.title || 'Без названия';
                 var voice = item.TranslationName || item.translationName || 'Озвучка';
                 var season = Number(item.CurrentSeason || item.currentSeason || 1) || 1;
-                var episode = Number(item.LastEpisode || item.lastEpisode || item.CurrentEpisode || item.currentEpisode || 0) || 0;
+                var watched = Number(item.CurrentEpisode || item.currentEpisode || 0) || 0;
+                var available = Number(item.LastEpisode || item.lastEpisode || 0) || 0;
+                var newCount = Math.max(0, available - watched);
                 var poster = posterUrl(item.Poster || item.poster || '');
                 var sources = item.Sources || item.sources || [];
                 var sourceText = '';
@@ -253,13 +268,20 @@
                     ? '<img src="' + escapeHtml(poster) + '" alt="">'
                     : '<div class="translationsub-card__poster-empty"></div>';
 
+                var progressText = 'S' + season + ' · просмотрено E' + watched + ' · озвучка до E' + available;
+                if (newCount > 0) {
+                    progressText += ' · доступны E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '');
+                }
+                if (sourceText) progressText += ' · ' + sourceText;
+
                 var card = $('<div class="translationsub-card selector">' +
                     '<div class="translationsub-card__poster">' + posterHtml + '</div>' +
                     '<div class="translationsub-card__body">' +
                         '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
                         '<div class="translationsub-card__voice">' + escapeHtml(voice) + '</div>' +
-                        '<div class="translationsub-card__meta">S' + season + (episode ? ' · E' + episode : '') + (sourceText ? ' · ' + escapeHtml(sourceText) : '') + '</div>' +
+                        '<div class="translationsub-card__meta">' + escapeHtml(progressText) + '</div>' +
                     '</div>' +
+                    (newCount > 0 ? '<div class="translationsub-card__new">' + newCount + ' НОВЫХ</div>' : '') +
                 '</div>');
 
                 card.on('hover:focus', function (event) {
@@ -267,19 +289,39 @@
                 });
 
                 card.on('hover:enter', function () {
-                    showActions(title, [
-                        {
-                            title: 'Удалить подписку',
+                    var actions = [];
+
+                    if (newCount > 0) {
+                        actions.push({
+                            title: 'Доступны серии ' + (watched + 1) + (available > watched + 1 ? '–' + available : ''),
+                            subtitle: 'Просмотрено до ' + watched + ' серии',
                             onclick: function () {
-                                request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
-                                    notify('Подписка удалена');
-                                    load();
-                                }, function () {
-                                    notify('Не удалось удалить подписку');
-                                });
+                                notify(title + ': доступно новых серий — ' + newCount);
                             }
+                        });
+                    }
+
+                    actions.push({
+                        title: 'Обновить прогресс просмотра',
+                        onclick: function () {
+                            syncWatched();
+                            setTimeout(load, 1200);
                         }
-                    ], function () { Lampa.Controller.toggle('content'); });
+                    });
+
+                    actions.push({
+                        title: 'Удалить подписку',
+                        onclick: function () {
+                            request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
+                                notify('Подписка удалена');
+                                load();
+                            }, function () {
+                                notify('Не удалось удалить подписку');
+                            });
+                        }
+                    });
+
+                    showActions(title, actions, function () { Lampa.Controller.toggle('content'); });
                 });
 
                 container.append(card);
@@ -306,7 +348,11 @@
             });
         }
 
-        this.initialize = load;
+        this.initialize = function () {
+            load();
+            syncWatched();
+            setTimeout(load, 1500);
+        };
     }
 
     Lampa.Component.add('translationsub_list', SubscriptionPage);
