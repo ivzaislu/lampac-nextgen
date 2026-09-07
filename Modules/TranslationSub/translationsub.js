@@ -7,8 +7,8 @@
     var META = {
         component: 'translationsub',
         name: 'Подписки на озвучки',
-        version: '1.1.0',
-        description: 'Подписки на озвучки из нескольких источников и уведомления о новых сериях',
+        version: '2.0.0',
+        description: 'Подписки на озвучки и уведомления о новых сериях',
         type: 'other'
     };
 
@@ -17,8 +17,18 @@
         updates: '/translationsub/updates',
         variants: '/translationsub/variants',
         toggle: '/translationsub/toggle',
+        remove: '/translationsub/remove',
         notified: '/translationsub/notified',
         externalids: '/externalids'
+    };
+
+    var SETTINGS = {
+        component: 'translationsub_settings',
+        flixcdn: 'translationsub_flixcdn',
+        phantom: 'translationsub_phantom',
+        zetflixdb: 'translationsub_zetflixdb',
+        videohub: 'translationsub_videohub',
+        interval: 'translationsub_interval'
     };
 
     var SOURCE_NAMES = {
@@ -50,6 +60,20 @@
         } catch (e) {}
     }
 
+    function escapeHtml(value) {
+        try {
+            if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.escape === 'function')
+                return Lampa.Utils.escape(String(value || ''));
+        } catch (e) {}
+
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     function detectHost() {
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
@@ -69,11 +93,7 @@
                 return new URL(script.src, window.location.href).origin;
         } catch (e) {}
 
-        try {
-            return window.location.origin || '';
-        } catch (e2) {
-            return '';
-        }
+        try { return window.location.origin || ''; } catch (e2) { return ''; }
     }
 
     var HOST = detectHost();
@@ -103,6 +123,32 @@
         try { localStorage.setItem(name, value); } catch (e2) {}
     }
 
+    function settingBool(name, fallback) {
+        var value = storageGet(name, fallback);
+        if (value === true || value === 1 || value === '1' || value === 'true') return true;
+        if (value === false || value === 0 || value === '0' || value === 'false') return false;
+        return !!fallback;
+    }
+
+    function enabledSources() {
+        var result = [];
+        if (settingBool(SETTINGS.flixcdn, true)) result.push('flixcdn');
+        if (settingBool(SETTINGS.phantom, true)) result.push('phantom');
+        if (settingBool(SETTINGS.zetflixdb, true)) result.push('zetflixdb');
+        if (settingBool(SETTINGS.videohub, true)) result.push('cdnvideohub');
+        return result;
+    }
+
+    function sourcesQuery() {
+        var sources = enabledSources();
+        return sources.length ? sources.join(',') : 'none';
+    }
+
+    function checkIntervalMinutes() {
+        var value = parseInt(storageGet(SETTINGS.interval, '15'), 10);
+        return [5, 10, 15, 30, 60].indexOf(value) >= 0 ? value : 15;
+    }
+
     function lampacUid() {
         var uid = String(storageGet('lampac_unic_id', '') || '');
         if (uid) return uid;
@@ -112,9 +158,7 @@
                 uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
         } catch (e) {}
 
-        if (!uid)
-            uid = Math.random().toString(36).slice(2, 10).toLowerCase();
-
+        if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
         storageSet('lampac_unic_id', uid);
         return uid;
     }
@@ -139,12 +183,7 @@
     function parseJson(value) {
         if (value === null || value === undefined || value === '') return {};
         if (typeof value === 'object') return value;
-
-        try {
-            return JSON.parse(value);
-        } catch (e) {
-            return {};
-        }
+        try { return JSON.parse(value); } catch (e) { return {}; }
     }
 
     function request(method, path, params, body, onSuccess, onError) {
@@ -157,27 +196,17 @@
         if (method === 'GET') {
             try {
                 if (window.Lampa && Lampa.Reguest) {
-                    if (!state.network && typeof Lampa.Reguest === 'function')
-                        state.network = new Lampa.Reguest();
-
+                    if (!state.network && typeof Lampa.Reguest === 'function') state.network = new Lampa.Reguest();
                     if (state.network && typeof state.network.silent === 'function') {
-                        state.network.silent(url, function (result) {
-                            onSuccess(parseJson(result));
-                        }, onError);
+                        state.network.silent(url, function (result) { onSuccess(parseJson(result)); }, onError);
                         return;
                     }
                 }
-            } catch (e) {
-                log('Lampa.Reguest fallback', e);
-            }
+            } catch (e) { log('Lampa.Reguest fallback', e); }
         }
 
         if (typeof fetch === 'function') {
-            var options = {
-                method: method,
-                headers: { 'Content-Type': 'application/json; charset=utf-8' }
-            };
-
+            var options = { method: method, headers: { 'Content-Type': 'application/json; charset=utf-8' } };
             if (body && method !== 'GET') options.body = JSON.stringify(body);
 
             fetch(url, options)
@@ -200,9 +229,7 @@
                 else onError(new Error('HTTP ' + xhr.status));
             };
             xhr.send(body && method !== 'GET' ? JSON.stringify(body) : null);
-        } catch (e2) {
-            onError(e2);
-        }
+        } catch (e2) { onError(e2); }
     }
 
     function notify(text) {
@@ -215,6 +242,10 @@
         log(text);
     }
 
+    function bellSvg() {
+        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"/></svg>';
+    }
+
     function registerManifest() {
         try {
             if (!window.Lampa) return;
@@ -222,9 +253,7 @@
 
             var plugins = Lampa.Manifest.plugins;
             if (Array.isArray(plugins)) {
-                var exists = plugins.some(function (plugin) {
-                    return plugin && plugin.component === META.component;
-                });
+                var exists = plugins.some(function (plugin) { return plugin && plugin.component === META.component; });
                 if (!exists) plugins.push(META);
                 return;
             }
@@ -233,11 +262,8 @@
                 plugins = {};
                 Lampa.Manifest.plugins = plugins;
             }
-
             plugins[META.component] = META;
-        } catch (e) {
-            log('manifest registration failed', e);
-        }
+        } catch (e) { log('manifest registration failed', e); }
     }
 
     function injectStyles() {
@@ -247,34 +273,57 @@
         style.id = 'translationsub-style';
         style.textContent =
             '.translationsub-head{position:relative}' +
+            '.translationsub-head svg,.translationsub-full-button svg{width:1.35em;height:1.35em;fill:currentColor}' +
             '.translationsub-badge{position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;border-radius:1em;background:#e53935;color:#fff;font-size:.7em;display:flex;align-items:center;justify-content:center;box-sizing:border-box}' +
-            '.translationsub-full-button svg,.translationsub-head svg{width:1.35em;height:1.35em;fill:currentColor}';
+            '.translationsub-page{padding:1.2em 1.5em 3em;box-sizing:border-box;max-width:76em}' +
+            '.translationsub-page__title{font-size:2em;font-weight:500;margin-bottom:.15em}' +
+            '.translationsub-page__subtitle{opacity:.65;margin-bottom:1.2em}' +
+            '.translationsub-toolbar{display:flex;gap:.7em;flex-wrap:wrap;margin-bottom:1.2em}' +
+            '.translationsub-toolbar__item{padding:.75em 1em;border-radius:.55em;background:rgba(255,255,255,.09);display:flex;align-items:center;gap:.55em}' +
+            '.translationsub-toolbar__item.focus{background:#fff;color:#111}' +
+            '.translationsub-toolbar__item svg{width:1.2em;height:1.2em;fill:currentColor}' +
+            '.translationsub-list{display:flex;flex-direction:column;gap:.65em}' +
+            '.translationsub-card{display:flex;align-items:stretch;min-height:8.4em;border-radius:.7em;background:rgba(255,255,255,.075);overflow:hidden;position:relative}' +
+            '.translationsub-card.focus{background:#fff;color:#111;transform:scale(1.01)}' +
+            '.translationsub-card__poster{width:5.6em;min-width:5.6em;background:rgba(0,0,0,.2);overflow:hidden}' +
+            '.translationsub-card__poster img{width:100%;height:100%;object-fit:cover;display:block}' +
+            '.translationsub-card__poster-empty{width:100%;height:100%;display:flex;align-items:center;justify-content:center;opacity:.35}' +
+            '.translationsub-card__poster-empty svg{width:2em;height:2em;fill:currentColor}' +
+            '.translationsub-card__body{padding:.85em 1em;min-width:0;display:flex;flex-direction:column;justify-content:center}' +
+            '.translationsub-card__title{font-size:1.2em;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.translationsub-card__voice{margin-top:.3em;opacity:.85}' +
+            '.translationsub-card__meta{margin-top:.45em;font-size:.9em;opacity:.58}' +
+            '.translationsub-card__new{position:absolute;right:.7em;top:.7em;padding:.3em .55em;border-radius:1em;background:#e53935;color:#fff;font-size:.72em;font-weight:600}' +
+            '.translationsub-empty{padding:2em 1em;opacity:.6;text-align:center}' +
+            '@media(max-width:700px){.translationsub-page{padding:1em}.translationsub-card__poster{width:4.8em;min-width:4.8em}.translationsub-card{min-height:7em}}';
         (document.head || document.documentElement).appendChild(style);
-    }
-
-    function bellSvg() {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"/></svg>';
     }
 
     function setBadge(count) {
         count = Number(count) || 0;
-
         if (!state.headButton || !state.headButton.length) return;
+
         if (!state.badge || !state.badge.length) {
             state.badge = $('<div class="translationsub-badge"></div>');
             state.headButton.append(state.badge);
         }
 
-        if (count > 0) {
-            state.badge.text(count > 99 ? '99+' : String(count)).show();
-        } else {
-            state.badge.hide();
-        }
+        if (count > 0) state.badge.text(count > 99 ? '99+' : String(count)).show();
+        else state.badge.hide();
+    }
+
+    function openSubscriptionsPage() {
+        if (!window.Lampa || !Lampa.Activity) return;
+        Lampa.Activity.push({
+            url: '',
+            title: META.name,
+            component: 'translationsub_list',
+            page: 1
+        });
     }
 
     function injectHeadButton() {
         if (typeof $ !== 'function') return;
-
         var row = $('.head__actions').first();
         if (!row.length) return;
 
@@ -285,12 +334,26 @@
             return;
         }
 
-        var button = $('<div class="head__action selector translationsub-head" title="Подписки на озвучки">' + bellSvg() + '</div>');
-        button.on('hover:enter', openHeadMenu);
+        var button = $('<div class="head__action selector translationsub-head" title="' + META.name + '">' + bellSvg() + '</div>');
+        button.on('hover:enter', openSubscriptionsPage);
         row.append(button);
 
         state.headButton = button;
         setBadge(state.updates.length);
+    }
+
+    function posterUrl(path) {
+        path = String(path || '');
+        if (!path) return '';
+        if (/^https?:\/\//i.test(path)) return path;
+
+        try {
+            if (window.Lampa && Lampa.Api && typeof Lampa.Api.img === 'function')
+                return Lampa.Api.img(path, 'w300');
+        } catch (e) {}
+
+        if (path.charAt(0) === '/') return 'https://image.tmdb.org/t/p/w300' + path;
+        return path;
     }
 
     function normalizeFull(object) {
@@ -306,6 +369,7 @@
         var originalTitle = card.original_title || card.original_name || '';
         var date = card.release_date || card.first_air_date || '';
         var year = date && String(date).length >= 4 ? String(date).slice(0, 4) : (card.year || '');
+        var poster = card.poster_path || card.poster || card.img || card.image || '';
 
         return {
             raw: object,
@@ -317,6 +381,7 @@
             kpId: String(kpId || ''),
             imdbId: String(imdbId || ''),
             year: String(year || ''),
+            poster: String(poster || ''),
             isSerial: isSerial,
             season: 0
         };
@@ -347,26 +412,33 @@
             context.imdbId = String(ids.imdb_id || context.imdbId || '');
             if (ids.tmdb_id) context.tmdbId = String(ids.tmdb_id);
             done(context);
-        }, function () {
-            done(context);
-        });
+        }, function () { done(context); });
     }
 
-    function injectFullButton(object) {
+    function injectFullButton(event) {
         if (typeof $ !== 'function') return;
 
-        var context = normalizeFull(object);
+        var payload = event && (event.data || event.object) || {};
+        var context = normalizeFull(payload);
         if (!context.contentId && !context.title) return;
         state.current = context;
 
-        var scope = $('.full-start').first();
-        if (!scope.length) scope = $('.full-start-new').first();
-        if (!scope.length) return;
+        var root = null;
+        try {
+            if (event && event.object && event.object.activity && typeof event.object.activity.render === 'function')
+                root = event.object.activity.render();
+        } catch (e) {}
 
-        scope.find('.translationsub-full-button').remove();
+        if (!root || !root.length) {
+            root = $('.full-start').first();
+            if (!root.length) root = $('.full-start-new').first();
+        }
+        if (!root || !root.length) return;
 
-        var row = scope.find('.full-start-new__buttons').first();
-        if (!row.length) row = scope.find('.full-start__buttons').first();
+        root.find('.translationsub-full-button').remove();
+
+        var row = root.find('.full-start-new__buttons').first();
+        if (!row.length) row = root.find('.full-start__buttons').first();
         if (!row.length) return;
 
         var button = $('<div class="full-start__button selector translationsub-full-button"><div class="full-start__button-icon">' + bellSvg() + '</div><span>Озвучки</span></div>');
@@ -375,7 +447,11 @@
     }
 
     function cacheKey(context) {
-        return [context.contentId, context.season, context.kpId, context.imdbId].join('|');
+        return [context.contentId, context.season, context.kpId, context.imdbId, sourcesQuery()].join('|');
+    }
+
+    function clearVariantCache() {
+        state.variantsCache = {};
     }
 
     function loadVariants(context, done, fail) {
@@ -385,6 +461,11 @@
 
         if (cached && now - cached.time < VARIANTS_CACHE_TTL) {
             done(cached.data);
+            return;
+        }
+
+        if (!enabledSources().length) {
+            fail && fail(new Error('no sources'));
             return;
         }
 
@@ -399,7 +480,8 @@
             year: context.year,
             isSerial: context.isSerial,
             season: context.season,
-            serial: context.isSerial
+            serial: context.isSerial,
+            sources: sourcesQuery()
         }, null, function (result) {
             state.variantsCache[key] = { time: now, data: result || {} };
             done(result || {});
@@ -435,15 +517,11 @@
     }
 
     function sourceSummary(variant) {
-        var sources = variantSources(variant);
         var names = [];
-
-        sources.forEach(function (item) {
-            var raw = item.Source || item.source || '';
-            var name = sourceName(raw);
+        variantSources(variant).forEach(function (item) {
+            var name = sourceName(item.Source || item.source || '');
             if (name && names.indexOf(name) === -1) names.push(name);
         });
-
         return names.join(', ');
     }
 
@@ -454,21 +532,44 @@
             return;
         }
 
+        if (!enabledSources().length) {
+            notify('Включите хотя бы один балансер в настройках');
+            return;
+        }
+
         ensureExternalIds(context, function (resolved) {
             state.current = resolved;
-
-            if (resolved.isSerial && (!resolved.season || resolved.season <= 0)) {
-                openSeasonSelect(resolved);
-                return;
-            }
-
-            openVoiceSelect(resolved);
+            if (resolved.isSerial && (!resolved.season || resolved.season <= 0)) openSeasonSelect(resolved);
+            else openVoiceSelect(resolved);
         });
+    }
+
+    function showSelect(title, items, onBack) {
+        items = items || [];
+        if (!items.length) {
+            notify('Список пуст');
+            return;
+        }
+
+        if (window.Lampa && Lampa.Select && typeof Lampa.Select.show === 'function') {
+            Lampa.Select.show({
+                title: title,
+                items: items,
+                onSelect: function (item) {
+                    if (item && typeof item.onclick === 'function') item.onclick();
+                },
+                onBack: onBack || function () {
+                    try { Lampa.Controller.toggle('content'); } catch (e) {}
+                }
+            });
+            return;
+        }
+
+        notify(title + ': ' + items.length);
     }
 
     function openSeasonSelect(context) {
         notify('Ищу сезоны и озвучки…');
-
         loadVariants(context, function (response) {
             var seasons = response.Seasons || response.seasons || [];
             if (!Array.isArray(seasons) || !seasons.length) {
@@ -490,16 +591,12 @@
                 return {
                     title: season + ' сезон',
                     onclick: function () {
-                        var selected = Object.assign({}, context, { season: Number(season) });
-                        openVoiceSelect(selected);
+                        openVoiceSelect(Object.assign({}, context, { season: Number(season) }));
                     }
                 };
             });
-
-            showSelect('Сезон', items);
-        }, function () {
-            notify('Не удалось получить сезоны');
-        });
+            showSelect('Выберите сезон', items);
+        }, function () { notify('Не удалось получить сезоны'); });
     }
 
     function openVoiceSelect(context) {
@@ -517,6 +614,12 @@
                     return;
                 }
 
+                if (context.isSerial && context.season > 0) {
+                    variants = variants.filter(function (variant) {
+                        return Number(variant.season || 0) === Number(context.season);
+                    });
+                }
+
                 var items = variants.map(function (variant) {
                     var id = String(variant.Id || variant.id || variant.translation_id || '');
                     var name = variant.Name || variant.name || variant.translation || ('Озвучка ' + id);
@@ -529,8 +632,6 @@
                     return {
                         title: (isSubscribed ? '✓ ' : '') + name + quality,
                         subtitle: (episode > 0 ? ('Серия ' + episode) : '') + (sources ? ((episode > 0 ? ' · ' : '') + sources) : ''),
-                        variant: variant,
-                        subscribed: isSubscribed,
                         onclick: function () {
                             toggle(context, variant, function (enabled) {
                                 notify(enabled ? ('Подписка: ' + name) : ('Подписка удалена: ' + name));
@@ -540,30 +641,13 @@
                     };
                 });
 
-                showSelect('Озвучка', items);
-            }, function () {
-                notify('Не удалось получить список озвучек');
-            });
-        }, function () {
-            loadVariants(context, function (response) {
-                var variants = response.Translations || response.translations || [];
-                var items = (Array.isArray(variants) ? variants : []).map(function (variant) {
-                    var name = variant.Name || variant.name || variant.translation || 'Озвучка';
-                    return {
-                        title: name,
-                        subtitle: sourceSummary(variant),
-                        variant: variant,
-                        onclick: function () { toggle(context, variant); }
-                    };
-                });
-                showSelect('Озвучка', items);
+                showSelect('Озвучка' + (context.isSerial && context.season > 0 ? ' · ' + context.season + ' сезон' : ''), items);
             }, function () { notify('Не удалось получить список озвучек'); });
-        });
+        }, function () { notify('Не удалось загрузить подписки'); });
     }
 
     function toggle(context, variant, done) {
-        var sources = variantSources(variant);
-        var bodySources = sources.map(function (source) {
+        var bodySources = variantSources(variant).map(function (source) {
             return {
                 source: source.Source || source.source || '',
                 path: source.Path || source.path || '',
@@ -581,6 +665,7 @@
             kpId: context.kpId,
             imdbId: context.imdbId,
             tmdbId: context.tmdbId,
+            poster: context.poster,
             year: context.year,
             isSerial: context.isSerial,
             source: mainSource,
@@ -594,33 +679,7 @@
         request('POST', API.toggle, null, body, function (result) {
             if (done) done(!!(result && (result.subscribed || result.Subscribed)));
             refreshUpdates(false);
-        }, function () {
-            notify('Не удалось изменить подписку');
-        });
-    }
-
-    function showSelect(title, items) {
-        items = items || [];
-        if (!items.length) {
-            notify('Список пуст');
-            return;
-        }
-
-        if (window.Lampa && Lampa.Select && typeof Lampa.Select.show === 'function') {
-            Lampa.Select.show({
-                title: title,
-                items: items,
-                onSelect: function (item) {
-                    if (item && typeof item.onclick === 'function') item.onclick();
-                },
-                onBack: function () {
-                    try { Lampa.Controller.toggle('content'); } catch (e) {}
-                }
-            });
-            return;
-        }
-
-        notify(title + ': ' + items.length);
+        }, function () { notify('Не удалось изменить подписку'); });
     }
 
     function markNotified(item, done) {
@@ -640,7 +699,8 @@
     function refreshUpdates(force, done) {
         request('GET', API.updates, {
             userKey: userKey(),
-            force: force ? 'true' : 'false'
+            force: force ? 'true' : 'false',
+            sources: sourcesQuery()
         }, null, function (updates) {
             state.updates = Array.isArray(updates) ? updates : [];
             injectHeadButton();
@@ -651,66 +711,247 @@
         });
     }
 
-    function forceCheckUpdatesUI() {
-        notify('Проверяю четыре источника…');
+    function forceCheckUpdatesUI(done) {
+        if (!enabledSources().length) {
+            notify('Включите хотя бы один балансер в настройках');
+            if (done) done([]);
+            return;
+        }
+
+        notify('Проверяю: ' + enabledSources().map(sourceName).join(' · '));
         refreshUpdates(true, function (updates) {
             notify(updates.length ? ('Новых серий: ' + updates.length) : 'Новых серий нет');
+            if (done) done(updates);
         });
     }
 
-    function openSubscriptions() {
-        request('GET', API.list, { userKey: userKey() }, null, function (list) {
-            list = Array.isArray(list) ? list : [];
-            var items = list.map(function (item) {
+    function schedulePolling() {
+        if (state.pollTimer) clearInterval(state.pollTimer);
+        state.pollTimer = setInterval(function () {
+            refreshUpdates(true);
+        }, checkIntervalMinutes() * 60 * 1000);
+    }
+
+    function addSettings() {
+        if (!window.Lampa || !Lampa.SettingsApi || window.__TranslationSubSettingsAdded) return;
+        window.__TranslationSubSettingsAdded = true;
+
+        Lampa.SettingsApi.addComponent({
+            component: SETTINGS.component,
+            name: META.name,
+            icon: bellSvg()
+        });
+
+        function addSourceSetting(name, key, description) {
+            Lampa.SettingsApi.addParam({
+                component: SETTINGS.component,
+                param: { name: key, type: 'trigger', values: '', 'default': true },
+                field: { name: name, description: description },
+                onChange: function () {
+                    clearVariantCache();
+                    refreshUpdates(false);
+                }
+            });
+        }
+
+        addSourceSetting('FlixCDN', SETTINGS.flixcdn, 'Использовать FlixCDN при поиске озвучек и проверке подписок');
+        addSourceSetting('Phantom', SETTINGS.phantom, 'Использовать Phantom при поиске озвучек и проверке подписок');
+        addSourceSetting('ZetflixDB', SETTINGS.zetflixdb, 'Использовать ZetflixDB при поиске озвучек и проверке подписок');
+        addSourceSetting('VideoHUB', SETTINGS.videohub, 'Использовать VideoHUB при поиске озвучек и проверке подписок');
+
+        Lampa.SettingsApi.addParam({
+            component: SETTINGS.component,
+            param: {
+                name: SETTINGS.interval,
+                type: 'select',
+                values: {
+                    '5': '5 минут',
+                    '10': '10 минут',
+                    '15': '15 минут',
+                    '30': '30 минут',
+                    '60': '1 час'
+                },
+                'default': '15'
+            },
+            field: {
+                name: 'Интервал проверки',
+                description: 'Как часто плагин проверяет подписки на новые серии'
+            },
+            onChange: function () { schedulePolling(); }
+        });
+    }
+
+    function updateMap() {
+        var map = {};
+        state.updates.forEach(function (item) {
+            var id = item.id || item.Id;
+            if (id) map[String(id)] = item;
+        });
+        return map;
+    }
+
+    function SubscriptionComponent(object) {
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        var html = $('<div class="translationsub-page"></div>');
+        var self = this;
+        var destroyed = false;
+
+        this.create = function () {
+            scroll.minus();
+            scroll.append(html);
+            return this.render();
+        };
+
+        this.render = function () { return scroll.render(); };
+        this.pause = function () {};
+        this.stop = function () {};
+        this.back = function () { Lampa.Activity.backward(); };
+
+        this.start = function () {
+            if (Lampa.Activity.active().activity !== this.activity) return;
+
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(scroll.render(), html);
+                    var focused = html.find('.selector.focus')[0] || html.find('.selector')[0];
+                    if (focused) Lampa.Controller.collectionFocus(focused, scroll.render());
+                },
+                up: function () {
+                    if (Navigator.canmove('up')) Navigator.move('up');
+                    else Lampa.Controller.toggle('head');
+                },
+                down: function () { Navigator.move('down'); },
+                left: function () {
+                    if (Navigator.canmove('left')) Navigator.move('left');
+                    else Lampa.Controller.toggle('menu');
+                },
+                right: function () { Navigator.move('right'); },
+                back: this.back
+            });
+            Lampa.Controller.toggle('content');
+        };
+
+        this.destroy = function () {
+            destroyed = true;
+            scroll.destroy();
+            html.remove();
+        };
+
+        function focusFirst() {
+            setTimeout(function () {
+                if (destroyed) return;
+                try {
+                    Lampa.Controller.collectionSet(scroll.render(), html);
+                    var first = html.find('.selector')[0];
+                    if (first) Lampa.Controller.collectionFocus(first, scroll.render());
+                } catch (e) {}
+            }, 50);
+        }
+
+        function render(list) {
+            if (destroyed) return;
+            var updates = updateMap();
+            var active = enabledSources().map(sourceName).join(' · ') || 'Балансеры отключены';
+
+            html.empty();
+            html.append('<div class="translationsub-page__title">' + escapeHtml(META.name) + '</div>');
+            html.append('<div class="translationsub-page__subtitle">' + escapeHtml(active) + ' · проверка каждые ' + checkIntervalMinutes() + ' мин.</div>');
+
+            var toolbar = $('<div class="translationsub-toolbar"></div>');
+            var refresh = $('<div class="translationsub-toolbar__item selector">' + bellSvg() + '<span>Проверить сейчас</span></div>');
+            refresh.on('hover:enter', function () {
+                forceCheckUpdatesUI(function () { load(); });
+            });
+            toolbar.append(refresh);
+            html.append(toolbar);
+
+            var container = $('<div class="translationsub-list"></div>');
+            if (!list.length) {
+                container.append('<div class="translationsub-empty">Подписок пока нет. Откройте сериал, нажмите «Озвучки» и выберите нужную озвучку.</div>');
+            }
+
+            list.forEach(function (item) {
+                var id = String(item.Id || item.id || '');
                 var title = item.Title || item.title || 'Без названия';
                 var voice = item.TranslationName || item.translationName || '';
-                var season = item.CurrentSeason || item.currentSeason || 1;
-                var episode = item.LastEpisode || item.lastEpisode || item.CurrentEpisode || item.currentEpisode || 0;
+                var season = Number(item.CurrentSeason || item.currentSeason || 1) || 1;
+                var episode = Number(item.LastEpisode || item.lastEpisode || item.CurrentEpisode || item.currentEpisode || 0) || 0;
+                var poster = posterUrl(item.Poster || item.poster || '');
                 var sources = item.Sources || item.sources || [];
                 var sourceText = Array.isArray(sources) && sources.length
                     ? sources.map(function (x) { return sourceName(x.Source || x.source); }).filter(function (x, i, a) { return a.indexOf(x) === i; }).join(', ')
                     : sourceName(item.Source || item.source);
+                var update = updates[id];
 
-                return {
-                    title: title,
-                    subtitle: (voice ? voice + ' · ' : '') + 'S' + season + (episode ? ' E' + episode : '') + (sourceText ? ' · ' + sourceText : ''),
-                    onclick: function () {
-                        notify(title + (voice ? ' · ' + voice : ''));
-                    }
-                };
-            });
+                var posterHtml = poster
+                    ? '<img src="' + escapeHtml(poster) + '" alt="">'
+                    : '<div class="translationsub-card__poster-empty">' + bellSvg() + '</div>';
 
-            showSelect('Мои подписки', items);
-        }, function () { notify('Не удалось загрузить подписки'); });
-    }
+                var card = $('<div class="translationsub-card selector">' +
+                    '<div class="translationsub-card__poster">' + posterHtml + '</div>' +
+                    '<div class="translationsub-card__body">' +
+                        '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
+                        '<div class="translationsub-card__voice">' + escapeHtml(voice || 'Озвучка') + '</div>' +
+                        '<div class="translationsub-card__meta">S' + season + (episode ? ' · E' + episode : '') + (sourceText ? ' · ' + escapeHtml(sourceText) : '') + '</div>' +
+                    '</div>' +
+                    (update ? '<div class="translationsub-card__new">НОВАЯ СЕРИЯ</div>' : '') +
+                '</div>');
 
-    function openHeadMenu() {
-        var items = [
-            { title: 'Проверить обновления', subtitle: 'FlixCDN · Phantom · ZetflixDB · VideoHUB', onclick: forceCheckUpdatesUI },
-            { title: 'Мои подписки', onclick: openSubscriptions }
-        ];
-
-        if (state.updates.length) {
-            state.updates.forEach(function (update) {
-                var title = update.title || update.Title || 'Новая серия';
-                var voice = update.translationName || update.TranslationName || '';
-                var season = update.season || update.Season || 1;
-                var episode = update.episode || update.Episode || 0;
-
-                items.push({
-                    title: '● ' + title,
-                    subtitle: (voice ? voice + ' · ' : '') + 'S' + season + ' E' + episode,
-                    onclick: function () {
-                        markNotified(update, function () {
-                            refreshUpdates(false);
-                            notify(title + ': S' + season + ' E' + episode);
+                card.on('hover:enter', function () {
+                    var actions = [];
+                    if (update) {
+                        actions.push({
+                            title: 'Отметить уведомление прочитанным',
+                            onclick: function () {
+                                markNotified(update, function () {
+                                    refreshUpdates(false, function () { load(); });
+                                });
+                            }
                         });
                     }
+                    actions.push({
+                        title: 'Удалить подписку',
+                        onclick: function () {
+                            request('POST', API.remove, { id: id }, null, function () {
+                                refreshUpdates(false, function () { load(); });
+                                notify('Подписка удалена');
+                            }, function () { notify('Не удалось удалить подписку'); });
+                        }
+                    });
+                    showSelect(title, actions, function () { Lampa.Controller.toggle('content'); });
                 });
+
+                container.append(card);
+            });
+
+            html.append(container);
+            Lampa.Controller.enable('content');
+            focusFirst();
+        }
+
+        function load() {
+            self.activity.loader(true);
+            request('GET', API.list, { userKey: userKey() }, null, function (list) {
+                list = Array.isArray(list) ? list : [];
+                self.activity.loader(false);
+                render(list);
+                self.activity.toggle();
+            }, function () {
+                self.activity.loader(false);
+                render([]);
+                self.activity.toggle();
+                notify('Не удалось загрузить подписки');
             });
         }
 
-        showSelect('Подписки на озвучки', items);
+        this.initialize = load;
+    }
+
+    function registerComponent() {
+        try {
+            if (window.Lampa && Lampa.Component && typeof Lampa.Component.add === 'function')
+                Lampa.Component.add('translationsub_list', SubscriptionComponent);
+        } catch (e) { log('component registration failed', e); }
     }
 
     function bindLampa() {
@@ -718,13 +959,14 @@
 
         Lampa.Listener.follow('app', function (event) {
             if (!event || event.type !== 'ready') return;
+            addSettings();
             injectHeadButton();
             refreshUpdates(false);
         });
 
         Lampa.Listener.follow('full', function (event) {
             if (!event || event.type !== 'complite') return;
-            injectFullButton(event.object || event.data || {});
+            injectFullButton(event);
         });
     }
 
@@ -734,21 +976,21 @@
 
         registerManifest();
         injectStyles();
+        registerComponent();
+        addSettings();
         bindLampa();
         injectHeadButton();
         refreshUpdates(false);
-
-        state.pollTimer = setInterval(function () {
-            refreshUpdates(false);
-        }, 5 * 60 * 1000);
+        schedulePolling();
 
         window.TranslationSub = {
             version: META.version,
             openForItem: openForItem,
-            openHeadMenu: openHeadMenu,
+            openSubscriptions: openSubscriptionsPage,
             checkUpdates: function () { refreshUpdates(false); },
             forceCheckUpdatesUI: forceCheckUpdatesUI,
             refresh: function () {
+                clearVariantCache();
                 injectHeadButton();
                 refreshUpdates(false);
             }
