@@ -13,7 +13,11 @@
         videohub: 'translationsub_videohub',
         interval: 'translationsub_interval_hours',
         legacyInterval: 'translationsub_interval',
-        cardSource: 'translationsub_card_source'
+        cardSource: 'translationsub_card_source',
+        smartTmdb: 'translationsub_tmdb_schedule',
+        tmdbRefreshHours: 'translationsub_tmdb_refresh_hours',
+        endedRefreshDays: 'translationsub_tmdb_ended_days',
+        newSeasonMode: 'translationsub_new_season_mode'
     };
 
     function storageGet(name, fallback) {
@@ -64,9 +68,27 @@
         return result;
     }
 
+    function intSetting(name, fallback, min, max) {
+        var value = parseInt(storageGet(name, String(fallback)), 10);
+        if (isNaN(value)) value = fallback;
+        return Math.max(min, Math.min(max, value));
+    }
+
     function checkIntervalHours() {
-        var value = parseInt(storageGet(KEYS.interval, '1'), 10);
-        return isNaN(value) ? 1 : Math.max(1, Math.min(24, value));
+        return intSetting(KEYS.interval, 1, 1, 24);
+    }
+
+    function tmdbRefreshHours() {
+        return intSetting(KEYS.tmdbRefreshHours, 24, 6, 168);
+    }
+
+    function endedRefreshDays() {
+        return intSetting(KEYS.endedRefreshDays, 7, 1, 90);
+    }
+
+    function newSeasonMode() {
+        var value = String(storageGet(KEYS.newSeasonMode, 'auto') || 'auto').toLowerCase();
+        return ['auto', 'notify', 'off'].indexOf(value) >= 0 ? value : 'auto';
     }
 
     function notify(text) {
@@ -132,7 +154,11 @@
         request('POST', '/translationsub/user-settings', {
             userKey: userKey(),
             checkIntervalHours: checkIntervalHours(),
-            sources: enabledSources()
+            sources: enabledSources(),
+            useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
+            tmdbRefreshHours: tmdbRefreshHours(),
+            endedRefreshDays: endedRefreshDays(),
+            newSeasonMode: newSeasonMode()
         });
     }
 
@@ -202,7 +228,7 @@
             param: { name: 'translationsub_open_balancers', type: 'button', 'default': '' },
             field: {
                 name: 'Балансеры для опроса',
-                description: 'Выбрать источники, которые участвуют в поиске озвучек и фоновой проверке новых серий'
+                description: 'Выбрать источники, которые участвуют в поиске озвучек и проверке новых серий'
             },
             onChange: openBalancersSettings
         });
@@ -216,12 +242,81 @@
                 'default': '1'
             },
             field: {
-                name: 'Интервал проверки',
-                description: 'Как часто сервер Lampac опрашивает выбранные балансеры. Ручная проверка работает сразу.'
+                name: 'Интервал активного опроса',
+                description: 'Как часто опрашивать балансеры, когда TMDB сообщает, что уже вышла серия, которой ещё нет в озвучке.'
             },
-            onChange: function () {
-                syncServerSettings();
-            }
+            onChange: syncServerSettings
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: ROOT,
+            param: { name: KEYS.smartTmdb, type: 'trigger', values: '', 'default': true },
+            field: {
+                name: 'Умное расписание TMDB',
+                description: 'Не опрашивать балансеры без причины: ждать фактического выхода серии или нового сезона по TMDB.'
+            },
+            onChange: syncServerSettings
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: ROOT,
+            param: {
+                name: KEYS.tmdbRefreshHours,
+                type: 'select',
+                values: {
+                    '6': '6 часов',
+                    '12': '12 часов',
+                    '24': '24 часа',
+                    '48': '2 дня',
+                    '72': '3 дня',
+                    '168': '7 дней'
+                },
+                'default': '24'
+            },
+            field: {
+                name: 'Обновление расписания TMDB',
+                description: 'Как часто перепроверять активные сериалы в TMDB, если дата выхода изменилась или ещё не объявлена.'
+            },
+            onChange: syncServerSettings
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: ROOT,
+            param: {
+                name: KEYS.endedRefreshDays,
+                type: 'select',
+                values: {
+                    '7': '7 дней',
+                    '14': '14 дней',
+                    '30': '30 дней',
+                    '60': '60 дней'
+                },
+                'default': '7'
+            },
+            field: {
+                name: 'Перепроверка завершённых сериалов',
+                description: 'Балансеры для завершённого сериала спят. TMDB редко проверяется снова, чтобы поймать неожиданное продолжение.'
+            },
+            onChange: syncServerSettings
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: ROOT,
+            param: {
+                name: KEYS.newSeasonMode,
+                type: 'select',
+                values: {
+                    auto: 'Автоматически продолжать',
+                    notify: 'Только показать новый сезон',
+                    off: 'Не отслеживать новые сезоны'
+                },
+                'default': 'auto'
+            },
+            field: {
+                name: 'Когда начинается новый сезон',
+                description: 'Авто: создать подписку на ту же озвучку для нового сезона, не удаляя прогресс старого сезона.'
+            },
+            onChange: syncServerSettings
         });
 
         Lampa.SettingsApi.addParam({
@@ -249,9 +344,8 @@
         addBalancer('ZetflixDB', KEYS.zetflixdb, 'Искать озвучки и новые серии через ZetflixDB');
         addBalancer('VideoHUB', KEYS.videohub, 'Искать озвучки и новые серии через VideoHUB');
 
-        // Старый таймер основного скрипта оставляем только как лёгкое обновление бейджа.
-        // На следующем запуске он будет не чаще одного раза в час, а request_before ниже
-        // не даст ему запускать принудительный опрос балансеров.
+        // Legacy client polling becomes a light badge refresh only. The server queue
+        // decides whether the expensive balancer calls are actually due.
         storageSet(KEYS.legacyInterval, '60');
         syncServerSettings();
     }
