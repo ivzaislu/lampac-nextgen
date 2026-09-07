@@ -131,21 +131,30 @@
         });
 
         var subtitle = root.find('.translationsub-page__subtitle').first();
-        if (subtitle.length) subtitle.text('Прогресс просмотра синхронизируется с Lampa');
+        var subtitleText = 'Прогресс просмотра синхронизируется с Lampa';
+        if (subtitle.length && subtitle.text() !== subtitleText) subtitle.text(subtitleText);
 
-        if (total > 0 && !root.find('.translationsub-summary-v2').length) {
-            var summary = $('<div class="translationsub-summary-v2"></div>');
-            summary.append('<div class="translationsub-summary-v2__item"><span class="translationsub-summary-v2__dot"></span><span>Подписок <b>' + total + '</b></span></div>');
-            summary.append('<div class="translationsub-summary-v2__item translationsub-summary-v2__item--new"><span class="translationsub-summary-v2__dot"></span><span>С новыми сериями <b>' + withNew + '</b></span></div>');
+        var summary = root.find('.translationsub-summary-v2').first();
+        if (total > 0 && !summary.length) {
+            summary = $('<div class="translationsub-summary-v2"></div>');
+            summary.append('<div class="translationsub-summary-v2__item"><span class="translationsub-summary-v2__dot"></span><span>Подписок <b class="translationsub-summary-v2__total">' + total + '</b></span></div>');
+            summary.append('<div class="translationsub-summary-v2__item translationsub-summary-v2__item--new"><span class="translationsub-summary-v2__dot"></span><span>С новыми сериями <b class="translationsub-summary-v2__new">' + withNew + '</b></span></div>');
             subtitle.after(summary);
+        } else if (summary.length) {
+            var totalNode = summary.find('.translationsub-summary-v2__total');
+            var newNode = summary.find('.translationsub-summary-v2__new');
+            if (totalNode.text() !== String(total)) totalNode.text(total);
+            if (newNode.text() !== String(withNew)) newNode.text(withNew);
         }
 
         var list = root.find('.translationsub-list').first();
         if (list.length && cards.length > 1) {
+            var current = list.children('.translationsub-card').get();
             var sorted = cards.get().sort(function (a, b) {
                 return Number($(b).attr('data-translationsub-new-count') || 0) - Number($(a).attr('data-translationsub-new-count') || 0);
             });
-            sorted.forEach(function (card) { list.append(card); });
+            var changed = sorted.some(function (card, index) { return current[index] !== card; });
+            if (changed) sorted.forEach(function (card) { list.append(card); });
         }
     }
 
