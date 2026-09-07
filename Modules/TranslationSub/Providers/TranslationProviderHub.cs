@@ -36,6 +36,11 @@ public static class TranslationProviderHub
                 values = new List<TranslationVariant>();
             }
 
+            // Защита от провайдера, который случайно вернул серии другого сезона.
+            // Когда пользователь выбрал сезон, наружу могут выйти только его варианты.
+            if (query.IsSerial && query.Season > 0)
+                values = values.Where(x => x != null && x.season == query.Season).ToList();
+
             foreach (var value in values)
             {
                 value.source ??= provider.Source;
@@ -57,6 +62,7 @@ public static class TranslationProviderHub
 
         var combined = raw
             .Where(x => !string.IsNullOrWhiteSpace(x.translation))
+            .Where(x => !query.IsSerial || query.Season <= 0 || x.season == query.Season)
             .GroupBy(x => new
             {
                 x.season,
