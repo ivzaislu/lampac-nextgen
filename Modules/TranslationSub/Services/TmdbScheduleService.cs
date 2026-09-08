@@ -48,6 +48,10 @@ public class TmdbScheduleSnapshot
 
 public static class TmdbScheduleService
 {
+    static readonly object cacheLock = new();
+    static readonly Dictionary<string, (TmdbScheduleSnapshot value, DateTime fetchedAt)> cache = new(StringComparer.OrdinalIgnoreCase);
+    static readonly TimeSpan cacheLifetime = TimeSpan.FromMinutes(30);
+
     public static async Task<TmdbScheduleSnapshot> Get(string tmdbId)
     {
         if (string.IsNullOrWhiteSpace(tmdbId))
@@ -55,6 +59,14 @@ public static class TmdbScheduleService
 
         if (!long.TryParse(tmdbId, out long id) || id <= 0)
             return null;
+
+        string normalizedId = id.ToString();
+        lock (cacheLock)
+        {
+            if (cache.TryGetValue(normalizedId, out var cached)
+                && DateTime.Now - cached.fetchedAt < cacheLifetime)
+                return cached.value;
+        }
 
         string host = (ModInit.conf?.tmdb_apihost ?? "https://api.themoviedb.org/3").TrimEnd('/');
         string key = ModInit.conf?.tmdb_apikey;
@@ -71,7 +83,7 @@ public static class TmdbScheduleService
             var root = JObject.Parse(json);
             var result = new TmdbScheduleSnapshot
             {
-                TmdbId = id.ToString(),
+                TmdbId = normalizedId,
                 Status = root.Value<string>("status") ?? string.Empty,
                 InProduction = root.Value<bool?>("in_production") ?? false,
                 NumberOfSeasons = root.Value<int?>("number_of_seasons") ?? 0,
@@ -113,6 +125,9 @@ public static class TmdbScheduleService
                         result.SeasonEpisodeCounts[number] = count;
                 }
             }
+
+            lock (cacheLock)
+                cache[normalizedId] = (result, DateTime.Now);
 
             return result;
         }
