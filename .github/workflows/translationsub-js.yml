@@ -1,0 +1,50 @@
+name: TranslationSub JS
+
+on:
+  push:
+    branches:
+      - TranslationSub
+    paths:
+      - 'Modules/TranslationSub/**.js'
+      - 'Modules/TranslationSub/**/*.js'
+      - 'Modules/TranslationSub/PluginController.cs'
+      - 'scripts/ci/translationsub-js-audit.mjs'
+      - '.github/workflows/translationsub-js.yml'
+  pull_request:
+    paths:
+      - 'Modules/TranslationSub/**.js'
+      - 'Modules/TranslationSub/**/*.js'
+      - 'Modules/TranslationSub/PluginController.cs'
+      - 'scripts/ci/translationsub-js-audit.mjs'
+      - '.github/workflows/translationsub-js.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Syntax and architecture audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check every TranslationSub JavaScript file
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            echo "node --check $file"
+            node --check "$file"
+          done < <(find Modules/TranslationSub -maxdepth 1 -type f -name 'translationsub*.js' -print0 | sort -z)
+
+      - name: Run TranslationSub architecture audit
+        run: node scripts/ci/translationsub-js-audit.mjs
