@@ -12,7 +12,6 @@
         zetflixdb: 'translationsub_zetflixdb',
         videohub: 'translationsub_videohub',
         interval: 'translationsub_interval_hours',
-        legacyInterval: 'translationsub_interval',
         cardSource: 'translationsub_card_source',
         smartTmdb: 'translationsub_tmdb_schedule',
         tmdbRefreshHours: 'translationsub_tmdb_refresh_hours',
@@ -20,25 +19,33 @@
         newSeasonMode: 'translationsub_new_season_mode'
     };
 
+    var added = false;
+
     function storageGet(name, fallback) {
         try {
             if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
                 return Lampa.Storage.get(name, fallback);
         } catch (e) {}
+
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) { return fallback; }
+        } catch (e2) {
+            return fallback;
+        }
     }
 
-    function storageSet(name, value) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
-                Lampa.Storage.set(name, value);
-                return;
-            }
-        } catch (e) {}
-        try { localStorage.setItem(name, value); } catch (e2) {}
+    function settingBool(name, fallback) {
+        var value = storageGet(name, fallback);
+        if (value === true || value === 1 || value === '1' || value === 'true') return true;
+        if (value === false || value === 0 || value === '0' || value === 'false') return false;
+        return !!fallback;
+    }
+
+    function intSetting(name, fallback, min, max) {
+        var value = parseInt(storageGet(name, String(fallback)), 10);
+        if (isNaN(value)) value = fallback;
+        return Math.max(min, Math.min(max, value));
     }
 
     function userKey() {
@@ -49,46 +56,9 @@
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) { return ''; }
-    }
-
-    function settingBool(name, fallback) {
-        var value = storageGet(name, fallback);
-        if (value === true || value === 1 || value === '1' || value === 'true') return true;
-        if (value === false || value === 0 || value === '0' || value === 'false') return false;
-        return !!fallback;
-    }
-
-    function enabledSources() {
-        var result = [];
-        if (settingBool(KEYS.flixcdn, true)) result.push('flixcdn');
-        if (settingBool(KEYS.phantom, true)) result.push('phantom');
-        if (settingBool(KEYS.zetflixdb, true)) result.push('zetflixdb');
-        if (settingBool(KEYS.videohub, true)) result.push('cdnvideohub');
-        return result;
-    }
-
-    function intSetting(name, fallback, min, max) {
-        var value = parseInt(storageGet(name, String(fallback)), 10);
-        if (isNaN(value)) value = fallback;
-        return Math.max(min, Math.min(max, value));
-    }
-
-    function checkIntervalHours() {
-        return intSetting(KEYS.interval, 1, 1, 24);
-    }
-
-    function tmdbRefreshHours() {
-        return intSetting(KEYS.tmdbRefreshHours, 24, 6, 168);
-    }
-
-    function endedRefreshDays() {
-        return intSetting(KEYS.endedRefreshDays, 7, 1, 90);
-    }
-
-    function newSeasonMode() {
-        var value = String(storageGet(KEYS.newSeasonMode, 'auto') || 'auto').toLowerCase();
-        return ['auto', 'notify', 'off'].indexOf(value) >= 0 ? value : 'auto';
+        } catch (e) {
+            return '';
+        }
     }
 
     function notify(text) {
@@ -98,38 +68,27 @@
         } catch (e) {}
     }
 
-    function settingsBellSvg() {
-        return '<svg class="translationsub-settings-bell" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-            '<path d="M18 8.5a6 6 0 0 0-12 0c0 7-3 7-3 8.5h18c0-1.5-3-1.5-3-8.5Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M9.7 20a2.5 2.5 0 0 0 4.6 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
-        '</svg>';
-    }
-
-    function hourValues() {
-        var values = {};
-        for (var i = 1; i <= 24; i++) {
-            var suffix = i === 1 || i === 21 ? 'час' : ((i >= 2 && i <= 4) || (i >= 22 && i <= 24) ? 'часа' : 'часов');
-            values[String(i)] = i + ' ' + suffix;
-        }
-        return values;
-    }
-
     function request(method, path, body, success, error) {
         success = success || function () {};
         error = error || function () {};
         var url = host() + path;
+        var options = {
+            method: method,
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            cache: 'no-store'
+        };
+        if (body && method !== 'GET') options.body = JSON.stringify(body);
 
         if (typeof fetch === 'function') {
-            var options = { method: method, headers: { 'Content-Type': 'application/json; charset=utf-8' } };
-            if (body && method !== 'GET') options.body = JSON.stringify(body);
             fetch(url, options)
                 .then(function (response) {
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     return response.text();
                 })
                 .then(function (text) {
-                    try { success(text ? JSON.parse(text) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+                    success(data);
                 })
                 .catch(error);
             return;
@@ -142,22 +101,55 @@
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) return;
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    try { success(xhr.responseText ? JSON.parse(xhr.responseText) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) {}
+                    success(data);
                 } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(body && method !== 'GET' ? JSON.stringify(body) : null);
-        } catch (e2) { error(e2); }
+        } catch (e2) {
+            error(e2);
+        }
+    }
+
+    function enabledSources() {
+        var result = [];
+        if (settingBool(KEYS.flixcdn, true)) result.push('flixcdn');
+        if (settingBool(KEYS.phantom, true)) result.push('phantom');
+        if (settingBool(KEYS.zetflixdb, true)) result.push('zetflixdb');
+        if (settingBool(KEYS.videohub, true)) result.push('cdnvideohub');
+        return result;
+    }
+
+    function newSeasonMode() {
+        var value = String(storageGet(KEYS.newSeasonMode, 'auto') || 'auto').toLowerCase();
+        return ['auto', 'notify', 'off'].indexOf(value) >= 0 ? value : 'auto';
+    }
+
+    function settingsBellSvg() {
+        return '<svg class="translationsub-settings-bell" width="37" height="37" viewBox="0 0 37 37" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+            '<path d="M28.2 25.4H8.8c1.9-2.1 3-4.5 3-7.3v-3.2a6.7 6.7 0 0 1 13.4 0v3.2c0 2.8 1.1 5.2 3 7.3Z" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M15.2 29.1a3.7 3.7 0 0 0 6.6 0" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>' +
+        '</svg>';
+    }
+
+    function hourValues() {
+        var values = {};
+        for (var i = 1; i <= 24; i++) {
+            var suffix = i === 1 || i === 21 ? 'час' : ((i >= 2 && i <= 4) || (i >= 22 && i <= 24) ? 'часа' : 'часов');
+            values[String(i)] = i + ' ' + suffix;
+        }
+        return values;
     }
 
     function syncServerSettings() {
         request('POST', '/translationsub/user-settings', {
             userKey: userKey(),
-            checkIntervalHours: checkIntervalHours(),
+            checkIntervalHours: intSetting(KEYS.interval, 1, 1, 24),
             sources: enabledSources(),
             useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
-            tmdbRefreshHours: tmdbRefreshHours(),
-            endedRefreshDays: endedRefreshDays(),
+            tmdbRefreshHours: intSetting(KEYS.tmdbRefreshHours, 24, 6, 168),
+            endedRefreshDays: intSetting(KEYS.endedRefreshDays, 7, 1, 90),
             newSeasonMode: newSeasonMode()
         });
     }
@@ -205,8 +197,8 @@
     }
 
     function rebuildSettings() {
-        if (!window.Lampa || !Lampa.SettingsApi || window.__TranslationSubSettingsV2Added) return;
-        window.__TranslationSubSettingsV2Added = true;
+        if (added || !window.Lampa || !Lampa.SettingsApi) return;
+        added = true;
 
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(ROOT); } catch (e) {}
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(BALANCERS); } catch (e2) {}
@@ -235,12 +227,7 @@
 
         Lampa.SettingsApi.addParam({
             component: ROOT,
-            param: {
-                name: KEYS.interval,
-                type: 'select',
-                values: hourValues(),
-                'default': '1'
-            },
+            param: { name: KEYS.interval, type: 'select', values: hourValues(), 'default': '1' },
             field: {
                 name: 'Интервал активного опроса',
                 description: 'Как часто опрашивать балансеры, когда TMDB сообщает, что уже вышла серия, которой ещё нет в озвучке.'
@@ -253,7 +240,7 @@
             param: { name: KEYS.smartTmdb, type: 'trigger', values: '', 'default': true },
             field: {
                 name: 'Умное расписание TMDB',
-                description: 'Не опрашивать балансеры без причины: ждать фактического выхода серии или нового сезона по TMDB.'
+                description: 'Ждать фактического выхода серии или нового сезона по TMDB и не опрашивать балансеры без причины.'
             },
             onChange: syncServerSettings
         });
@@ -275,7 +262,7 @@
             },
             field: {
                 name: 'Обновление расписания TMDB',
-                description: 'Как часто перепроверять активные сериалы в TMDB, если дата выхода изменилась или ещё не объявлена.'
+                description: 'Как часто перепроверять активные сериалы, если дата выхода изменилась или ещё не объявлена.'
             },
             onChange: syncServerSettings
         });
@@ -295,7 +282,7 @@
             },
             field: {
                 name: 'Перепроверка завершённых сериалов',
-                description: 'Балансеры для завершённого сериала спят. TMDB редко проверяется снова, чтобы поймать неожиданное продолжение.'
+                description: 'Балансеры спят, а TMDB изредка проверяется снова, чтобы поймать неожиданное продолжение.'
             },
             onChange: syncServerSettings
         });
@@ -314,7 +301,7 @@
             },
             field: {
                 name: 'Когда начинается новый сезон',
-                description: 'Авто: создать подписку на ту же озвучку для нового сезона, не удаляя прогресс старого сезона.'
+                description: 'Авто: создать подписку на ту же озвучку для нового сезона, не удаляя прогресс старого.'
             },
             onChange: syncServerSettings
         });
@@ -344,27 +331,13 @@
         addBalancer('ZetflixDB', KEYS.zetflixdb, 'Искать озвучки и новые серии через ZetflixDB');
         addBalancer('VideoHUB', KEYS.videohub, 'Искать озвучки и новые серии через VideoHUB');
 
-        // Legacy client polling becomes a light badge refresh only. The server queue
-        // decides whether the expensive balancer calls are actually due.
-        storageSet(KEYS.legacyInterval, '60');
         syncServerSettings();
-    }
-
-    function disableLegacyForcePolling() {
-        try {
-            if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
-            Lampa.Listener.follow('request_before', function (event) {
-                var params = event && event.params;
-                if (!params || typeof params.url !== 'string') return;
-                if (params.url.indexOf('/translationsub/updates') === -1) return;
-                params.url = params.url.replace(/([?&])force=true(?=(&|$))/i, '$1force=false');
-            });
-        } catch (e) {}
     }
 
     function manualCheck(done) {
         done = typeof done === 'function' ? done : function () {};
         var sources = enabledSources();
+
         if (!sources.length) {
             notify('Включите хотя бы один балансер в настройках');
             done([]);
@@ -372,20 +345,21 @@
         }
 
         notify('Проверяю новые серии…');
-        var checkPath = '/translationsub/check?userKey=' + encodeURIComponent(userKey()) + '&sources=' + encodeURIComponent(sources.join(','));
-        request('GET', checkPath, null, function () {
-            var updatesPath = '/translationsub/updates?userKey=' + encodeURIComponent(userKey()) + '&force=false';
-            request('GET', updatesPath, null, function (updates) {
+        request('GET', '/translationsub/check?userKey=' + encodeURIComponent(userKey()) + '&sources=' + encodeURIComponent(sources.join(',')), null, function () {
+            function finish(updates) {
                 updates = Array.isArray(updates) ? updates : [];
                 notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
-                try {
-                    if (window.TranslationSub && typeof window.TranslationSub.checkUpdates === 'function')
-                        window.TranslationSub.checkUpdates();
-                    if (window.TranslationSubNotice && typeof window.TranslationSubNotice.refresh === 'function')
-                        window.TranslationSubNotice.refresh();
-                } catch (e) {}
                 done(updates);
-            }, function () { done([]); });
+            }
+
+            try {
+                if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+                    window.TranslationSubBadgeState.refresh(finish);
+                    return;
+                }
+            } catch (e) {}
+
+            request('GET', '/translationsub/updates?userKey=' + encodeURIComponent(userKey()) + '&force=false', null, finish, function () { done([]); });
         }, function () {
             notify('Не удалось проверить новые серии');
             done([]);
@@ -394,38 +368,39 @@
 
     function exposeManualCheck() {
         try {
-            if (window.TranslationSub)
-                window.TranslationSub.forceCheckUpdatesUI = manualCheck;
+            if (window.TranslationSub) window.TranslationSub.forceCheckUpdatesUI = manualCheck;
         } catch (e) {}
     }
 
     function injectStyles() {
         if (document.getElementById('translationsub-settings-v2-style')) return;
+
         var style = document.createElement('style');
         style.id = 'translationsub-settings-v2-style';
         style.textContent =
             '.settings-folder[data-component="' + BALANCERS + '"]{display:none!important}' +
-            '.settings-folder[data-component="' + ROOT + '"] .translationsub-settings-bell{width:1.2em;height:1.2em;display:block;color:#fff!important;fill:none!important}' +
-            '.settings-folder[data-component="' + ROOT + '"] .translationsub-settings-bell path{stroke:#fff!important;fill:none!important}' +
-            '.settings-folder[data-component="' + ROOT + '"].focus .translationsub-settings-bell path{stroke:#111!important}';
+            '.settings-folder[data-component="' + ROOT + '"] .translationsub-settings-bell{' +
+                'width:2em!important;height:2em!important;display:block!important;overflow:visible!important;' +
+                'fill:none!important;color:inherit!important;' +
+            '}' +
+            '.settings-folder[data-component="' + ROOT + '"] .translationsub-settings-bell path{' +
+                'fill:none!important;stroke:currentColor!important;' +
+            '}';
         (document.head || document.documentElement).appendChild(style);
     }
 
     function start() {
         if (!window.Lampa) return;
         injectStyles();
-        disableLegacyForcePolling();
         rebuildSettings();
         exposeManualCheck();
 
         try {
             if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') {
-                        rebuildSettings();
-                        exposeManualCheck();
-                        syncServerSettings();
-                    }
+                    if (!event || event.type !== 'ready') return;
+                    exposeManualCheck();
+                    syncServerSettings();
                 });
             }
         } catch (e) {}
@@ -439,7 +414,9 @@
             if (window.Lampa) {
                 clearInterval(wait);
                 start();
-            } else if (attempts > 80) clearInterval(wait);
+            } else if (attempts > 80) {
+                clearInterval(wait);
+            }
         }, 250);
     }
 })();
