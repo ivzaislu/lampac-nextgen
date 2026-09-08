@@ -1,6 +1,9 @@
 (function () {
     'use strict';
 
+    if (window.__TranslationSubPageStarted) return;
+    window.__TranslationSubPageStarted = true;
+
     if (!window.Lampa || !Lampa.Component || typeof Lampa.Component.add !== 'function') return;
 
     var SOURCE_NAMES = {
@@ -15,10 +18,13 @@
         try {
             if (Lampa.Storage && typeof Lampa.Storage.get === 'function') return Lampa.Storage.get(name, fallback);
         } catch (e) {}
+
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) { return fallback; }
+        } catch (e2) {
+            return fallback;
+        }
     }
 
     function userKey() {
@@ -29,20 +35,28 @@
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) { return ''; }
+        } catch (e) {
+            return '';
+        }
     }
 
     function escapeHtml(value) {
         try {
             if (Lampa.Utils && typeof Lampa.Utils.escape === 'function') return Lampa.Utils.escape(String(value || ''));
         } catch (e) {}
+
         return String(value || '')
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 
     function notify(text) {
-        try { if (Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text); } catch (e) {}
+        try {
+            if (Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text);
+        } catch (e) {}
     }
 
     function request(method, path, success, error) {
@@ -51,14 +65,15 @@
         var url = host() + path;
 
         if (typeof fetch === 'function') {
-            fetch(url, { method: method })
+            fetch(url, { method: method, cache: 'no-store' })
                 .then(function (response) {
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     return response.text();
                 })
                 .then(function (text) {
-                    try { success(text ? JSON.parse(text) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+                    success(data);
                 })
                 .catch(error);
             return;
@@ -67,15 +82,19 @@
         try {
             var xhr = new XMLHttpRequest();
             xhr.open(method, url, true);
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) return;
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    try { success(xhr.responseText ? JSON.parse(xhr.responseText) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) {}
+                    success(data);
                 } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
-        } catch (e2) { error(e2); }
+        } catch (e2) {
+            error(e2);
+        }
     }
 
     function sourceName(value) {
@@ -87,7 +106,11 @@
         path = String(path || '');
         if (!path) return '';
         if (/^https?:\/\//i.test(path)) return path;
-        try { if (Lampa.Api && typeof Lampa.Api.img === 'function') return Lampa.Api.img(path, 'w300'); } catch (e) {}
+
+        try {
+            if (Lampa.Api && typeof Lampa.Api.img === 'function') return Lampa.Api.img(path, 'w300');
+        } catch (e) {}
+
         return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
     }
 
@@ -181,21 +204,17 @@
             var focusedId = String(html.find('.translationsub-card.focus').attr('data-subscription-id') || '');
             html.empty();
             html.append('<div class="translationsub-page__title">Подписки на озвучки</div>');
-            html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampa · подписок: ' + list.length + '</div>');
+            html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampac TimeCode · подписок: ' + list.length + '</div>');
 
             var toolbar = $('<div class="translationsub-toolbar"></div>');
-            var reload = $('<div class="translationsub-toolbar__item selector"><span>Обновить прогресс</span></div>');
-            reload.on('hover:enter', function () {
-                syncWatched(function () { load(); });
-            });
-            toolbar.append(reload);
-
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
             check.on('hover:enter', function () {
                 syncWatched(function () {
                     if (window.TranslationSub && typeof window.TranslationSub.forceCheckUpdatesUI === 'function') {
                         window.TranslationSub.forceCheckUpdatesUI(function () { load(); });
-                    } else load();
+                    } else {
+                        load();
+                    }
                 });
             });
             toolbar.append(check);
@@ -227,7 +246,9 @@
                 if (!names.length) names.push(sourceName(item.Source || item.source));
 
                 var progressText = 'S' + season + ' · просмотрено E' + watched + ' · озвучка до E' + available;
-                if (newCount > 0) progressText += ' · доступны E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '');
+                if (newCount > 0) {
+                    progressText += ' · доступны E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '');
+                }
                 if (names.length) progressText += ' · ' + names.join(', ');
 
                 var posterHtml = poster
@@ -274,7 +295,7 @@
             request('GET', '/translationsub/list?userKey=' + encodeURIComponent(userKey()), function (list) {
                 if (destroyed || version !== requestVersion) return;
                 try { self.activity.loader(false); } catch (e) {}
-                render(list);
+                render(Array.isArray(list) ? list : []);
                 try { self.activity.toggle(); } catch (e2) {}
             }, function () {
                 if (destroyed || version !== requestVersion) return;
@@ -289,9 +310,8 @@
         window.TranslationSubPageRefresh = reloadRef;
 
         this.initialize = function () {
-            // Один цикл: сначала синхронизируем Timeline, затем один раз рисуем страницу.
-            // Старого load -> sync -> load через 1.5 секунды больше нет.
-            syncWatched(function () { load(); });
+            // Одна первичная отрисовка: сначала TimeCode, затем list.
+            syncWatched(load);
         };
     }
 
