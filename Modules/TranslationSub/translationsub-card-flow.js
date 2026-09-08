@@ -176,8 +176,14 @@
         try { console.log('[TranslationSub]', text); } catch (e2) {}
     }
 
-    function bellSvg() {
-        return '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+    function bellSvg(filled) {
+        if (filled) {
+            return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+                '<path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"></path>' +
+            '</svg>';
+        }
+
+        return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
             '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>' +
             '<path d="M10 21h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>' +
         '</svg>';
@@ -189,14 +195,9 @@
         style.id = 'translationsub-card-flow-style';
         style.textContent =
             '.translationsub-full-button{position:relative}' +
-            '.translationsub-full-button>svg{width:1.2em;height:1.35em;flex-shrink:0}' +
+            '.translationsub-full-button>.translationsub-full-button__bell{width:1.2em;height:1.35em;flex-shrink:0}' +
             '.translationsub-full-button[data-translationsub-card-flow="1"]{gap:.55em}' +
-            '.translationsub-full-button[data-translationsub-card-flow="1"] span{white-space:nowrap}' +
-            '.translationsub-full-button--subscribed:after{' +
-                'content:"";position:absolute;width:.42em;height:.42em;border-radius:50%;background:#f47a42;' +
-                'right:.36em;top:.34em;box-shadow:0 0 0 .12em rgba(0,0,0,.16)' +
-            '}' +
-            '.translationsub-full-button--subscribed.focus:after{box-shadow:0 0 0 .12em rgba(255,255,255,.45)}';
+            '.translationsub-full-button[data-translationsub-card-flow="1"] span{white-space:nowrap}';
         (document.head || document.documentElement).appendChild(style);
     }
 
@@ -427,70 +428,47 @@
         }, null, success, error);
     }
 
-    function buildSeasons(context, subscriptions) {
-        var card = context.card || {};
-        var map = {};
-
-        function add(number, episodeCount, airDate) {
-            number = Number(number || 0);
-            if (number <= 0) return;
-            if (!map[number]) map[number] = { number: number, episodeCount: 0, airDate: '' };
-            if (episodeCount) map[number].episodeCount = Number(episodeCount) || map[number].episodeCount;
-            if (airDate) map[number].airDate = airDate;
-        }
-
-        if (Array.isArray(card.seasons)) {
-            card.seasons.forEach(function (season) {
-                if (!season) return;
-                add(
-                    season.season_number !== undefined ? season.season_number : season.number,
-                    season.episode_count || season.episodes_count,
-                    season.air_date || ''
-                );
-            });
-        }
-
-        var total = Number(card.number_of_seasons || card.seasons_count || 0) || 0;
-        for (var i = 1; i <= total; i++) add(i, 0, '');
-
-        if (card.last_episode_to_air)
-            add(card.last_episode_to_air.season_number, card.last_episode_to_air.episode_number, card.last_episode_to_air.air_date || '');
-        if (card.next_episode_to_air)
-            add(card.next_episode_to_air.season_number, card.next_episode_to_air.episode_number, card.next_episode_to_air.air_date || '');
-        if (context.season > 0) add(context.season, 0, '');
-
-        (subscriptions || []).forEach(function (item) {
-            if (!sameContent(item, context)) return;
-            add(value(item, 'CurrentSeason', 'currentSeason', 0), 0, '');
-        });
-
-        var list = Object.keys(map).map(function (key) { return map[key]; });
-        list.sort(function (a, b) { return b.number - a.number; });
-        if (!list.length) list.push({ number: 1, episodeCount: 0, airDate: '' });
-        return list;
+    function dateHasAired(value) {
+        if (!value) return false;
+        var time = new Date(value).getTime();
+        if (isNaN(time)) return false;
+        var now = Date.now ? Date.now() : new Date().getTime();
+        return time <= now;
     }
 
-    function preferredSeason(context, subscriptions, seasons) {
-        if (context.season > 0) return context.season;
+    function latestAiredSeason(context) {
+        var card = context && context.card || {};
+        var lastEpisode = card.last_episode_to_air || {};
+        var season = Number(lastEpisode.season_number || lastEpisode.season || 0) || 0;
+        if (season > 0) return season;
 
-        var subscribed = 0;
-        (subscriptions || []).forEach(function (item) {
-            if (!sameContent(item, context)) return;
-            subscribed = Math.max(subscribed, Number(value(item, 'CurrentSeason', 'currentSeason', 0) || 0));
-        });
-        if (subscribed > 0) return subscribed;
+        var bestAired = 0;
+        var bestKnown = 0;
+        if (Array.isArray(card.seasons)) {
+            card.seasons.forEach(function (item) {
+                item = item || {};
+                var number = Number(item.season_number !== undefined ? item.season_number : item.number) || 0;
+                if (number <= 0) return;
+                bestKnown = Math.max(bestKnown, number);
+                if (dateHasAired(item.air_date)) bestAired = Math.max(bestAired, number);
+            });
+        }
+        if (bestAired > 0) return bestAired;
 
-        var last = Number(context.card && context.card.last_episode_to_air && context.card.last_episode_to_air.season_number || 0) || 0;
-        if (last > 0) return last;
-
-        var now = Date.now ? Date.now() : new Date().getTime();
-        for (var i = 0; i < seasons.length; i++) {
-            if (!seasons[i].airDate) continue;
-            var time = new Date(seasons[i].airDate).getTime();
-            if (!isNaN(time) && time <= now) return seasons[i].number;
+        var nextEpisode = card.next_episode_to_air || {};
+        var nextSeason = Number(nextEpisode.season_number || nextEpisode.season || 0) || 0;
+        var nextNumber = Number(nextEpisode.episode_number || nextEpisode.episode || 0) || 0;
+        if (nextSeason > 0) {
+            if (nextNumber > 1) return nextSeason;
+            if (nextSeason > 1) return nextSeason - 1;
         }
 
-        return seasons[0].number || 1;
+        if (bestKnown > 0) return bestKnown;
+
+        var total = Number(card.number_of_seasons || card.seasons_count || 0) || 0;
+        if (total > 0) return total;
+        if (context && context.season > 0) return context.season;
+        return 1;
     }
 
     function refreshState() {
@@ -630,36 +608,6 @@
         });
     }
 
-    function openSeasonMenu(context, subscriptions, token) {
-        if (!context || !context.isSerial || !validFlow(token)) return;
-
-        var seasons = buildSeasons(context, subscriptions);
-        var preferred = preferredSeason(context, subscriptions, seasons);
-
-        if (context.season > 0 || seasons.length === 1)
-            return openVoices(context, context.season > 0 ? context.season : seasons[0].number, token);
-
-        var items = seasons.map(function (season) {
-            var subscribed = (subscriptions || []).some(function (item) {
-                return sameContent(item, context) &&
-                    Number(value(item, 'CurrentSeason', 'currentSeason', 0) || 0) === season.number;
-            });
-            var subtitle = subscribed ? 'Есть активная подписка' :
-                (season.number === preferred ? 'Актуальный сезон' : '');
-            if (season.episodeCount > 0)
-                subtitle += (subtitle ? ' · ' : '') + 'до ' + season.episodeCount + ' серии';
-
-            return {
-                title: season.number + ' сезон',
-                subtitle: subtitle,
-                selected: season.number === preferred,
-                onclick: function () { openVoices(context, season.number, token); }
-            };
-        });
-
-        showSelect('Выберите сезон', items, token);
-    }
-
     function openForItem(object) {
         var context = object && object.card && object.contentId ? object : normalizeFull(object || {});
         if (!context.isSerial) return;
@@ -669,13 +617,7 @@
         var token = ++flowToken;
         ensureExternalIds(context, function (resolved) {
             if (!resolved || !validFlow(token)) return;
-            loadSubscriptions(function (subscriptions) {
-                if (!validFlow(token)) return;
-                openSeasonMenu(resolved, subscriptions, token);
-            }, function () {
-                if (validFlow(token)) notify('Не удалось загрузить ваши подписки');
-                restoreContentController();
-            });
+            openVoices(resolved, latestAiredSeason(resolved), token);
         });
     }
 
@@ -715,6 +657,13 @@
         return button;
     }
 
+    function renderButton(button, active) {
+        if (!button || !button.length) return;
+        button.empty().append(bellSvg(!!active)).append('<span>Озвучки</span>');
+        button.toggleClass('translationsub-full-button--subscribed', !!active);
+        button.attr('title', active ? 'Озвучки · подписка активна' : 'Подписки на озвучки');
+    }
+
     function applyButton(event) {
         if (typeof $ !== 'function') return;
 
@@ -730,8 +679,8 @@
         if (!button || !button.length) return;
 
         button.off('.translationsubCardFlow');
-        button.empty().append(bellSvg()).append('<span>Озвучки</span>');
-        button.attr('data-translationsub-card-flow', '1').attr('title', 'Подписки на озвучки');
+        renderButton(button, false);
+        button.attr('data-translationsub-card-flow', '1');
         button.on('hover:enter.translationsubCardFlow', function () { openForItem(context); });
         button.on('hover:long.translationsubCardFlow', function () {
             try {
@@ -743,8 +692,7 @@
         loadSubscriptions(function (subscriptions) {
             if (!button.closest('body').length) return;
             var active = subscriptions.some(function (item) { return sameContent(item, context); });
-            button.toggleClass('translationsub-full-button--subscribed', active);
-            button.attr('title', active ? 'Озвучки · есть активные подписки' : 'Подписки на озвучки');
+            renderButton(button, active);
         }, function () {});
     }
 
