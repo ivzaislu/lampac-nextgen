@@ -186,7 +186,9 @@
         if (document.getElementById('translationsub-core-style')) return;
         var style = document.createElement('style');
         style.id = 'translationsub-core-style';
-        style.textContent = '.translationsub-head{position:relative}.translationsub-head>svg{width:1.35em;height:1.35em;fill:currentColor}';
+        style.textContent =
+            '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}' +
+            '.translationsub-head>svg{width:1.8em;height:1.8em;display:block;fill:currentColor;flex:0 0 auto}';
         (document.head || document.documentElement).appendChild(style);
     }
 
