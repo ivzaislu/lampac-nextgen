@@ -27,12 +27,14 @@
         multi: 'Несколько источников'
     };
 
-    var WATCHED_PERCENT = 60;
-    var MAX_EPISODE_SCAN = 250;
     var lastEvent = null;
     var applyTimer = null;
-    var busy = false;
     var flowToken = 0;
+    var busy = false;
+
+    function lower(value) {
+        return String(value || '').toLowerCase().trim();
+    }
 
     function storageGet(name, fallback) {
         try {
@@ -194,20 +196,15 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function lower(value) {
-        return String(value || '').toLowerCase().trim();
-    }
-
     function detectSerialCard(object, card) {
         object = object || {};
         card = card || {};
-
         var method = lower(object.method || card.method);
         var mediaType = lower(object.media_type || card.media_type || object.type || card.type);
 
         if (method === 'movie' || method === 'film' || mediaType === 'movie' || mediaType === 'film') return false;
         if (method === 'tv' || method === 'serial' || mediaType === 'tv' || mediaType === 'serial') return true;
-
+        if (card.release_date || card.original_title) return false;
         if (card.first_air_date) return true;
         if (Number(card.number_of_seasons || card.seasons_count || 0) > 0) return true;
         if (card.last_episode_to_air || card.next_episode_to_air) return true;
@@ -217,8 +214,6 @@
                 if (Number(season.season_number !== undefined ? season.season_number : season.number) > 0) return true;
             }
         }
-
-        if (card.release_date || card.original_title) return false;
         return !!(card.original_name && !card.title);
     }
 
@@ -258,7 +253,6 @@
     function ensureExternalIds(context, done) {
         if (!context || !context.isSerial) return done(context);
         if (context.tmdbId && context.kpId && context.imdbId) return done(context);
-
         request('GET', API.externalids, {
             id: context.tmdbId || context.contentId,
             serial: 1,
@@ -283,8 +277,8 @@
         return fallback;
     }
 
-    function normalizeVoice(value) {
-        return String(value || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, '').trim();
+    function normalizeVoice(text) {
+        return String(text || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, '').trim();
     }
 
     function voiceName(variant) {
@@ -346,101 +340,7 @@
         return null;
     }
 
-    function timelineCard(context) {
-        var card = context.card || {};
-        var original = card.original_name || card.original_title || context.originalTitle || context.title || '';
-        return { original_name: original, original_title: original };
-    }
-
-    function watchedEpisode(context, season, knownEpisodes) {
-        if (!context.isSerial) return 0;
-        var limit = Number(knownEpisodes || 0) || MAX_EPISODE_SCAN;
-        limit = Math.max(1, Math.min(MAX_EPISODE_SCAN, limit));
-        var highest = 0;
-
-        try {
-            if (!window.Lampa || !Lampa.Timeline || typeof Lampa.Timeline.watchedEpisode !== 'function') return 0;
-            for (var episode = 1; episode <= limit; episode++) {
-                var percent = Number(Lampa.Timeline.watchedEpisode(timelineCard(context), season, episode) || 0);
-                if (percent >= WATCHED_PERCENT) highest = episode;
-            }
-        } catch (e) {}
-        return highest;
-    }
-
-    function seasonMetadata(context) {
-        var card = context.card || {};
-        var map = {};
-        if (Array.isArray(card.seasons)) {
-            card.seasons.forEach(function (season) {
-                var number = Number(season && (season.season_number !== undefined ? season.season_number : season.number) || 0);
-                if (number <= 0) return;
-                map[number] = {
-                    number: number,
-                    episodeCount: Number(season.episode_count || season.episodes_count || 0) || 0,
-                    airDate: season.air_date || ''
-                };
-            });
-        }
-
-        var total = Number(card.number_of_seasons || card.seasons_count || 0) || 0;
-        for (var i = 1; i <= total; i++) if (!map[i]) map[i] = { number: i, episodeCount: 0, airDate: '' };
-
-        var last = Number(card.last_episode_to_air && card.last_episode_to_air.season_number || 0) || 0;
-        var next = Number(card.next_episode_to_air && card.next_episode_to_air.season_number || 0) || 0;
-        if (last > 0 && !map[last]) map[last] = { number: last, episodeCount: 0, airDate: '' };
-        if (next > 0 && !map[next]) map[next] = { number: next, episodeCount: 0, airDate: '' };
-
-        var list = Object.keys(map).map(function (key) { return map[key]; });
-        list.sort(function (a, b) { return b.number - a.number; });
-        return list;
-    }
-
-    function seasonProgress(context) {
-        var seasons = seasonMetadata(context);
-        if (!seasons.length) seasons = [{ number: 1, episodeCount: 0, airDate: '' }];
-
-        var watched = {};
-        var lastWatchedSeason = 0;
-        seasons.forEach(function (season) {
-            watched[season.number] = watchedEpisode(context, season.number, season.episodeCount);
-            if (watched[season.number] > 0 && season.number > lastWatchedSeason) lastWatchedSeason = season.number;
-        });
-
-        var preferred = lastWatchedSeason;
-        if (!preferred)
-            preferred = Number(context.card && context.card.last_episode_to_air && context.card.last_episode_to_air.season_number || 0) || 0;
-
-        if (!preferred) {
-            var now = Date.now ? Date.now() : new Date().getTime();
-            for (var i = 0; i < seasons.length; i++) {
-                var time = seasons[i].airDate ? new Date(seasons[i].airDate).getTime() : NaN;
-                if (!isNaN(time) && time <= now) {
-                    preferred = seasons[i].number;
-                    break;
-                }
-            }
-        }
-
-        if (!preferred) preferred = seasons[0].number || 1;
-        return { seasons: seasons, watched: watched, preferredSeason: preferred };
-    }
-
-    function activeComponent() {
-        try {
-            if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.active !== 'function') return '';
-            var active = Lampa.Activity.active() || {};
-            return lower(active.component ||
-                (active.object && active.object.component) ||
-                (active.activity && active.activity.component) || '');
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function isFullActive() {
-        var component = activeComponent();
-        if (component) return component === 'full';
+    function activeFull() {
         try {
             return typeof $ === 'function' && $('.full-start:visible,.full-start-new:visible').length > 0;
         } catch (e) {
@@ -449,7 +349,7 @@
     }
 
     function validFlow(token) {
-        return token === flowToken && isFullActive();
+        return token === flowToken && activeFull();
     }
 
     function restoreContentController() {
@@ -459,13 +359,6 @@
                     Lampa.Controller.toggle('content');
             } catch (e) {}
         }, 0);
-    }
-
-    function closeSelectAndRestore() {
-        try {
-            if (window.Lampa && Lampa.Select && typeof Lampa.Select.close === 'function') Lampa.Select.close();
-        } catch (e) {}
-        restoreContentController();
     }
 
     function showSelect(title, items, token) {
@@ -478,7 +371,7 @@
             title: title,
             items: items,
             onSelect: function (item) {
-                closeSelectAndRestore();
+                restoreContentController();
                 if (item && typeof item.onclick === 'function') {
                     setTimeout(function () {
                         if (token === flowToken) item.onclick();
@@ -487,7 +380,7 @@
             },
             onBack: function () {
                 flowToken++;
-                closeSelectAndRestore();
+                restoreContentController();
             }
         });
     }
@@ -509,10 +402,75 @@
             tmdbId: context.tmdbId,
             year: context.year,
             isSerial: true,
-            season: Number(season || 0),
+            season: Number(season || 1),
             serial: true,
             sources: enabledSources().join(',')
         }, null, success, error);
+    }
+
+    function buildSeasons(context, subscriptions) {
+        var card = context.card || {};
+        var map = {};
+        function add(number, episodeCount, airDate) {
+            number = Number(number || 0);
+            if (number <= 0) return;
+            if (!map[number]) map[number] = { number: number, episodeCount: 0, airDate: '' };
+            if (episodeCount) map[number].episodeCount = Number(episodeCount) || map[number].episodeCount;
+            if (airDate) map[number].airDate = airDate;
+        }
+
+        if (Array.isArray(card.seasons)) {
+            card.seasons.forEach(function (season) {
+                if (!season) return;
+                add(
+                    season.season_number !== undefined ? season.season_number : season.number,
+                    season.episode_count || season.episodes_count,
+                    season.air_date || ''
+                );
+            });
+        }
+
+        var total = Number(card.number_of_seasons || card.seasons_count || 0) || 0;
+        for (var i = 1; i <= total; i++) add(i, 0, '');
+
+        if (card.last_episode_to_air)
+            add(card.last_episode_to_air.season_number, card.last_episode_to_air.episode_number, card.last_episode_to_air.air_date || '');
+        if (card.next_episode_to_air)
+            add(card.next_episode_to_air.season_number, card.next_episode_to_air.episode_number, card.next_episode_to_air.air_date || '');
+        if (context.season > 0) add(context.season, 0, '');
+
+        (subscriptions || []).forEach(function (item) {
+            if (!sameContent(item, context)) return;
+            add(value(item, 'CurrentSeason', 'currentSeason', 0), 0, '');
+        });
+
+        var list = Object.keys(map).map(function (key) { return map[key]; });
+        list.sort(function (a, b) { return b.number - a.number; });
+        if (!list.length) list.push({ number: 1, episodeCount: 0, airDate: '' });
+        return list;
+    }
+
+    function preferredSeason(context, subscriptions, seasons) {
+        if (context.season > 0) return context.season;
+
+        var subscribed = 0;
+        (subscriptions || []).forEach(function (item) {
+            if (!sameContent(item, context)) return;
+            subscribed = Math.max(subscribed, Number(value(item, 'CurrentSeason', 'currentSeason', 0) || 0));
+        });
+        if (subscribed > 0) return subscribed;
+
+        var last = Number(context.card && context.card.last_episode_to_air && context.card.last_episode_to_air.season_number || 0) || 0;
+        if (last > 0) return last;
+
+        var now = Date.now ? Date.now() : new Date().getTime();
+        for (var i = 0; i < seasons.length; i++) {
+            if (!seasons[i].airDate) continue;
+            var time = new Date(seasons[i].airDate).getTime();
+            if (!isNaN(time) && time <= now) return seasons[i].number;
+        }
+
+        return seasons[0].number || 1;
     }
 
     function refreshState() {
@@ -530,7 +488,6 @@
     function subscribe(context, variant, season) {
         if (busy) return;
         busy = true;
-
         var sources = variantSources(variant);
         var bodySources = sources.map(function (source) {
             return {
@@ -541,7 +498,6 @@
             };
         });
         var latestEpisode = Number(variant.episode || 0) || 0;
-        var watched = watchedEpisode(context, season, Math.max(latestEpisode + 8, 32));
         var mainSource = bodySources.length > 1 ? 'multi' :
             (bodySources.length ? bodySources[0].source : (variant.source || 'multi'));
 
@@ -562,7 +518,7 @@
             currentSeason: String(Number(season || 1)),
             currentEpisode: String(latestEpisode),
             availableEpisode: String(latestEpisode),
-            watchedEpisode: String(watched),
+            watchedEpisode: '0',
             sources: bodySources
         }, function () {
             busy = false;
@@ -591,15 +547,13 @@
     }
 
     function openVoices(context, season, token) {
-        if (!context || !context.isSerial || !validFlow(token)) return;
         season = Number(season || 1) || 1;
+        if (!validFlow(token)) return;
 
         loadSubscriptions(function (subscriptions) {
             if (!validFlow(token)) return;
-
             loadVariants(context, season, function (response) {
                 if (!validFlow(token)) return;
-
                 var variants = response.Translations || response.translations || [];
                 variants = Array.isArray(variants) ? variants.slice() : [];
                 variants = variants.filter(function (variant) {
@@ -608,6 +562,7 @@
 
                 if (!variants.length) {
                     notify('Озвучки для ' + season + ' сезона пока не найдены');
+                    restoreContentController();
                     return;
                 }
 
@@ -645,31 +600,36 @@
                 showSelect('Озвучки · ' + season + ' сезон', items, token);
             }, function () {
                 if (validFlow(token)) notify('Не удалось загрузить список озвучек');
+                restoreContentController();
             });
         }, function () {
             if (validFlow(token)) notify('Не удалось загрузить ваши подписки');
+            restoreContentController();
         });
     }
 
-    function openSeasonMenu(context, token) {
+    function openSeasonMenu(context, subscriptions, token) {
         if (!context || !context.isSerial || !validFlow(token)) return;
-        if (context.season > 0) return openVoices(context, context.season, token);
+        var seasons = buildSeasons(context, subscriptions);
+        var preferred = preferredSeason(context, subscriptions, seasons);
 
-        var progress = seasonProgress(context);
-        var seasons = progress.seasons;
-        if (seasons.length === 1) return openVoices(context, seasons[0].number, token);
+        if (context.season > 0 || seasons.length === 1)
+            return openVoices(context, context.season > 0 ? context.season : seasons[0].number, token);
 
         var items = seasons.map(function (season) {
-            var watched = Number(progress.watched[season.number] || 0);
-            var subtitle = watched > 0
-                ? ('Просмотрено до ' + watched + ' серии')
-                : (season.number === progress.preferredSeason ? 'Актуальный сезон' : 'Не начат');
-            if (season.episodeCount > 0) subtitle += ' · всего ' + season.episodeCount + ' серий';
+            var subscribed = (subscriptions || []).some(function (item) {
+                return sameContent(item, context) &&
+                    Number(value(item, 'CurrentSeason', 'currentSeason', 0) || 0) === season.number;
+            });
+            var subtitle = subscribed ? 'Есть активная подписка' :
+                (season.number === preferred ? 'Актуальный сезон' : '');
+            if (season.episodeCount > 0)
+                subtitle += (subtitle ? ' · ' : '') + 'до ' + season.episodeCount + ' серии';
 
             return {
                 title: season.number + ' сезон',
                 subtitle: subtitle,
-                selected: season.number === progress.preferredSeason,
+                selected: season.number === preferred,
                 onclick: function () { openVoices(context, season.number, token); }
             };
         });
@@ -686,7 +646,13 @@
         var token = ++flowToken;
         ensureExternalIds(context, function (resolved) {
             if (!resolved || !validFlow(token)) return;
-            openSeasonMenu(resolved, token);
+            loadSubscriptions(function (subscriptions) {
+                if (!validFlow(token)) return;
+                openSeasonMenu(resolved, subscriptions, token);
+            }, function () {
+                if (validFlow(token)) notify('Не удалось загрузить ваши подписки');
+                restoreContentController();
+            });
         });
     }
 
@@ -729,12 +695,7 @@
         var payload = event && (event.data || event.object) || {};
         var context = normalizeFull(payload);
 
-        if (!context.isSerial) {
-            removeButton(event);
-            return;
-        }
-
-        if (!context.contentId && !context.title) {
+        if (!context.isSerial || (!context.contentId && !context.title)) {
             removeButton(event);
             return;
         }
@@ -781,26 +742,13 @@
 
     function bind() {
         if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
-
         Lampa.Listener.follow('full', function (event) {
             if (!event) return;
             if (event.type === 'complite') {
                 flowToken++;
                 scheduleApply(event, 100);
             }
-            if (event.type === 'destroy' || event.type === 'close') {
-                flowToken++;
-                clearTimeout(applyTimer);
-            }
         });
-
-        try {
-            if (Lampa.Timeline && Lampa.Timeline.listener && typeof Lampa.Timeline.listener.follow === 'function') {
-                Lampa.Timeline.listener.follow('update', function () {
-                    if (lastEvent) scheduleApply(lastEvent, 220);
-                });
-            }
-        } catch (e) {}
     }
 
     function start() {
