@@ -137,11 +137,6 @@
             if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
                 window.TranslationSubBadgeState.refresh();
         } catch (e) {}
-
-        try {
-            if (typeof window.TranslationSubPageRefresh === 'function')
-                window.TranslationSubPageRefresh();
-        } catch (e2) {}
     }
 
     function finish() {
