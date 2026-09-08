@@ -148,11 +148,28 @@
         } catch (e) {}
     }
 
+    function refreshAfterSubscriptionChange() {
+        refreshPage();
+
+        try {
+            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.refresh === 'function')
+                window.TranslationSubNotice.refresh();
+        } catch (e) {}
+
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.checkUpdates === 'function')
+                window.TranslationSub.checkUpdates();
+        } catch (e2) {}
+    }
+
     function showActions(item, card) {
         if (!window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
 
         var id = String(item.Id || item.id || '');
         var title = item.Title || item.title || 'Подписка';
+        var voice = item.TranslationName || item.translationName || 'Озвучка';
+        var season = Number(item.CurrentSeason || item.currentSeason || 1) || 1;
+        var isSerial = item.IsSerial !== undefined ? !!item.IsSerial : (item.isSerial !== undefined ? !!item.isSerial : true);
         var watched = Number(item.CurrentEpisode || item.currentEpisode || 0) || 0;
         var available = Number(item.LastEpisode || item.lastEpisode || 0) || 0;
         var actions = [];
@@ -178,14 +195,15 @@
         });
 
         actions.push({
-            title: 'Удалить подписку',
+            title: 'Отписаться от озвучки',
+            subtitle: voice + (isSerial ? (' · ' + season + ' сезон') : ''),
             onclick: function () {
                 if (!id) return;
                 request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
-                    notify('Подписка удалена');
-                    refreshPage();
+                    notify('Вы отписались · ' + voice + (isSerial ? (' · ' + season + ' сезон') : ''));
+                    refreshAfterSubscriptionChange();
                 }, function () {
-                    notify('Не удалось удалить подписку');
+                    notify('Не удалось отписаться · ' + voice);
                 });
             }
         });

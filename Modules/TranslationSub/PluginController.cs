@@ -25,13 +25,13 @@ public class TranslationSubPluginController : BaseController
         AppendScript(ref script, "translationsub-page.js");
         AppendScript(ref script, "translationsub-watch.js");
         AppendScript(ref script, "translationsub-ui.js");
-        AppendScript(ref script, "translationsub-card.js");
         AppendScript(ref script, "translationsub-source.js");
         AppendScript(ref script, "translationsub-notice.js");
         AppendScript(ref script, "translationsub-mobile.js");
         AppendScript(ref script, "translationsub-polish.js");
         AppendScript(ref script, "translationsub-settings-v2.js");
         AppendScript(ref script, "translationsub-tmdb-ui.js");
+        AppendScript(ref script, "translationsub-card-flow.js");
 
         Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
         return Content(script, "application/javascript; charset=utf-8");
