@@ -54,26 +54,36 @@ public static class TranslationSubscriptionService
                     try
                     {
                         var settings = TranslationSettingsStore.Get(sub.UserKey);
-                        bool smartTmdb = settings.UseTmdbSchedule && sub.IsSerial && IsTmdbId(sub.TmdbId);
+                        bool smartTmdb = settings.UseTmdbSchedule && sub.IsSerial
+                            && (IsTmdbId(sub.TmdbId) || IsImdbId(sub.ImdbId));
                         TmdbScheduleSnapshot tmdb = null;
 
                         if (smartTmdb)
                         {
+                            string identityKey = TmdbCacheKey(sub);
+
                             // If another subscription for the same show refreshed TMDB in
                             // this tick, reuse it. This is important when several voices are
                             // subscribed for the same series.
-                            if (tmdbCache.TryGetValue(sub.TmdbId, out tmdb))
+                            if (!string.IsNullOrWhiteSpace(identityKey)
+                                && tmdbCache.TryGetValue(identityKey, out tmdb))
                             {
                                 ApplyTmdbState(sub.Id, tmdb, settings, now);
                                 CopyTmdbState(sub, tmdb, settings, now);
                                 HandleNewSeason(sub, tmdb, settings, now);
                             }
-                            else if (ShouldRefreshTmdb(sub, settings, now))
+                            else if (force || ShouldRefreshTmdb(sub, settings, now))
                             {
-                                tmdb = await TmdbScheduleService.Get(sub.TmdbId).ConfigureAwait(false);
+                                tmdb = await TmdbScheduleService.Get(sub.TmdbId, sub.ImdbId).ConfigureAwait(false);
                                 if (tmdb != null)
                                 {
-                                    tmdbCache[sub.TmdbId] = tmdb;
+                                    string resolvedTmdbKey = "tmdb:" + tmdb.TmdbId;
+                                    tmdbCache[resolvedTmdbKey] = tmdb;
+                                    if (IsImdbId(tmdb.ImdbId))
+                                        tmdbCache["imdb:" + tmdb.ImdbId.ToLowerInvariant()] = tmdb;
+                                    if (!string.IsNullOrWhiteSpace(identityKey))
+                                        tmdbCache[identityKey] = tmdb;
+
                                     ApplyTmdbState(sub.Id, tmdb, settings, now);
                                     CopyTmdbState(sub, tmdb, settings, now);
                                     HandleNewSeason(sub, tmdb, settings, now);
@@ -213,6 +223,23 @@ public static class TranslationSubscriptionService
     static bool IsTmdbId(string value)
         => long.TryParse(value, out long id) && id > 0;
 
+    static bool IsImdbId(string value)
+    {
+        value = (value ?? string.Empty).Trim();
+        return value.StartsWith("tt", StringComparison.OrdinalIgnoreCase)
+            && long.TryParse(value.Substring(2), out long id)
+            && id > 0;
+    }
+
+    static string TmdbCacheKey(TranslationSubscription sub)
+    {
+        if (IsImdbId(sub.ImdbId))
+            return "imdb:" + sub.ImdbId.Trim().ToLowerInvariant();
+        if (IsTmdbId(sub.TmdbId))
+            return "tmdb:" + sub.TmdbId.Trim();
+        return string.Empty;
+    }
+
     static bool ShouldRefreshTmdb(TranslationSubscription sub, TranslationUserSettings settings, DateTime now)
     {
         if (!sub.TmdbLastSyncedAt.HasValue)
@@ -297,6 +324,9 @@ public static class TranslationSubscriptionService
             int season = current.CurrentSeason.GetValueOrDefault(1);
             int expected = ExpectedAiredEpisode(tmdb, season, now);
 
+            current.TmdbId = tmdb.TmdbId;
+            if (string.IsNullOrWhiteSpace(current.ImdbId) && IsImdbId(tmdb.ImdbId))
+                current.ImdbId = tmdb.ImdbId;
             current.TmdbStatus = tmdb.Status;
             current.TmdbLastSeason = tmdb.LastSeason > 0 ? tmdb.LastSeason : null;
             current.TmdbLastEpisode = tmdb.LastEpisode > 0 ? tmdb.LastEpisode : null;
@@ -320,6 +350,9 @@ public static class TranslationSubscriptionService
         int season = sub.CurrentSeason.GetValueOrDefault(1);
         int expected = ExpectedAiredEpisode(tmdb, season, now);
 
+        sub.TmdbId = tmdb.TmdbId;
+        if (string.IsNullOrWhiteSpace(sub.ImdbId) && IsImdbId(tmdb.ImdbId))
+            sub.ImdbId = tmdb.ImdbId;
         sub.TmdbStatus = tmdb.Status;
         sub.TmdbLastSeason = tmdb.LastSeason > 0 ? tmdb.LastSeason : null;
         sub.TmdbLastEpisode = tmdb.LastEpisode > 0 ? tmdb.LastEpisode : null;
@@ -344,6 +377,7 @@ public static class TranslationSubscriptionService
         return new TmdbScheduleSnapshot
         {
             TmdbId = sub.TmdbId,
+            ImdbId = sub.ImdbId,
             Status = sub.TmdbStatus,
             LastSeason = sub.TmdbLastSeason.GetValueOrDefault(0),
             LastEpisode = sub.TmdbLastEpisode.GetValueOrDefault(0),
