@@ -33,7 +33,6 @@
             '.translationsub-card__unsubscribe--busy{opacity:.48;pointer-events:none}' +
             '.translationsub-card--removing{opacity:.45;transform:scale(.985)!important;transition:opacity .18s,transform .18s}' +
             '.translationsub-tmdb-v2__state{padding-right:7.2em}' +
-            '.translationsub-notice__empty .notice__time{display:none!important}' +
             '@media(max-width:700px){' +
                 '.translationsub-card__unsubscribe{' +
                     'right:.48em;bottom:.45em;width:2.45em;min-width:2.45em;height:2.45em;padding:0;border-radius:.62em;' +
@@ -41,7 +40,6 @@
                 '.translationsub-card__unsubscribe span{display:none}' +
                 '.translationsub-tmdb-v2__state{padding-right:3.1em}' +
             '}';
-
         (document.head || document.documentElement).appendChild(style);
     }
 
@@ -52,24 +50,6 @@
         } catch (e) {
             return '';
         }
-    }
-
-    function storageGet(name, fallback) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
-                return Lampa.Storage.get(name, fallback);
-        } catch (e) {}
-
-        try {
-            var value = localStorage.getItem(name);
-            return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
-    }
-
-    function userKey() {
-        return String(storageGet('client_uid', '') || storageGet('lampac_unic_id', '') || 'local');
     }
 
     function notify(text) {
@@ -105,6 +85,7 @@
         try {
             var xhr = new XMLHttpRequest();
             xhr.open(method, url, true);
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) return;
                 if (xhr.status >= 200 && xhr.status < 300) success({});
@@ -134,19 +115,13 @@
 
     function refreshAfterChange() {
         try {
-            if (typeof window.TranslationSubPageRefresh === 'function')
-                window.TranslationSubPageRefresh();
+            if (typeof window.TranslationSubPageRefresh === 'function') window.TranslationSubPageRefresh();
         } catch (e) {}
-
-        try {
-            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.refresh === 'function')
-                window.TranslationSubNotice.refresh();
-        } catch (e2) {}
 
         try {
             if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
                 window.TranslationSubBadgeState.refresh();
-        } catch (e3) {}
+        } catch (e2) {}
     }
 
     function removeSubscription(item, card, action) {
@@ -164,10 +139,7 @@
             delete busy[id];
             card.addClass('translationsub-card--removing');
             notify('Вы отписались · ' + voice + (isSerial ? (' · ' + season + ' сезон') : ''));
-
-            setTimeout(function () {
-                refreshAfterChange();
-            }, 140);
+            setTimeout(refreshAfterChange, 140);
         }, function () {
             delete busy[id];
             action.removeClass('translationsub-card__unsubscribe--busy');
@@ -201,10 +173,7 @@
             }
 
             action.off('.translationsubUnsubscribe');
-            action.on('click.translationsubUnsubscribe', function (event) {
-                event.stopPropagation();
-            });
-            action.on('hover:focus.translationsubUnsubscribe', function (event) {
+            action.on('click.translationsubUnsubscribe hover:focus.translationsubUnsubscribe', function (event) {
                 event.stopPropagation();
             });
             action.on('hover:enter.translationsubUnsubscribe', function (event) {
@@ -220,40 +189,25 @@
 
         var source = window.TranslationSubCardSource;
         var original = source.bindPage;
-
         source.bindPage = function (root, list) {
             var result = original.apply(source, arguments);
             decorate(root, list);
             return result;
         };
-
         source.bindPage.__translationsubCardActionsPatched = true;
         patched = true;
         return true;
     }
 
-    function decorateExisting() {
-        if (typeof $ !== 'function' || !$('.translationsub-page').length) return;
-
-        request('GET', '/translationsub/list?userKey=' + encodeURIComponent(userKey()), function (list) {
-            decorate($('.translationsub-page').first(), Array.isArray(list) ? list : []);
-        });
-    }
-
     function start() {
         injectStyles();
 
+        if (patchSource()) return;
         var attempts = 0;
         var wait = setInterval(function () {
             attempts++;
-            if (patchSource() || attempts > 40) {
-                clearInterval(wait);
-                decorateExisting();
-            }
+            if (patchSource() || attempts > 40) clearInterval(wait);
         }, 100);
-
-        patchSource();
-        decorateExisting();
     }
 
     if (window.Lampa) start();
@@ -264,7 +218,9 @@
             if (window.Lampa) {
                 clearInterval(wait);
                 start();
-            } else if (attempts > 80) clearInterval(wait);
+            } else if (attempts > 80) {
+                clearInterval(wait);
+            }
         }, 250);
     }
 })();
