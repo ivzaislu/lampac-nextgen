@@ -10,7 +10,6 @@
         var style = document.createElement('style');
         style.id = 'translationsub-polish-style';
         style.textContent =
-            /* Шторка уведомлений в том же стиле, что и страница озвучек. */
             '.translationsub-notice .notice[data-translationsub-update]{' +
                 'position:relative;border:1px solid rgba(255,132,70,.32);border-radius:.8em;' +
                 'background:linear-gradient(110deg,rgba(255,126,61,.10),rgba(255,255,255,.035));overflow:hidden;' +
@@ -36,32 +35,18 @@
             '.translationsub-notice .notice[data-translationsub-update].focus .notice__time{background:#e9632c;color:#fff}' +
             '.translationsub-notice .notice[data-translationsub-update].focus .notice__descr>div:first-child{background:rgba(0,0,0,.07)}' +
             '.translationsub-notice .notice[data-translationsub-update].focus .notice__descr>div:nth-child(2){color:#b85020}' +
-
-            /* Верх страницы занимает место старого дублирующего заголовка. */
-            '.translationsub-page__top{display:flex;align-items:center;justify-content:flex-start;gap:.7em 1em;flex-wrap:wrap;margin:0 0 1.15em}' +
+            '.translationsub-page__top{' +
+                'display:flex;align-items:center;justify-content:flex-start;gap:.7em 1em;flex-wrap:wrap;margin:0 0 1.15em;' +
+            '}' +
             '.translationsub-page__top .translationsub-summary-v2{margin:0!important}' +
             '.translationsub-page__top .translationsub-toolbar{margin:0!important}' +
             '.translationsub-page__top .translationsub-toolbar__item{margin:0!important}' +
-
-            /* Иконка раздела настроек в стиле системных outline-иконок Lampa. */
-            '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
-                'width:1.2em!important;height:1.2em!important;display:block!important;fill:none!important;' +
-            '}' +
-            '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell path{' +
-                'stroke:#fff!important;fill:none!important;' +
-            '}' +
-            '.settings-folder[data-component="translationsub_settings"].focus .translationsub-settings-bell path{' +
-                'stroke:#111!important;' +
-            '}' +
-            '.settings-folder[data-component="translationsub_balancers"]{display:none!important}' +
-
             '@media(max-width:700px){' +
                 '.translationsub-notice .notice[data-translationsub-update]{border-radius:.7em}' +
                 '.translationsub-notice .notice[data-translationsub-update] .notice__time{font-size:.74em}' +
                 '.translationsub-page__top{align-items:flex-start;gap:.65em;margin-bottom:.9em}' +
                 '.translationsub-page__top .translationsub-toolbar{width:100%}' +
             '}';
-
         (document.head || document.documentElement).appendChild(style);
     }
 
@@ -99,7 +84,7 @@
     function wrapUiRefresh() {
         try {
             var ui = window.TranslationSubUi;
-            if (!ui || typeof ui.refresh !== 'function' || ui.__translationsubPolished) return;
+            if (!ui || typeof ui.refresh !== 'function' || ui.__translationsubPolished) return false;
 
             var original = ui.refresh;
             ui.refresh = function () {
@@ -107,46 +92,28 @@
                 cleanPages();
             };
             ui.__translationsubPolished = true;
-        } catch (e) {}
-    }
-
-    function renameMenuItem() {
-        if (typeof $ !== 'function') return;
-        $('.translationsub-menu-item .menu__text').text('Озвучки');
-    }
-
-    function scheduleUiPatch() {
-        [0, 120, 400, 1000, 2500].forEach(function (delay) {
-            setTimeout(function () {
-                wrapUiRefresh();
-                cleanPages();
-                renameMenuItem();
-            }, delay);
-        });
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     function start() {
         injectStyles();
-        scheduleUiPatch();
 
-        try {
-            if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') scheduleUiPatch();
-                });
-            }
-        } catch (e) {}
-    }
-
-    if (window.Lampa) start();
-    else {
         var attempts = 0;
         var wait = setInterval(function () {
             attempts++;
-            if (window.Lampa) {
+            if (wrapUiRefresh() || attempts > 20) {
                 clearInterval(wait);
-                start();
-            } else if (attempts > 80) clearInterval(wait);
-        }, 250);
+                cleanPages();
+            }
+        }, 100);
+
+        wrapUiRefresh();
+        cleanPages();
     }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
 })();
