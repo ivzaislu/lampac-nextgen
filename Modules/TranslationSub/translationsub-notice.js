@@ -4,8 +4,6 @@
     if (window.__TranslationSubNoticeStarted) return;
     window.__TranslationSubNoticeStarted = true;
 
-    var refreshTimer = null;
-    var bindTimer = null;
     var lastUpdates = [];
 
     function storageGet(name, fallback) {
@@ -41,14 +39,15 @@
         var url = host() + path;
 
         if (typeof fetch === 'function') {
-            fetch(url, { method: 'GET' })
+            fetch(url, { method: 'GET', cache: 'no-store' })
                 .then(function (response) {
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     return response.text();
                 })
                 .then(function (text) {
-                    try { success(text ? JSON.parse(text) : []); }
-                    catch (e) { success([]); }
+                    var data = [];
+                    try { data = text ? JSON.parse(text) : []; } catch (e) {}
+                    success(Array.isArray(data) ? data : []);
                 })
                 .catch(error);
             return;
@@ -57,11 +56,13 @@
         try {
             var xhr = new XMLHttpRequest();
             xhr.open('GET', url, true);
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) return;
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    try { success(xhr.responseText ? JSON.parse(xhr.responseText) : []); }
-                    catch (e) { success([]); }
+                    var data = [];
+                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : []; } catch (e) {}
+                    success(Array.isArray(data) ? data : []);
                 } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
@@ -97,8 +98,7 @@
 
     function openSubscriptionsPage() {
         try {
-            if (Lampa.Modal && typeof Lampa.Modal.close === 'function' && Lampa.Modal.opened && Lampa.Modal.opened())
-                Lampa.Modal.close();
+            if (Lampa.Modal && typeof Lampa.Modal.close === 'function') Lampa.Modal.close();
         } catch (e) {}
 
         if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
@@ -119,11 +119,10 @@
         } catch (e) {}
 
         var id = String(value(item, 'TmdbId', 'tmdbId', value(item, 'ContentId', 'contentId', '')) || '').trim();
-        if (!id || !window.Lampa || !Lampa.Activity) return;
+        if (!id || !window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
 
         var source = String(storageGet('translationsub_card_source', 'tmdb') || 'tmdb').toLowerCase() === 'cub' ? 'cub' : 'tmdb';
         var numericId = /^\d+$/.test(id) ? Number(id) : id;
-
         Lampa.Activity.push({
             url: '',
             component: 'full',
@@ -140,7 +139,6 @@
         var style = document.createElement('style');
         style.id = 'translationsub-notice-style';
         style.textContent =
-            '.translationsub-menu-badge{margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;background:#e45e2c;color:#fff;font-size:.7em;font-weight:700;display:flex;align-items:center;justify-content:center;box-sizing:border-box}' +
             '.translationsub-notice .notice{margin-bottom:.55em}' +
             '.translationsub-notice .notice:last-child{margin-bottom:0}' +
             '.translationsub-notice .notice__descr{line-height:1.45}' +
@@ -148,49 +146,17 @@
             '.translationsub-notice .notice__footer>div{padding:.22em .45em;border-radius:.35em;background:rgba(255,255,255,.08);font-size:.84em;opacity:.78}' +
             '.translationsub-notice .notice.focus .notice__footer>div{background:rgba(0,0,0,.08)}' +
             '.translationsub-notice__empty{padding:1.1em 0;opacity:.72}' +
-            '.translationsub-menu-item .menu__ico svg{width:100%;height:100%;fill:currentColor}';
-
+            '.translationsub-notice__empty .notice__time{display:none!important}';
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function updateBadges(count) {
-        count = Number(count) || 0;
-
-        try {
-            var headBadge = $('.translationsub-head .translationsub-badge').first();
-            if (!headBadge.length && count > 0) {
-                headBadge = $('<div class="translationsub-badge"></div>');
-                $('.translationsub-head').first().append(headBadge);
-            }
-
-            if (headBadge.length) {
-                if (count > 0) headBadge.text(count > 99 ? '99+' : String(count)).show();
-                else headBadge.hide();
-            }
-        } catch (e) {}
-
-        try {
-            var menuBadge = $('.translationsub-menu-item .translationsub-menu-badge').first();
-            if (!menuBadge.length && count > 0) {
-                menuBadge = $('<div class="translationsub-menu-badge"></div>');
-                $('.translationsub-menu-item').first().append(menuBadge);
-            }
-
-            if (menuBadge.length) {
-                if (count > 0) menuBadge.text(count > 99 ? '99+' : String(count)).show();
-                else menuBadge.hide();
-            }
-        } catch (e2) {}
-    }
-
     function loadUpdates(done) {
-        request('/translationsub/updates?userKey=' + encodeURIComponent(userKey()), function (updates) {
-            updates = Array.isArray(updates) ? updates : [];
+        done = typeof done === 'function' ? done : function () {};
+        request('/translationsub/updates?userKey=' + encodeURIComponent(userKey()) + '&force=false', function (updates) {
             lastUpdates = updates;
-            updateBadges(updates.length);
             done(updates);
         }, function () {
-            done(lastUpdates || []);
+            done(lastUpdates.slice());
         });
     }
 
@@ -211,7 +177,6 @@
                 if (name && names.indexOf(name) === -1) names.push(name);
             });
         }
-
         return names;
     }
 
@@ -277,13 +242,11 @@
 
         item.addClass('image--icon image--loaded translationsub-notice__empty');
         item.attr('data-translationsub-empty', '1');
+        item.find('.notice__time').remove();
         item.find('.notice__title').text('Новых серий пока нет');
         item.find('.notice__descr').text('Когда в выбранной озвучке появится продолжение, оно будет показано здесь.');
 
-        try {
-            item.find('.notice__img').html(Lampa.Template.string('icon_bell_plus'));
-        } catch (e2) {}
-
+        try { item.find('.notice__img').html(Lampa.Template.string('icon_bell_plus')); } catch (e2) {}
         return item;
     }
 
@@ -291,7 +254,6 @@
         try {
             if (Lampa.Modal && typeof Lampa.Modal.close === 'function') Lampa.Modal.close();
         } catch (e) {}
-
         try { Lampa.Controller.toggle('head'); } catch (e2) {}
     }
 
@@ -303,32 +265,23 @@
 
         loadUpdates(function (updates) {
             var html = $('<div class="translationsub-notice"></div>');
-
             if (updates.length) {
-                updates.forEach(function (item, index) {
-                    html.append(noticeCard(item, index));
-                });
+                updates.forEach(function (item, index) { html.append(noticeCard(item, index)); });
             } else {
                 html.append(emptyCard());
             }
 
             var first = html.find('.selector').first()[0];
-
             Lampa.Modal.open({
                 title: 'Уведомления озвучек',
                 size: 'medium',
                 html: html,
                 select: first,
                 scroll_to_center: true,
-                buttons: [
-                    {
-                        name: 'Все подписки на озвучки',
-                        onSelect: function () {
-                            try { Lampa.Modal.close(); } catch (e) {}
-                            openSubscriptionsPage();
-                        }
-                    }
-                ],
+                buttons: [{
+                    name: 'Все подписки на озвучки',
+                    onSelect: openSubscriptionsPage
+                }],
                 buttons_position: 'inside',
                 onSelect: function (selected) {
                     var node = $(selected);
@@ -343,89 +296,19 @@
         });
     }
 
-    function menuIcon() {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"/></svg>';
-    }
-
-    function addMenuItem() {
-        if (typeof $ !== 'function') return;
-
-        var menu = $('.menu .menu__list').eq(0);
-        if (!menu.length || menu.find('.translationsub-menu-item').length) return;
-
-        var button = $('<li class="menu__item selector translationsub-menu-item" data-action="translationsub">' +
-            '<div class="menu__ico">' + menuIcon() + '</div>' +
-            '<div class="menu__text">Подписки на озвучки</div>' +
-        '</li>');
-
-        button.on('hover:enter', function () {
-            openSubscriptionsPage();
+    function refresh(done) {
+        loadUpdates(function (updates) {
+            if (typeof done === 'function') done(updates);
         });
-
-        var anchor = menu.find('[data-action="subscribes"]').last();
-        if (!anchor.length) anchor = menu.find('[data-action="timetable"]').last();
-        if (!anchor.length) anchor = menu.find('[data-action="history"]').last();
-
-        if (anchor.length) anchor.after(button);
-        else menu.append(button);
-
-        updateBadges(lastUpdates.length);
-    }
-
-    function bindHeadButton() {
-        if (typeof $ !== 'function') return;
-        var button = $('.translationsub-head').first();
-        if (!button.length) return;
-
-        if (button.attr('data-translationsub-notice-bound') === '1') return;
-
-        button.off('hover:enter');
-        button.on('hover:enter.translationsubNotice', openDrawer);
-        button.attr('data-translationsub-notice-bound', '1');
-        button.attr('title', 'Уведомления озвучек');
-    }
-
-    function bindUi() {
-        clearTimeout(bindTimer);
-        bindTimer = setTimeout(function () {
-            addMenuItem();
-            bindHeadButton();
-        }, 80);
-    }
-
-    function refresh() {
-        loadUpdates(function () {});
-        bindUi();
     }
 
     function start() {
         addStyles();
-        bindUi();
-        refresh();
-
-        try {
-            if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') {
-                        bindUi();
-                        setTimeout(refresh, 1200);
-                    }
-                });
-            }
-        } catch (e) {}
-
-        try {
-            var observer = new MutationObserver(function () { bindUi(); });
-            observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        } catch (e2) {}
-
-        if (refreshTimer) clearInterval(refreshTimer);
-        refreshTimer = setInterval(refresh, 60 * 1000);
-
         window.TranslationSubNotice = {
             open: openDrawer,
             refresh: refresh,
-            openPage: openSubscriptionsPage
+            openPage: openSubscriptionsPage,
+            updates: function () { return lastUpdates.slice(); }
         };
     }
 
