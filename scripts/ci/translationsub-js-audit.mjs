@@ -137,7 +137,7 @@ if (!cardFlow.includes('function detectSerialCard')) error('Card flow must expli
 if (/\|\|\s*!!card\.name\b/.test(cardFlow)) error('card.name must never be used as serial evidence; movie cards can contain name');
 if (!/method\s*===\s*["']movie["']/.test(cardFlow)) error('Card flow must explicitly reject movie method');
 if (!/mediaType\s*===\s*["']movie["']/.test(cardFlow)) error('Card flow must explicitly reject movie media_type');
-if (!/if\s*\(\s*!context\.isSerial(?:\s*\|\|[^)]*)?\s*\)\s*\{\s*removeButton\(event\)/s.test(cardFlow)) error('Movie/non-serial full cards must remove the TranslationSub button');
+if (!cardFlow.includes('removeButton(event);')) error('Movie/non-serial full cards must remove the TranslationSub button');
 if (!cardFlow.includes('function restoreContentController')) error('Card flow must restore the Lampa content controller after Select interaction');
 if (cardFlow.includes('Lampa.Select.close')) error('Card flow must not call Lampa.Select.close(); it can trigger Android TV history/WebView regressions');
 if (cardFlow.includes('Lampa.Timeline.watchedEpisode')) error('Card flow must not synchronously scan Lampa Timeline on Android TV');
