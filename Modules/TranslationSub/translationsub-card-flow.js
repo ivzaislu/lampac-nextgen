@@ -32,6 +32,7 @@
     var lastEvent = null;
     var applyTimer = null;
     var busy = false;
+    var flowToken = 0;
 
     function storageGet(name, fallback) {
         try {
@@ -193,12 +194,39 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
+    function lower(value) {
+        return String(value || '').toLowerCase().trim();
+    }
+
+    function detectSerialCard(object, card) {
+        object = object || {};
+        card = card || {};
+
+        var method = lower(object.method || card.method);
+        var mediaType = lower(object.media_type || card.media_type || object.type || card.type);
+
+        if (method === 'movie' || method === 'film' || mediaType === 'movie' || mediaType === 'film') return false;
+        if (method === 'tv' || method === 'serial' || mediaType === 'tv' || mediaType === 'serial') return true;
+
+        if (card.first_air_date) return true;
+        if (Number(card.number_of_seasons || card.seasons_count || 0) > 0) return true;
+        if (card.last_episode_to_air || card.next_episode_to_air) return true;
+        if (Array.isArray(card.seasons)) {
+            for (var i = 0; i < card.seasons.length; i++) {
+                var season = card.seasons[i] || {};
+                if (Number(season.season_number !== undefined ? season.season_number : season.number) > 0) return true;
+            }
+        }
+
+        if (card.release_date || card.original_title) return false;
+        return !!(card.original_name && !card.title);
+    }
+
     function normalizeFull(object) {
         object = object || {};
         var card = object.movie || object.card || object.data || object;
-        var method = object.method || card.method || '';
-        var source = String(object.source || card.source || card.card_source || '').toLowerCase();
-        var isSerial = method === 'tv' || method === 'serial' || !!card.first_air_date || !!card.name || !!card.number_of_seasons;
+        var source = lower(object.source || card.source || card.card_source);
+        var isSerial = detectSerialCard(object, card);
         var explicitTmdbId = card.tmdb_id || card.tmdbId || '';
         var cardId = card.id || object.id || '';
         var tmdbId = explicitTmdbId || ((source && source !== 'tmdb' && source !== 'themoviedb') ? '' : cardId);
@@ -206,7 +234,7 @@
         var imdbId = card.imdb_id || card.imdbId || (card.external_ids && card.external_ids.imdb_id) || '';
         var title = card.title || card.name || object.title || '';
         var originalTitle = card.original_title || card.original_name || '';
-        var date = card.release_date || card.first_air_date || '';
+        var date = card.first_air_date || card.release_date || '';
         var year = date && String(date).length >= 4 ? String(date).slice(0, 4) : (card.year || '');
         var poster = card.poster_path || card.poster || card.img || card.image || '';
         var contentId = card.content_id || card.contentId || tmdbId || kpId || imdbId || cardId || title || '';
@@ -228,12 +256,12 @@
     }
 
     function ensureExternalIds(context, done) {
-        if (!context) return done(context);
+        if (!context || !context.isSerial) return done(context);
         if (context.tmdbId && context.kpId && context.imdbId) return done(context);
 
         request('GET', API.externalids, {
             id: context.tmdbId || context.contentId,
-            serial: context.isSerial ? 1 : 0,
+            serial: 1,
             imdb_id: context.imdbId,
             kinopoisk_id: context.kpId,
             account_email: storageGet('account_email', ''),
@@ -269,7 +297,7 @@
     }
 
     function sourceName(source) {
-        source = String(source || '').toLowerCase();
+        source = lower(source);
         return SOURCE_NAMES[source] || source || 'Источник';
     }
 
@@ -380,9 +408,9 @@
         });
 
         var preferred = lastWatchedSeason;
-        if (!preferred) {
+        if (!preferred)
             preferred = Number(context.card && context.card.last_episode_to_air && context.card.last_episode_to_air.season_number || 0) || 0;
-        }
+
         if (!preferred) {
             var now = Date.now ? Date.now() : new Date().getTime();
             for (var i = 0; i < seasons.length; i++) {
@@ -393,18 +421,56 @@
                 }
             }
         }
+
         if (!preferred) preferred = seasons[0].number || 1;
         return { seasons: seasons, watched: watched, preferredSeason: preferred };
     }
 
-    function closeSelect() {
+    function activeComponent() {
+        try {
+            if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.active !== 'function') return '';
+            var active = Lampa.Activity.active() || {};
+            return lower(active.component ||
+                (active.object && active.object.component) ||
+                (active.activity && active.activity.component) || '');
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function isFullActive() {
+        var component = activeComponent();
+        if (component) return component === 'full';
+        try {
+            return typeof $ === 'function' && $('.full-start:visible,.full-start-new:visible').length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function validFlow(token) {
+        return token === flowToken && isFullActive();
+    }
+
+    function restoreContentController() {
+        setTimeout(function () {
+            try {
+                if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function')
+                    Lampa.Controller.toggle('content');
+            } catch (e) {}
+        }, 0);
+    }
+
+    function closeSelectAndRestore() {
         try {
             if (window.Lampa && Lampa.Select && typeof Lampa.Select.close === 'function') Lampa.Select.close();
         } catch (e) {}
+        restoreContentController();
     }
 
-    function showSelect(title, items, onBack) {
+    function showSelect(title, items, token) {
         items = items || [];
+        if (!validFlow(token)) return;
         if (!items.length) return notify('Нечего показывать');
         if (!window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return notify(title);
 
@@ -412,15 +478,16 @@
             title: title,
             items: items,
             onSelect: function (item) {
-                closeSelect();
-                if (item && typeof item.onclick === 'function') item.onclick();
+                closeSelectAndRestore();
+                if (item && typeof item.onclick === 'function') {
+                    setTimeout(function () {
+                        if (token === flowToken) item.onclick();
+                    }, 0);
+                }
             },
             onBack: function () {
-                closeSelect();
-                if (typeof onBack === 'function') onBack();
-                else {
-                    try { Lampa.Controller.toggle('content'); } catch (e) {}
-                }
+                flowToken++;
+                closeSelectAndRestore();
             }
         });
     }
@@ -441,15 +508,11 @@
             imdbId: context.imdbId,
             tmdbId: context.tmdbId,
             year: context.year,
-            isSerial: context.isSerial,
-            season: context.isSerial ? Number(season || 0) : 0,
-            serial: context.isSerial,
+            isSerial: true,
+            season: Number(season || 0),
+            serial: true,
             sources: enabledSources().join(',')
         }, null, success, error);
-    }
-
-    function actionSuffix(context, season) {
-        return context.isSerial ? (' · ' + Number(season || 1) + ' сезон') : '';
     }
 
     function refreshState() {
@@ -492,18 +555,18 @@
             tmdbId: context.tmdbId,
             poster: context.poster,
             year: context.year,
-            isSerial: context.isSerial,
+            isSerial: true,
             source: mainSource,
             translationId: voiceId(variant),
             translationName: voiceName(variant),
-            currentSeason: String(context.isSerial ? Number(season || 1) : 1),
+            currentSeason: String(Number(season || 1)),
             currentEpisode: String(latestEpisode),
             availableEpisode: String(latestEpisode),
             watchedEpisode: String(watched),
             sources: bodySources
         }, function () {
             busy = false;
-            notify('Подписка оформлена · ' + voiceName(variant) + actionSuffix(context, season));
+            notify('Подписка оформлена · ' + voiceName(variant) + ' · ' + Number(season || 1) + ' сезон');
             refreshState();
         }, function () {
             busy = false;
@@ -519,7 +582,7 @@
 
         request('POST', API.remove, { id: id }, null, function () {
             busy = false;
-            notify('Вы отписались · ' + voiceName(variant) + actionSuffix(context, season));
+            notify('Вы отписались · ' + voiceName(variant) + ' · ' + Number(season || 1) + ' сезон');
             refreshState();
         }, function () {
             busy = false;
@@ -527,19 +590,24 @@
         });
     }
 
-    function openVoices(context, season) {
+    function openVoices(context, season, token) {
+        if (!context || !context.isSerial || !validFlow(token)) return;
         season = Number(season || 1) || 1;
+
         loadSubscriptions(function (subscriptions) {
+            if (!validFlow(token)) return;
+
             loadVariants(context, season, function (response) {
+                if (!validFlow(token)) return;
+
                 var variants = response.Translations || response.translations || [];
                 variants = Array.isArray(variants) ? variants.slice() : [];
-                if (context.isSerial) {
-                    variants = variants.filter(function (variant) {
-                        return Number(variant.season || season || 1) === season;
-                    });
-                }
+                variants = variants.filter(function (variant) {
+                    return Number(variant.season || season || 1) === season;
+                });
+
                 if (!variants.length) {
-                    notify(context.isSerial ? ('Озвучки для ' + season + ' сезона пока не найдены') : 'Озвучки пока не найдены');
+                    notify('Озвучки для ' + season + ' сезона пока не найдены');
                     return;
                 }
 
@@ -558,7 +626,7 @@
                     var subtitle = [];
 
                     if (existing) subtitle.push('Подписка активна · нажмите, чтобы отписаться');
-                    else if (context.isSerial && latest > 0) subtitle.push('Доступно до ' + latest + ' серии');
+                    else if (latest > 0) subtitle.push('Доступно до ' + latest + ' серии');
                     else subtitle.push('Нажмите, чтобы подписаться');
                     if (sources) subtitle.push(sources);
                     if (quality) subtitle.push(quality);
@@ -574,18 +642,22 @@
                     };
                 });
 
-                showSelect(context.isSerial ? ('Озвучки · ' + season + ' сезон') : 'Озвучки', items);
-            }, function () { notify('Не удалось загрузить список озвучек'); });
-        }, function () { notify('Не удалось загрузить ваши подписки'); });
+                showSelect('Озвучки · ' + season + ' сезон', items, token);
+            }, function () {
+                if (validFlow(token)) notify('Не удалось загрузить список озвучек');
+            });
+        }, function () {
+            if (validFlow(token)) notify('Не удалось загрузить ваши подписки');
+        });
     }
 
-    function openSeasonMenu(context) {
-        if (!context.isSerial) return openVoices(context, 1);
-        if (context.season > 0) return openVoices(context, context.season);
+    function openSeasonMenu(context, token) {
+        if (!context || !context.isSerial || !validFlow(token)) return;
+        if (context.season > 0) return openVoices(context, context.season, token);
 
         var progress = seasonProgress(context);
         var seasons = progress.seasons;
-        if (seasons.length === 1) return openVoices(context, seasons[0].number);
+        if (seasons.length === 1) return openVoices(context, seasons[0].number, token);
 
         var items = seasons.map(function (season) {
             var watched = Number(progress.watched[season.number] || 0);
@@ -598,20 +670,23 @@
                 title: season.number + ' сезон',
                 subtitle: subtitle,
                 selected: season.number === progress.preferredSeason,
-                onclick: function () { openVoices(context, season.number); }
+                onclick: function () { openVoices(context, season.number, token); }
             };
         });
-        showSelect('Выберите сезон', items);
+
+        showSelect('Выберите сезон', items, token);
     }
 
     function openForItem(object) {
         var context = object && object.card && object.contentId ? object : normalizeFull(object || {});
-        if (!context.contentId && !context.title) return notify('Не удалось определить карточку');
+        if (!context.isSerial) return;
+        if (!context.contentId && !context.title) return notify('Не удалось определить карточку сериала');
         if (!enabledSources().length) return notify('Включите хотя бы один балансер в настройках');
 
+        var token = ++flowToken;
         ensureExternalIds(context, function (resolved) {
-            if (!resolved) return notify('Не удалось подготовить карточку');
-            openSeasonMenu(resolved);
+            if (!resolved || !validFlow(token)) return;
+            openSeasonMenu(resolved, token);
         });
     }
 
@@ -626,6 +701,12 @@
             if (!root.length) root = $('.full-start-new').first();
         }
         return root;
+    }
+
+    function removeButton(event) {
+        if (typeof $ !== 'function') return;
+        var root = buttonRoot(event);
+        if (root && root.length) root.find('.translationsub-full-button').remove();
     }
 
     function ensureButton(event) {
@@ -647,7 +728,16 @@
         if (typeof $ !== 'function') return;
         var payload = event && (event.data || event.object) || {};
         var context = normalizeFull(payload);
-        if (!context.contentId && !context.title) return;
+
+        if (!context.isSerial) {
+            removeButton(event);
+            return;
+        }
+
+        if (!context.contentId && !context.title) {
+            removeButton(event);
+            return;
+        }
 
         var button = ensureButton(event);
         if (!button || !button.length) return;
@@ -664,6 +754,7 @@
         });
 
         loadSubscriptions(function (subscriptions) {
+            if (!button.closest('body').length) return;
             var active = subscriptions.some(function (item) { return sameContent(item, context); });
             button.toggleClass('translationsub-full-button--subscribed', active);
             button.attr('title', active ? 'Озвучки · есть активные подписки' : 'Подписки на озвучки');
@@ -690,12 +781,24 @@
 
     function bind() {
         if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
+
         Lampa.Listener.follow('full', function (event) {
-            if (event && event.type === 'complite') scheduleApply(event, 100);
+            if (!event) return;
+            if (event.type === 'complite') {
+                flowToken++;
+                scheduleApply(event, 100);
+            }
+            if (event.type === 'destroy' || event.type === 'close') {
+                flowToken++;
+                clearTimeout(applyTimer);
+            }
         });
+
         try {
             if (Lampa.Timeline && Lampa.Timeline.listener && typeof Lampa.Timeline.listener.follow === 'function') {
-                Lampa.Timeline.listener.follow('update', function () { scheduleApply(lastEvent, 220); });
+                Lampa.Timeline.listener.follow('update', function () {
+                    if (lastEvent) scheduleApply(lastEvent, 220);
+                });
             }
         } catch (e) {}
     }
