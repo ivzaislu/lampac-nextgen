@@ -61,9 +61,7 @@
             '.translationsub-meta-v2__ok{font-size:.94em;opacity:.55}' +
             '.translationsub-card__new{position:absolute;right:.72em!important;top:.72em!important;padding:.36em .58em!important;border-radius:.58em!important;background:#f36f3d!important;color:#fff;font-size:.68em!important;font-weight:700}' +
             '.translationsub-empty{grid-column:1/-1;padding:4em 1.5em!important;border-radius:1em;background:rgba(255,255,255,.045);font-size:1.05em;line-height:1.55}' +
-
             '.translationsub-layout--tv{max-width:none!important;width:100%!important;padding:1.15em 1.4em 3em!important}' +
-            '.translationsub-layout--tv .translationsub-page__title{font-size:1.85em!important}' +
             '.translationsub-layout--tv .translationsub-list{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:.82em 1em!important}' +
             '.translationsub-layout--tv .translationsub-card{min-height:8.8em!important;border-width:2px!important}' +
             '.translationsub-layout--tv .translationsub-card.focus{background:rgba(255,255,255,.16)!important;color:inherit!important;border-color:#fff!important;transform:scale(1.018)!important}' +
@@ -72,17 +70,12 @@
             '.translationsub-layout--tv .translationsub-card__title{font-size:1.08em!important}' +
             '.translationsub-layout--tv .translationsub-card__voice{font-size:.78em!important}' +
             '.translationsub-layout--tv .translationsub-card__meta{font-size:.77em!important;margin-top:.5em!important}' +
-
             '.translationsub-layout--mobile{padding:1em!important;max-width:none!important}' +
-            '.translationsub-layout--mobile .translationsub-page__title{font-size:1.7em!important}' +
             '.translationsub-layout--mobile .translationsub-list{grid-template-columns:1fr!important;gap:.68em!important}' +
             '.translationsub-layout--mobile .translationsub-card{min-height:8.6em!important}' +
             '.translationsub-layout--mobile .translationsub-card__poster{width:5.8em!important;min-width:5.8em!important}' +
             '.translationsub-layout--mobile .translationsub-card__title{font-size:1.05em!important}' +
-            '.translationsub-layout--mobile .translationsub-card__body{padding:.82em!important}' +
-
-            '@media(min-width:1500px){.translationsub-layout--tv .translationsub-list{grid-template-columns:repeat(3,minmax(0,1fr))!important}}';
-
+            '.translationsub-layout--mobile .translationsub-card__body{padding:.82em!important}';
         (document.head || document.documentElement).appendChild(style);
     }
 
@@ -104,7 +97,6 @@
     function enhanceCard(card) {
         var node = $(card);
         if (node.attr('data-translationsub-ui-v2') === '1') return;
-
         var meta = node.find('.translationsub-card__meta').first();
         if (!meta.length) return;
 
@@ -134,7 +126,6 @@
 
         if (source) body += '<div class="translationsub-meta-v2__source">' + $('<div>').text(source).html() + '</div>';
         body += '</div>';
-
         meta.html(body);
         node.attr('data-translationsub-new-count', String(newCount));
         node.attr('data-translationsub-ui-v2', '1');
@@ -156,7 +147,7 @@
         });
 
         var subtitle = root.find('.translationsub-page__subtitle').first();
-        if (subtitle.length) subtitle.text('Прогресс просмотра синхронизируется с Lampa');
+        if (subtitle.length) subtitle.text('Прогресс просмотра синхронизируется с Lampac TimeCode');
 
         var summary = root.find('.translationsub-summary-v2').first();
         if (total > 0 && !summary.length) {
@@ -164,6 +155,9 @@
             summary.append('<div class="translationsub-summary-v2__item"><span class="translationsub-summary-v2__dot"></span><span>Подписок <b class="translationsub-summary-v2__total">' + total + '</b></span></div>');
             summary.append('<div class="translationsub-summary-v2__item translationsub-summary-v2__item--new"><span class="translationsub-summary-v2__dot"></span><span>С новыми сериями <b class="translationsub-summary-v2__new">' + withNew + '</b></span></div>');
             subtitle.after(summary);
+        } else if (summary.length) {
+            summary.find('.translationsub-summary-v2__total').text(total);
+            summary.find('.translationsub-summary-v2__new').text(withNew);
         }
 
         var list = root.find('.translationsub-list').first();
