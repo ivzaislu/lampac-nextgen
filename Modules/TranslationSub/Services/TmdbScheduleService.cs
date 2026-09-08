@@ -10,6 +10,7 @@ namespace TranslationSub.Services;
 public class TmdbScheduleSnapshot
 {
     public string TmdbId { get; set; }
+    public string ImdbId { get; set; }
     public string Status { get; set; }
     public bool InProduction { get; set; }
     public int NumberOfSeasons { get; set; }
@@ -52,14 +53,36 @@ public static class TmdbScheduleService
     static readonly Dictionary<string, (TmdbScheduleSnapshot value, DateTime fetchedAt)> cache = new(StringComparer.OrdinalIgnoreCase);
     static readonly TimeSpan cacheLifetime = TimeSpan.FromMinutes(30);
 
-    public static async Task<TmdbScheduleSnapshot> Get(string tmdbId)
+    public static async Task<TmdbScheduleSnapshot> Get(string tmdbId, string expectedImdbId = null)
     {
-        if (string.IsNullOrWhiteSpace(tmdbId))
-            return null;
+        expectedImdbId = NormalizeImdb(expectedImdbId);
+        TmdbScheduleSnapshot result = null;
 
-        if (!long.TryParse(tmdbId, out long id) || id <= 0)
-            return null;
+        if (long.TryParse(tmdbId, out long id) && id > 0)
+            result = await GetById(id).ConfigureAwait(false);
 
+        // A CUB card may expose its own numeric card.id. If we accidentally
+        // received it as TmdbId, external_ids lets us reject it safely.
+        if (result != null && !string.IsNullOrWhiteSpace(expectedImdbId))
+        {
+            string actualImdb = NormalizeImdb(result.ImdbId);
+            if (!string.IsNullOrWhiteSpace(actualImdb)
+                && !string.Equals(actualImdb, expectedImdbId, StringComparison.OrdinalIgnoreCase))
+                result = null;
+        }
+
+        if (result == null && !string.IsNullOrWhiteSpace(expectedImdbId))
+        {
+            long resolvedId = await FindTvIdByImdb(expectedImdbId).ConfigureAwait(false);
+            if (resolvedId > 0)
+                result = await GetById(resolvedId).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    static async Task<TmdbScheduleSnapshot> GetById(long id)
+    {
         string normalizedId = id.ToString();
         lock (cacheLock)
         {
@@ -75,7 +98,7 @@ public static class TmdbScheduleService
 
         try
         {
-            string url = $"{host}/tv/{id}?api_key={Uri.EscapeDataString(key)}&language=ru-RU";
+            string url = $"{host}/tv/{id}?api_key={Uri.EscapeDataString(key)}&language=ru-RU&append_to_response=external_ids";
             string json = await Http.Get(url, timeoutSeconds: 12).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(json))
                 return null;
@@ -84,6 +107,7 @@ public static class TmdbScheduleService
             var result = new TmdbScheduleSnapshot
             {
                 TmdbId = normalizedId,
+                ImdbId = root["external_ids"]?.Value<string>("imdb_id"),
                 Status = root.Value<string>("status") ?? string.Empty,
                 InProduction = root.Value<bool?>("in_production") ?? false,
                 NumberOfSeasons = root.Value<int?>("number_of_seasons") ?? 0,
@@ -135,6 +159,41 @@ public static class TmdbScheduleService
         {
             return null;
         }
+    }
+
+    static async Task<long> FindTvIdByImdb(string imdbId)
+    {
+        string host = (ModInit.conf?.tmdb_apihost ?? "https://api.themoviedb.org/3").TrimEnd('/');
+        string key = ModInit.conf?.tmdb_apikey;
+        if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(imdbId))
+            return 0;
+
+        try
+        {
+            string url = $"{host}/find/{Uri.EscapeDataString(imdbId)}?api_key={Uri.EscapeDataString(key)}&external_source=imdb_id&language=ru-RU";
+            string json = await Http.Get(url, timeoutSeconds: 12).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(json))
+                return 0;
+
+            var root = JObject.Parse(json);
+            var tv = root["tv_results"] as JArray;
+            if (tv == null || tv.Count == 0)
+                return 0;
+
+            return tv[0]?.Value<long?>("id") ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    static string NormalizeImdb(string value)
+    {
+        value = (value ?? string.Empty).Trim();
+        if (!value.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+        return value.ToLowerInvariant();
     }
 
     static DateTime? ParseDate(string value)
