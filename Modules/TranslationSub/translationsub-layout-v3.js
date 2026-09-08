@@ -28,6 +28,15 @@
                 'padding:.39em .66em!important;font-size:.84em!important;line-height:1.25;' +
             '}' +
 
+            /* Иконки TranslationSub должны совпадать по визуальной массе со штатными иконками Lampa. */
+            '.translationsub-full-button>.translationsub-full-button__bell{' +
+                'width:1.55em!important;height:1.55em!important;flex-shrink:0!important;' +
+            '}' +
+            '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
+                'width:2em!important;height:2em!important;transform:scale(1.35)!important;' +
+                'transform-origin:50% 50%!important;overflow:visible!important;' +
+            '}' +
+
             /* На TV/desktop три узкие карточки хуже читаются, поэтому максимум две. */
             '.translationsub-list,' +
             '.translationsub-layout--tv .translationsub-list,' +
