@@ -36,6 +36,10 @@
         return String(value || '').toLowerCase().trim();
     }
 
+    function truthy(value) {
+        return value === true || value === 1 || value === '1' || value === 'true';
+    }
+
     function storageGet(name, fallback) {
         try {
             if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
@@ -61,7 +65,7 @@
 
     function settingBool(name, fallback) {
         var value = storageGet(name, fallback);
-        if (value === true || value === 1 || value === '1' || value === 'true') return true;
+        if (truthy(value)) return true;
         if (value === false || value === 0 || value === '0' || value === 'false') return false;
         return !!fallback;
     }
@@ -196,32 +200,46 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function detectSerialCard(object, card) {
-        object = object || {};
-        card = card || {};
-        var method = lower(object.method || card.method);
-        var mediaType = lower(object.media_type || card.media_type || object.type || card.type);
-
-        if (method === 'movie' || method === 'film' || mediaType === 'movie' || mediaType === 'film') return false;
-        if (method === 'tv' || method === 'serial' || mediaType === 'tv' || mediaType === 'serial') return true;
-        if (card.release_date || card.original_title) return false;
-        if (card.first_air_date) return true;
+    function hasSeasonData(card) {
+        if (!card) return false;
         if (Number(card.number_of_seasons || card.seasons_count || 0) > 0) return true;
+        if (Number(card.number_of_episodes || card.episodes_count || 0) > 0) return true;
+        if (card.first_air_date || card.last_air_date) return true;
         if (card.last_episode_to_air || card.next_episode_to_air) return true;
+        if (Array.isArray(card.episode_run_time) && card.episode_run_time.length) return true;
         if (Array.isArray(card.seasons)) {
             for (var i = 0; i < card.seasons.length; i++) {
                 var season = card.seasons[i] || {};
                 if (Number(season.season_number !== undefined ? season.season_number : season.number) > 0) return true;
             }
         }
-        return !!(card.original_name && !card.title);
+        return false;
+    }
+
+    function detectSerialCard(object, card) {
+        object = object || {};
+        card = card || {};
+
+        var method = lower(object.method || card.method);
+        var mediaType = lower(object.media_type || card.media_type || object.type || card.type);
+        var explicitMovie = method === 'movie' || method === 'film' || mediaType === 'movie' || mediaType === 'film';
+        var explicitTv = method === 'tv' || method === 'serial' || mediaType === 'tv' || mediaType === 'serial' || mediaType === 'series';
+
+        if (explicitTv) return true;
+        if (truthy(object.serial) || truthy(card.serial) || truthy(object.is_serial) || truthy(card.is_serial) || truthy(card.isSerial)) return true;
+        if (Number(object.season || card.season || 0) > 0) return true;
+        if (hasSeasonData(card)) return true;
+        if (card.original_name && !card.original_title) return true;
+
+        if (explicitMovie) return false;
+        if (card.release_date || card.original_title) return false;
+        return false;
     }
 
     function normalizeFull(object) {
         object = object || {};
         var card = object.movie || object.card || object.data || object;
         var source = lower(object.source || card.source || card.card_source);
-        var isSerial = detectSerialCard(object, card);
         var explicitTmdbId = card.tmdb_id || card.tmdbId || '';
         var cardId = card.id || object.id || '';
         var tmdbId = explicitTmdbId || ((source && source !== 'tmdb' && source !== 'themoviedb') ? '' : cardId);
@@ -245,7 +263,7 @@
             imdbId: String(imdbId || ''),
             year: String(year || ''),
             poster: String(poster || ''),
-            isSerial: !!isSerial,
+            isSerial: detectSerialCard(object, card),
             season: Number(object.season || card.season || 0) || 0
         };
     }
@@ -253,6 +271,7 @@
     function ensureExternalIds(context, done) {
         if (!context || !context.isSerial) return done(context);
         if (context.tmdbId && context.kpId && context.imdbId) return done(context);
+
         request('GET', API.externalids, {
             id: context.tmdbId || context.contentId,
             serial: 1,
@@ -411,6 +430,7 @@
     function buildSeasons(context, subscriptions) {
         var card = context.card || {};
         var map = {};
+
         function add(number, episodeCount, airDate) {
             number = Number(number || 0);
             if (number <= 0) return;
@@ -488,6 +508,7 @@
     function subscribe(context, variant, season) {
         if (busy) return;
         busy = true;
+
         var sources = variantSources(variant);
         var bodySources = sources.map(function (source) {
             return {
@@ -554,6 +575,7 @@
             if (!validFlow(token)) return;
             loadVariants(context, season, function (response) {
                 if (!validFlow(token)) return;
+
                 var variants = response.Translations || response.translations || [];
                 variants = Array.isArray(variants) ? variants.slice() : [];
                 variants = variants.filter(function (variant) {
@@ -610,6 +632,7 @@
 
     function openSeasonMenu(context, subscriptions, token) {
         if (!context || !context.isSerial || !validFlow(token)) return;
+
         var seasons = buildSeasons(context, subscriptions);
         var preferred = preferredSeason(context, subscriptions, seasons);
 
@@ -679,12 +702,14 @@
         if (typeof $ !== 'function') return null;
         var root = buttonRoot(event);
         if (!root || !root.length) return null;
+
         var button = root.find('.translationsub-full-button').first();
         if (button.length) return button;
 
         var row = root.find('.full-start-new__buttons').first();
         if (!row.length) row = root.find('.full-start__buttons').first();
         if (!row.length) return null;
+
         button = $('<div class="full-start__button selector translationsub-full-button"></div>');
         row.append(button);
         return button;
@@ -692,6 +717,7 @@
 
     function applyButton(event) {
         if (typeof $ !== 'function') return;
+
         var payload = event && (event.data || event.object) || {};
         var context = normalizeFull(payload);
 
@@ -702,10 +728,10 @@
 
         var button = ensureButton(event);
         if (!button || !button.length) return;
+
         button.off('.translationsubCardFlow');
         button.empty().append(bellSvg()).append('<span>Озвучки</span>');
         button.attr('data-translationsub-card-flow', '1').attr('title', 'Подписки на озвучки');
-
         button.on('hover:enter.translationsubCardFlow', function () { openForItem(context); });
         button.on('hover:long.translationsubCardFlow', function () {
             try {
@@ -727,7 +753,7 @@
         clearTimeout(applyTimer);
         applyTimer = setTimeout(function () {
             if (lastEvent) applyButton(lastEvent);
-        }, typeof delay === 'number' ? delay : 100);
+        }, typeof delay === 'number' ? delay : 80);
     }
 
     function expose() {
@@ -743,11 +769,9 @@
     function bind() {
         if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
         Lampa.Listener.follow('full', function (event) {
-            if (!event) return;
-            if (event.type === 'complite') {
-                flowToken++;
-                scheduleApply(event, 100);
-            }
+            if (!event || event.type !== 'complite') return;
+            flowToken++;
+            scheduleApply(event, 80);
         });
     }
 
