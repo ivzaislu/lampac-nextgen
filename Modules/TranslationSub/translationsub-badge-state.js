@@ -8,12 +8,7 @@
         count: 0,
         updates: [],
         requestSeq: 0,
-        appliedSeq: 0,
-        bindTimer: null,
         refreshTimer: null,
-        observer: null,
-        wrappedNotice: false,
-        wrappedPlugin: false,
         drawerOpening: false
     };
 
@@ -91,6 +86,7 @@
         addQuery(parts, 'uid', lampacUid());
         addQuery(parts, 'account_email', accountEmail());
         addQuery(parts, 'profile_id', profileId());
+        addQuery(parts, 'force', 'false');
         addQuery(parts, '_ts', Date.now ? Date.now() : new Date().getTime());
         return host() + '/translationsub/updates?' + parts.join('&');
     }
@@ -113,7 +109,6 @@
                 'background:#e45e2c;color:#fff;font-size:.7em;font-weight:700;display:flex;' +
                 'align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none;' +
             '}';
-
         (document.head || document.documentElement).appendChild(style);
     }
 
@@ -122,76 +117,30 @@
         return count > 99 ? '99+' : String(count);
     }
 
-    function openDrawerSynced() {
-        if (state.drawerOpening) return;
-        state.drawerOpening = true;
-
-        function open() {
-            state.drawerOpening = false;
-            refresh();
-
-            try {
-                if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
-                    window.TranslationSubNotice.open();
-                    return;
-                }
-            } catch (e) {}
-
-            try {
-                if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
-                    window.TranslationSub.openSubscriptions();
-            } catch (e2) {}
-        }
-
-        try {
-            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
-                // The drawer must be built only after Lampac TimeCode has been
-                // reconciled into TranslationSub. Otherwise the bell and drawer can
-                // observe two different moments of watched progress.
-                window.TranslationSubWatch.sync(open);
-                return;
-            }
-        } catch (e3) {}
-
-        open();
-    }
-
-    function applyCount() {
+    function render() {
         if (typeof $ !== 'function') return;
         var count = Number(state.count) || 0;
 
         $('.translationsub-head').each(function () {
             var head = $(this);
             var badge = head.children('.translationsub-state-badge').first();
-
             if (!badge.length && count > 0) {
                 badge = $('<div class="translationsub-state-badge"></div>');
                 head.append(badge);
             }
-
             if (badge.length) {
                 if (count > 0) badge.text(textCount(count)).show();
                 else badge.hide();
             }
-
-            // Take ownership of the TranslationSub bell. Notice's own binder checks
-            // this marker, so setting it prevents a later DOM pass from replacing
-            // our TimeCode-synchronized handler.
-            head.attr('data-translationsub-notice-bound', '1');
-            head.off('hover:enter.translationsubNotice');
-            head.off('hover:enter.translationsubBadgeState');
-            head.on('hover:enter.translationsubBadgeState', openDrawerSynced);
         });
 
         $('.translationsub-menu-item').each(function () {
             var item = $(this);
             var badge = item.children('.translationsub-state-menu-badge').first();
-
             if (!badge.length && count > 0) {
                 badge = $('<div class="translationsub-state-menu-badge"></div>');
                 item.append(badge);
             }
-
             if (badge.length) {
                 if (count > 0) badge.text(textCount(count)).show();
                 else badge.hide();
@@ -199,34 +148,24 @@
         });
     }
 
-    function scheduleApply() {
-        clearTimeout(state.bindTimer);
-        state.bindTimer = setTimeout(function () {
-            injectStyles();
-            applyCount();
-            patchIntegrations();
-        }, 30);
-    }
-
-    function refresh() {
+    function refresh(done) {
+        done = typeof done === 'function' ? done : function () {};
         var seq = ++state.requestSeq;
         var url = updatesUrl();
 
-        function success(updates) {
-            // Only the newest request may alter visible state. A slower response
-            // can never resurrect a notification already removed by TimeCode sync.
+        function apply(updates) {
             if (seq !== state.requestSeq) return;
-
             updates = Array.isArray(updates) ? updates : [];
-            state.appliedSeq = seq;
             state.updates = updates;
             state.count = updates.length;
-            applyCount();
+            render();
+            done(updates);
         }
 
         function fail() {
             if (seq !== state.requestSeq) return;
-            applyCount();
+            render();
+            done(state.updates.slice());
         }
 
         if (typeof fetch === 'function') {
@@ -237,8 +176,8 @@
                 })
                 .then(function (text) {
                     var data = [];
-                    try { data = text ? JSON.parse(text) : []; } catch (e) { data = []; }
-                    success(data);
+                    try { data = text ? JSON.parse(text) : []; } catch (e) {}
+                    apply(data);
                 })
                 .catch(fail);
             return;
@@ -252,8 +191,8 @@
                 if (xhr.readyState !== 4) return;
                 if (xhr.status >= 200 && xhr.status < 300) {
                     var data = [];
-                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : []; } catch (e) { data = []; }
-                    success(data);
+                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : []; } catch (e) {}
+                    apply(data);
                 } else fail();
             };
             xhr.send(null);
@@ -262,53 +201,35 @@
         }
     }
 
-    function patchNotice() {
-        if (state.wrappedNotice || !window.TranslationSubNotice) return;
+    function openDrawerSynced() {
+        if (state.drawerOpening) return;
+        state.drawerOpening = true;
 
-        var notice = window.TranslationSubNotice;
-        var originalRefresh = typeof notice.refresh === 'function' ? notice.refresh : null;
+        function openAfterRefresh() {
+            refresh(function () {
+                state.drawerOpening = false;
+                try {
+                    if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
+                        window.TranslationSubNotice.open();
+                        return;
+                    }
+                } catch (e) {}
 
-        if (originalRefresh) {
-            notice.refresh = function () {
-                var result = originalRefresh.apply(notice, arguments);
-                refresh(true);
-                return result;
-            };
+                try {
+                    if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
+                        window.TranslationSub.openSubscriptions();
+                } catch (e2) {}
+            });
         }
 
-        state.wrappedNotice = true;
-    }
+        try {
+            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
+                window.TranslationSubWatch.sync(openAfterRefresh);
+                return;
+            }
+        } catch (e3) {}
 
-    function patchPlugin() {
-        if (state.wrappedPlugin || !window.TranslationSub) return;
-
-        var plugin = window.TranslationSub;
-
-        if (typeof plugin.checkUpdates === 'function') {
-            var originalCheck = plugin.checkUpdates;
-            plugin.checkUpdates = function () {
-                var result = originalCheck.apply(plugin, arguments);
-                setTimeout(function () { refresh(true); }, 80);
-                return result;
-            };
-        }
-
-        if (typeof plugin.forceCheckUpdatesUI === 'function') {
-            var originalForce = plugin.forceCheckUpdatesUI;
-            plugin.forceCheckUpdatesUI = function (done) {
-                return originalForce.call(plugin, function (updates) {
-                    refresh(true);
-                    if (typeof done === 'function') done(updates);
-                });
-            };
-        }
-
-        state.wrappedPlugin = true;
-    }
-
-    function patchIntegrations() {
-        patchNotice();
-        patchPlugin();
+        openAfterRefresh();
     }
 
     function bindLampa() {
@@ -316,55 +237,30 @@
             if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('app', function (event) {
                     if (!event || event.type !== 'ready') return;
-                    scheduleApply();
-                    refresh(true);
+                    render();
+                    refresh();
                 });
             }
         } catch (e) {}
-
-        try {
-            if (window.Lampa && Lampa.Timeline && Lampa.Timeline.listener &&
-                typeof Lampa.Timeline.listener.follow === 'function') {
-                // TimeCode plugin writes the same Timeline update to SQLite. The watch
-                // bridge performs the delayed reconciliation; this refresh is only a
-                // second safety net for the visible counter.
-                Lampa.Timeline.listener.follow('update', function () {
-                    setTimeout(function () { refresh(true); }, 4800);
-                });
-            }
-        } catch (e2) {}
     }
 
     function start() {
         injectStyles();
-        patchIntegrations();
         bindLampa();
-        scheduleApply();
-        refresh(true);
-
-        try {
-            state.observer = new MutationObserver(function () {
-                // Lampa recreates head/menu between activities. Reapply only the last
-                // server-confirmed count; do not restore legacy state.updates.
-                scheduleApply();
-            });
-            state.observer.observe(document.body || document.documentElement, {
-                childList: true,
-                subtree: true
-            });
-        } catch (e) {}
+        refresh();
 
         if (state.refreshTimer) clearInterval(state.refreshTimer);
-        state.refreshTimer = setInterval(function () { refresh(true); }, 60 * 1000);
+        state.refreshTimer = setInterval(refresh, 60 * 1000);
 
         try {
             document.addEventListener('visibilitychange', function () {
-                if (!document.hidden) refresh(true);
+                if (!document.hidden) refresh();
             });
-        } catch (e2) {}
+        } catch (e) {}
 
         window.TranslationSubBadgeState = {
             refresh: refresh,
+            render: render,
             open: openDrawerSynced,
             count: function () { return state.count; },
             updates: function () { return state.updates.slice(); }
