@@ -4,19 +4,20 @@
     if (window.__TranslationSubSourceStarted) return;
     window.__TranslationSubSourceStarted = true;
 
-    var SETTINGS_COMPONENT = 'translationsub_settings';
     var SOURCE_SETTING = 'translationsub_card_source';
-    var settingsAdded = false;
 
     function storageGet(name, fallback) {
         try {
             if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
                 return Lampa.Storage.get(name, fallback);
         } catch (e) {}
+
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) { return fallback; }
+        } catch (e2) {
+            return fallback;
+        }
     }
 
     function selectedSource() {
@@ -29,41 +30,18 @@
 
     function notify(text) {
         try {
-            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text);
+            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function')
+                Lampa.Noty.show(text);
         } catch (e) {}
-    }
-
-    function addSetting() {
-        if (settingsAdded || !window.Lampa || !Lampa.SettingsApi || typeof Lampa.SettingsApi.addParam !== 'function') return;
-
-        try {
-            Lampa.SettingsApi.addParam({
-                component: SETTINGS_COMPONENT,
-                param: {
-                    name: SOURCE_SETTING,
-                    type: 'select',
-                    values: { tmdb: 'TMDB', cub: 'CUB' },
-                    'default': 'tmdb'
-                },
-                field: {
-                    name: 'Источник карточки',
-                    description: 'Источник карточки Lampa при открытии сериала из подписок. По умолчанию TMDB.'
-                },
-                onChange: function () {
-                    notify('Источник карточки: ' + sourceTitle(selectedSource()));
-                }
-            });
-            settingsAdded = true;
-        } catch (e) {
-            setTimeout(addSetting, 500);
-        }
     }
 
     function host() {
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) { return ''; }
+        } catch (e) {
+            return '';
+        }
     }
 
     function request(method, path, success, error) {
@@ -72,14 +50,15 @@
         var url = host() + path;
 
         if (typeof fetch === 'function') {
-            fetch(url, { method: method })
+            fetch(url, { method: method, cache: 'no-store' })
                 .then(function (response) {
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     return response.text();
                 })
                 .then(function (text) {
-                    try { success(text ? JSON.parse(text) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+                    success(data);
                 })
                 .catch(error);
             return;
@@ -88,24 +67,35 @@
         try {
             var xhr = new XMLHttpRequest();
             xhr.open(method, url, true);
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) return;
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    try { success(xhr.responseText ? JSON.parse(xhr.responseText) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) {}
+                    success(data);
                 } else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
-        } catch (e2) { error(e2); }
+        } catch (e2) {
+            error(e2);
+        }
+    }
+
+    function value(item, pascal, camel, fallback) {
+        if (!item) return fallback;
+        if (item[pascal] !== undefined && item[pascal] !== null) return item[pascal];
+        if (item[camel] !== undefined && item[camel] !== null) return item[camel];
+        return fallback;
     }
 
     function tmdbId(item) {
-        var value = String(item.TmdbId || item.tmdbId || '').trim();
-        if (!value) {
-            var fallback = String(item.ContentId || item.contentId || '').trim();
-            if (/^\d+$/.test(fallback)) value = fallback;
+        var id = String(value(item, 'TmdbId', 'tmdbId', '') || '').trim();
+        if (!id) {
+            var fallback = String(value(item, 'ContentId', 'contentId', '') || '').trim();
+            if (/^\d+$/.test(fallback)) id = fallback;
         }
-        return value;
+        return id;
     }
 
     function openCard(item) {
@@ -119,7 +109,7 @@
 
         var source = selectedSource();
         var numericId = /^\d+$/.test(id) ? Number(id) : id;
-        var isSerial = item.IsSerial !== undefined ? !!item.IsSerial : (item.isSerial !== undefined ? !!item.isSerial : true);
+        var isSerial = value(item, 'IsSerial', 'isSerial', true) !== false;
 
         Lampa.Activity.push({
             url: '',
@@ -148,12 +138,13 @@
         } catch (e) {}
     }
 
-    function refreshAfterSubscriptionChange() {
+    function refreshState() {
         refreshPage();
-
         try {
-            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.refresh === 'function')
-                window.TranslationSubNotice.refresh();
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+                window.TranslationSubBadgeState.refresh();
+                return;
+            }
         } catch (e) {}
 
         try {
@@ -162,16 +153,22 @@
         } catch (e2) {}
     }
 
-    function showActions(item, card) {
+    function closeSelect() {
+        try {
+            if (window.Lampa && Lampa.Select && typeof Lampa.Select.close === 'function') Lampa.Select.close();
+        } catch (e) {}
+    }
+
+    function showActions(item) {
         if (!window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
 
-        var id = String(item.Id || item.id || '');
-        var title = item.Title || item.title || 'Подписка';
-        var voice = item.TranslationName || item.translationName || 'Озвучка';
-        var season = Number(item.CurrentSeason || item.currentSeason || 1) || 1;
-        var isSerial = item.IsSerial !== undefined ? !!item.IsSerial : (item.isSerial !== undefined ? !!item.isSerial : true);
-        var watched = Number(item.CurrentEpisode || item.currentEpisode || 0) || 0;
-        var available = Number(item.LastEpisode || item.lastEpisode || 0) || 0;
+        var id = String(value(item, 'Id', 'id', '') || '');
+        var title = String(value(item, 'Title', 'title', 'Подписка') || 'Подписка');
+        var voice = String(value(item, 'TranslationName', 'translationName', 'Озвучка') || 'Озвучка');
+        var season = Number(value(item, 'CurrentSeason', 'currentSeason', 1) || 1);
+        var isSerial = value(item, 'IsSerial', 'isSerial', true) !== false;
+        var watched = Number(value(item, 'CurrentEpisode', 'currentEpisode', 0) || 0);
+        var available = Number(value(item, 'LastEpisode', 'lastEpisode', 0) || 0);
         var actions = [];
 
         if (available > watched) {
@@ -190,7 +187,7 @@
         actions.push({
             title: 'Обновить прогресс просмотра',
             onclick: function () {
-                syncWatched(function () { refreshPage(); });
+                syncWatched(refreshPage);
             }
         });
 
@@ -201,7 +198,7 @@
                 if (!id) return;
                 request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
                     notify('Вы отписались · ' + voice + (isSerial ? (' · ' + season + ' сезон') : ''));
-                    refreshAfterSubscriptionChange();
+                    refreshState();
                 }, function () {
                     notify('Не удалось отписаться · ' + voice);
                 });
@@ -212,9 +209,11 @@
             title: title,
             items: actions,
             onSelect: function (action) {
+                closeSelect();
                 if (action && typeof action.onclick === 'function') action.onclick();
             },
             onBack: function () {
+                closeSelect();
                 try { Lampa.Controller.toggle('content'); } catch (e) {}
             }
         });
@@ -227,7 +226,7 @@
 
         var byId = {};
         list.forEach(function (item) {
-            var id = String(item.Id || item.id || '');
+            var id = String(value(item, 'Id', 'id', '') || '');
             if (id) byId[id] = item;
         });
 
@@ -245,26 +244,17 @@
             });
 
             card.on('hover:long.translationsubSource', function () {
-                showActions(item, card);
+                showActions(item);
             });
         });
     }
 
     function start() {
-        addSetting();
-
-        try {
-            if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') addSetting();
-                });
-            }
-        } catch (e) {}
-
         window.TranslationSubCardSource = {
             get: selectedSource,
             open: openCard,
-            bindPage: bindPage
+            bindPage: bindPage,
+            actions: showActions
         };
     }
 
@@ -276,7 +266,9 @@
             if (window.Lampa) {
                 clearInterval(wait);
                 start();
-            } else if (attempts > 80) clearInterval(wait);
+            } else if (attempts > 80) {
+                clearInterval(wait);
+            }
         }, 250);
     }
 })();
