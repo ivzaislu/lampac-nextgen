@@ -4,7 +4,7 @@
     if (window.__TranslationSubWatchStarted) return;
     window.__TranslationSubWatchStarted = true;
 
-    var SYNC_INTERVAL = 60 * 1000;
+    var FALLBACK_SYNC_INTERVAL = 5 * 60 * 1000;
     var syncTimer = null;
     var debounceTimer = null;
     var retryTimer = null;
@@ -21,7 +21,9 @@
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) { return fallback; }
+        } catch (e2) {
+            return fallback;
+        }
     }
 
     function storageSet(name, value) {
@@ -31,7 +33,6 @@
                 return;
             }
         } catch (e) {}
-
         try { localStorage.setItem(name, typeof value === 'string' ? value : JSON.stringify(value)); } catch (e2) {}
     }
 
@@ -69,7 +70,9 @@
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
             return window.location.origin || '';
-        } catch (e) { return ''; }
+        } catch (e) {
+            return '';
+        }
     }
 
     function addParam(parts, name, value) {
@@ -99,8 +102,9 @@
                     return response.text();
                 })
                 .then(function (text) {
-                    try { success(text ? JSON.parse(text) : {}); }
-                    catch (e) { success({}); }
+                    var data = {};
+                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+                    success(data);
                 })
                 .catch(error);
             return;
@@ -112,13 +116,13 @@
             xhr.setRequestHeader('Cache-Control', 'no-cache');
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try { success(xhr.responseText ? JSON.parse(xhr.responseText) : {}); }
-                    catch (e) { success({}); }
-                } else error(new Error('HTTP ' + xhr.status));
+                if (xhr.status >= 200 && xhr.status < 300) success({});
+                else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
-        } catch (e2) { error(e2); }
+        } catch (e2) {
+            error(e2);
+        }
     }
 
     function flushCallbacks() {
@@ -128,21 +132,21 @@
         });
     }
 
-    function refreshUiState() {
+    function refreshVisibleState() {
         try {
-            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.refresh === 'function')
-                window.TranslationSubNotice.refresh();
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
+                window.TranslationSubBadgeState.refresh();
         } catch (e) {}
 
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
-                window.TranslationSubBadgeState.refresh(true);
+            if (typeof window.TranslationSubPageRefresh === 'function')
+                window.TranslationSubPageRefresh();
         } catch (e2) {}
     }
 
     function finish() {
         syncing = false;
-        refreshUiState();
+        refreshVisibleState();
         flushCallbacks();
 
         if (queued) {
@@ -160,9 +164,7 @@
         }
 
         syncing = true;
-        request('/translationsub/progress?' + identityQuery(), function () {
-            finish();
-        }, function () {
+        request('/translationsub/progress?' + identityQuery(), finish, function () {
             syncing = false;
             flushCallbacks();
             if (queued) {
@@ -174,16 +176,13 @@
 
     function scheduleSync(delay, withRetry) {
         clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(function () {
-            syncAll();
-        }, typeof delay === 'number' ? delay : 1400);
+        debounceTimer = setTimeout(syncAll, typeof delay === 'number' ? delay : 1400);
 
         if (withRetry !== false) {
             clearTimeout(retryTimer);
             retryTimer = setTimeout(function () {
-                // TimeCode writes to SQLite asynchronously from the same Timeline event.
-                // A second reconciliation closes the small window where the first read
-                // could happen before /timecode/add commits its row.
+                // TimeCode пишет SQLite асинхронно после Timeline.update. Повторная
+                // сверка закрывает окно, когда первый запрос пришёл раньше commit.
                 syncAll();
             }, 4200);
         }
@@ -218,7 +217,7 @@
         scheduleSync(3000, false);
 
         if (syncTimer) clearInterval(syncTimer);
-        syncTimer = setInterval(function () { syncAll(); }, SYNC_INTERVAL);
+        syncTimer = setInterval(syncAll, FALLBACK_SYNC_INTERVAL);
 
         window.TranslationSubWatch = {
             sync: syncAll,
@@ -235,7 +234,9 @@
             if (window.Lampa) {
                 clearInterval(wait);
                 start();
-            } else if (attempts > 80) clearInterval(wait);
+            } else if (attempts > 80) {
+                clearInterval(wait);
+            }
         }, 250);
     }
 })();
