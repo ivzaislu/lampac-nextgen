@@ -4,16 +4,9 @@
     if (window.__TranslationSubNavigationStarted) return;
     window.__TranslationSubNavigationStarted = true;
 
-    var selectPatched = false;
-    var suppressVoicesUntil = 0;
-    var translationSelectOpen = false;
     var observer = null;
     var applyTimer = null;
     var repairTimer = null;
-
-    function now() {
-        return Date.now ? Date.now() : new Date().getTime();
-    }
 
     function injectStyles() {
         if (document.getElementById('translationsub-navigation-style')) return;
@@ -27,94 +20,6 @@
                 'fill:none!important;stroke:currentColor!important;' +
             '}';
         (document.head || document.documentElement).appendChild(style);
-    }
-
-    function isTranslationSelectTitle(title) {
-        title = String(title || '').trim();
-        return title === 'Выберите сезон' || title === 'Озвучки' || title.indexOf('Озвучки ·') === 0;
-    }
-
-    function isVoicesTitle(title) {
-        title = String(title || '').trim();
-        return title === 'Озвучки' || title.indexOf('Озвучки ·') === 0;
-    }
-
-    function activeComponent() {
-        try {
-            if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.active !== 'function') return '';
-            var active = Lampa.Activity.active() || {};
-            return String(
-                active.component ||
-                (active.object && active.object.component) ||
-                (active.activity && active.activity.component) ||
-                ''
-            ).toLowerCase();
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function isFullActive() {
-        var component = activeComponent();
-        if (component) return component === 'full';
-        try { return $('.full-start:visible,.full-start-new:visible').length > 0; } catch (e) { return false; }
-    }
-
-    function closeSelect() {
-        translationSelectOpen = false;
-        try {
-            if (window.Lampa && Lampa.Select && typeof Lampa.Select.close === 'function') Lampa.Select.close();
-        } catch (e) {}
-    }
-
-    function restoreContentController() {
-        try {
-            if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function')
-                Lampa.Controller.toggle('content');
-        } catch (e) {}
-    }
-
-    function patchSelect() {
-        if (selectPatched || !window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
-
-        var originalShow = Lampa.Select.show;
-        if (originalShow.__translationsubNavigationPatched) {
-            selectPatched = true;
-            return;
-        }
-
-        function patchedShow(options) {
-            options = options || {};
-            var title = String(options.title || '').trim();
-            if (!isTranslationSelectTitle(title)) return originalShow.apply(Lampa.Select, arguments);
-
-            if (!isFullActive()) return;
-            if (isVoicesTitle(title) && now() < suppressVoicesUntil) return;
-
-            var wrapped = {};
-            Object.keys(options).forEach(function (key) { wrapped[key] = options[key]; });
-            var originalSelect = options.onSelect;
-            translationSelectOpen = true;
-
-            wrapped.onSelect = function (item) {
-                if (isVoicesTitle(title)) suppressVoicesUntil = now() + 5000;
-                closeSelect();
-                if (typeof originalSelect === 'function') return originalSelect(item);
-            };
-
-            wrapped.onBack = function () {
-                if (isVoicesTitle(title)) suppressVoicesUntil = now() + 800;
-                closeSelect();
-                restoreContentController();
-            };
-
-            return originalShow.call(Lampa.Select, wrapped);
-        }
-
-        patchedShow.__translationsubNavigationPatched = true;
-        patchedShow.__translationsubOriginalShow = originalShow;
-        Lampa.Select.show = patchedShow;
-        selectPatched = true;
     }
 
     function openNotice() {
@@ -215,16 +120,8 @@
 
     function apply() {
         injectStyles();
-        patchSelect();
-
-        if (translationSelectOpen && !isFullActive()) {
-            suppressVoicesUntil = now() + 800;
-            closeSelect();
-        }
-
         bindHead();
         ensureMenuItem();
-
         try {
             if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
                 window.TranslationSubBadgeState.render();
@@ -234,6 +131,28 @@
     function scheduleApply(delay) {
         clearTimeout(applyTimer);
         applyTimer = setTimeout(apply, typeof delay === 'number' ? delay : 35);
+    }
+
+    function relevantNode(node) {
+        if (!node || node.nodeType !== 1 || typeof $ !== 'function') return false;
+        var element = $(node);
+        var selector = '.head,.head__actions,.menu,.menu__list,.translationsub-head,.translationsub-menu-item';
+        return element.is(selector) || element.find(selector).length > 0;
+    }
+
+    function relevantMutations(mutations) {
+        if (typeof $ !== 'function') return true;
+        for (var i = 0; i < mutations.length; i++) {
+            var mutation = mutations[i];
+            if ($(mutation.target).closest('.head,.menu').length) return true;
+            for (var j = 0; j < mutation.addedNodes.length; j++) {
+                if (relevantNode(mutation.addedNodes[j])) return true;
+            }
+            for (var k = 0; k < mutation.removedNodes.length; k++) {
+                if (relevantNode(mutation.removedNodes[k])) return true;
+            }
+        }
+        return false;
     }
 
     function start() {
@@ -249,18 +168,19 @@
         } catch (e) {}
 
         try {
-            observer = new MutationObserver(function () { scheduleApply(35); });
+            observer = new MutationObserver(function (mutations) {
+                if (relevantMutations(mutations || [])) scheduleApply(35);
+            });
             observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
         } catch (e2) {}
 
         if (repairTimer) clearInterval(repairTimer);
-        repairTimer = setInterval(function () { scheduleApply(0); }, 10000);
+        repairTimer = setInterval(function () { scheduleApply(0); }, 15000);
 
         window.TranslationSubNavigation = {
             refresh: function () { scheduleApply(0); },
             openNotice: openNotice,
-            openSubscriptions: openSubscriptions,
-            closeSelect: closeSelect
+            openSubscriptions: openSubscriptions
         };
     }
 
