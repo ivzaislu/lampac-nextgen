@@ -32,6 +32,9 @@
             '.translationsub-full-button>.translationsub-full-button__bell{' +
                 'width:1.55em!important;height:1.55em!important;flex-shrink:0!important;' +
             '}' +
+            '.translationsub-full-button--subscribed>.translationsub-full-button__bell{' +
+                'transform:scale(1.11)!important;transform-origin:50% 50%!important;' +
+            '}' +
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
                 'width:2em!important;height:2em!important;transform:scale(1.35)!important;' +
                 'transform-origin:50% 50%!important;overflow:visible!important;' +
