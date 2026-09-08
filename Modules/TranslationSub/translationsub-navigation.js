@@ -12,6 +12,22 @@
         return Date.now ? Date.now() : new Date().getTime();
     }
 
+    function injectStyles() {
+        if (document.getElementById('translationsub-navigation-style')) return;
+
+        var style = document.createElement('style');
+        style.id = 'translationsub-navigation-style';
+        style.textContent =
+            '.translationsub-menu-item .menu__ico svg{' +
+                'width:100%!important;height:100%!important;fill:none!important;stroke:currentColor!important;' +
+            '}' +
+            '.translationsub-menu-item .menu__ico svg path{' +
+                'fill:none!important;stroke:currentColor!important;' +
+            '}';
+
+        (document.head || document.documentElement).appendChild(style);
+    }
+
     function isTranslationSelectTitle(title) {
         title = String(title || '').trim();
         return title === 'Выберите сезон' || title === 'Озвучки' || title.indexOf('Озвучки ·') === 0;
@@ -76,8 +92,8 @@
             if (!isFullActive())
                 return;
 
-            // After subscribe/unsubscribe the old card-flow schedules openVoices()
-            // again. Do not let that delayed refresh reopen the panel under the user.
+            // card-flow used to reopen openVoices() shortly after subscribe/unsubscribe.
+            // Suppress that delayed call; the user opens the list again explicitly.
             if (isVoicesTitle(title) && now() < suppressVoicesUntil)
                 return;
 
@@ -93,9 +109,9 @@
                         return originalSelect(item);
                 };
 
-                // Do not call card-flow's original onBack here. For a one-season
-                // series it calls openSeasonMenu(), which immediately calls
-                // openVoices() again and creates an endless Back -> reopen loop.
+                // Do not call card-flow's original onBack. For a one-season series
+                // it calls openSeasonMenu(), which immediately calls openVoices()
+                // again and creates an endless Back -> reopen loop.
                 wrapped.onBack = function () {
                     suppressVoicesUntil = now() + 500;
                     restoreContentController();
@@ -149,8 +165,8 @@
         $('.translationsub-head').each(function () {
             var button = $(this);
 
-            // Remove the legacy handler from translationsub.js which navigates to
-            // the full subscriptions page. The header bell must open only the drawer.
+            // Remove the legacy unnamespaced handler from translationsub.js which
+            // navigates to the full subscriptions page. Header bell = drawer only.
             button.off('hover:enter');
             button.on('hover:enter.translationsubNavigation', openNotice);
             button.attr('data-translationsub-notice-bound', '1');
@@ -196,8 +212,8 @@
         var menu = mainMenuList();
         if (!menu.length) return;
 
-        // Remove stale copies from old menu DOMs. Keep exactly one item in the
-        // currently active/main menu list.
+        // Remove stale copies from detached/old menu DOMs. Keep exactly one entry
+        // in the currently active main menu.
         $('.translationsub-menu-item').each(function () {
             if (!$.contains(menu[0], this)) $(this).remove();
         });
@@ -217,12 +233,15 @@
             else menu.append(item);
         }
 
-        item.find('.menu__text').text('Озвучки');
+        var text = item.find('.menu__text').first();
+        if (String(text.text() || '') !== 'Озвучки') text.text('Озвучки');
+
         item.off('hover:enter');
         item.on('hover:enter.translationsubNavigation', openSubscriptions);
     }
 
     function apply() {
+        injectStyles();
         patchSelect();
         bindHead();
         ensureMenuItem();
@@ -243,8 +262,8 @@
 
         try {
             observer = new MutationObserver(function () {
-                // Run in the same microtask turn in which Lampa recreates head/menu.
-                // This removes the legacy header handler before the user can trigger it.
+                // Lampa recreates head/menu between activities. Rebind immediately
+                // so the legacy head handler cannot become active again.
                 apply();
             });
             observer.observe(document.body || document.documentElement, {
@@ -253,8 +272,7 @@
             });
         } catch (e2) {}
 
-        // Some skins rebuild the main menu without producing a useful mutation on
-        // the original node. A cheap periodic repair keeps the menu entry stable.
+        // Extra repair for skins that replace the menu in a detached fragment first.
         setInterval(apply, 3000);
 
         window.TranslationSubNavigation = {
