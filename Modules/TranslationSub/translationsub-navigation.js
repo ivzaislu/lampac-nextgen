@@ -6,6 +6,7 @@
 
     var selectPatched = false;
     var suppressVoicesUntil = 0;
+    var translationSelectOpen = false;
     var observer = null;
 
     function now() {
@@ -64,6 +65,14 @@
         }
     }
 
+    function closeSelect() {
+        translationSelectOpen = false;
+        try {
+            if (window.Lampa && Lampa.Select && typeof Lampa.Select.close === 'function')
+                Lampa.Select.close();
+        } catch (e) {}
+    }
+
     function restoreContentController() {
         try {
             if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function')
@@ -92,8 +101,8 @@
             if (!isFullActive())
                 return;
 
-            // card-flow used to reopen openVoices() shortly after subscribe/unsubscribe.
-            // Suppress that delayed call; the user opens the list again explicitly.
+            // card-flow schedules openVoices() again after subscribe/unsubscribe.
+            // Keep enough room for the local API round-trip and suppress that reopen.
             if (isVoicesTitle(title) && now() < suppressVoicesUntil)
                 return;
 
@@ -101,23 +110,33 @@
             Object.keys(options).forEach(function (key) { wrapped[key] = options[key]; });
 
             var originalSelect = options.onSelect;
+            translationSelectOpen = true;
+
+            wrapped.onSelect = function (item) {
+                if (isVoicesTitle(title)) suppressVoicesUntil = now() + 5000;
+
+                // Lampa.Select does not close itself automatically. Native Lampa
+                // plugins explicitly close it before the next action; do the same.
+                closeSelect();
+
+                if (typeof originalSelect === 'function')
+                    return originalSelect(item);
+            };
 
             if (isVoicesTitle(title)) {
-                wrapped.onSelect = function (item) {
-                    suppressVoicesUntil = now() + 1400;
-                    if (typeof originalSelect === 'function')
-                        return originalSelect(item);
-                };
-
                 // Do not call card-flow's original onBack. For a one-season series
                 // it calls openSeasonMenu(), which immediately calls openVoices()
                 // again and creates an endless Back -> reopen loop.
                 wrapped.onBack = function () {
-                    suppressVoicesUntil = now() + 500;
+                    suppressVoicesUntil = now() + 800;
+                    closeSelect();
                     restoreContentController();
                 };
             } else if (title === 'Выберите сезон') {
-                wrapped.onBack = restoreContentController;
+                wrapped.onBack = function () {
+                    closeSelect();
+                    restoreContentController();
+                };
             }
 
             return originalShow.call(Lampa.Select, wrapped);
@@ -243,6 +262,14 @@
     function apply() {
         injectStyles();
         patchSelect();
+
+        // If the full card is already gone, a TranslationSub selector must not
+        // survive as an overlay on Main/Settings/another Activity.
+        if (translationSelectOpen && !isFullActive()) {
+            suppressVoicesUntil = now() + 800;
+            closeSelect();
+        }
+
         bindHead();
         ensureMenuItem();
     }
@@ -263,7 +290,7 @@
         try {
             observer = new MutationObserver(function () {
                 // Lampa recreates head/menu between activities. Rebind immediately
-                // so the legacy head handler cannot become active again.
+                // and also close a selector that outlived its full card.
                 apply();
             });
             observer.observe(document.body || document.documentElement, {
@@ -278,7 +305,8 @@
         window.TranslationSubNavigation = {
             refresh: apply,
             openNotice: openNotice,
-            openSubscriptions: openSubscriptions
+            openSubscriptions: openSubscriptions,
+            closeSelect: closeSelect
         };
     }
 
