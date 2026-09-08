@@ -12,6 +12,7 @@
     "Services/SubscriptionStore.cs",
     "Services/TranslationSettingsStore.cs",
     "Services/TmdbScheduleService.cs",
+    "Services/TimeCodeProgressService.cs",
     "Services/TranslationSubscriptionService.cs",
     "Services/VoiceNormalize.cs",
     "Providers/IVoiceProvider.cs",

@@ -33,6 +33,7 @@ public class TranslationSubPluginController : BaseController
         AppendScript(ref script, "translationsub-tmdb-ui.js");
         AppendScript(ref script, "translationsub-card-flow.js");
         AppendScript(ref script, "translationsub-layout-v3.js");
+        AppendScript(ref script, "translationsub-badge-state.js");
 
         Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
         return Content(script, "application/javascript; charset=utf-8");

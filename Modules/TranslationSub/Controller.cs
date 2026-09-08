@@ -23,6 +23,8 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/list")]
     public ActionResult List(string userKey = null)
     {
+        SyncTimeCodeProgress(userKey);
+
         var list = SubscriptionStore.Load();
         if (!string.IsNullOrWhiteSpace(userKey))
             list = list.Where(x => x.UserKey == userKey).ToList();
@@ -36,6 +38,10 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/updates")]
     async public Task<ActionResult> Updates(string userKey = null, bool force = false, string sources = null)
     {
+        // Lampac TimeCode is authoritative for watched progress. Reconcile it before
+        // both the balancer check and the notification projection.
+        SyncTimeCodeProgress(userKey);
+
         if (force)
             await TranslationSubscriptionService.Tick(userKey, ParseSources(sources));
 
@@ -88,11 +94,19 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/progress")]
     public ActionResult Progress(string userKey = null)
     {
+        int synced = SyncTimeCodeProgress(userKey);
+
         var list = SubscriptionStore.Load();
         if (!string.IsNullOrWhiteSpace(userKey))
             list = list.Where(x => x.UserKey == userKey).ToList();
 
-        return ContentTo(JsonConvert.SerializeObject(new { success = true, count = list.Count }));
+        return ContentTo(JsonConvert.SerializeObject(new
+        {
+            success = true,
+            count = list.Count,
+            synced,
+            source = "lampac-timecode"
+        }));
     }
 
     [HttpGet]
@@ -150,6 +164,7 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/check")]
     async public Task<ActionResult> Check(string userKey = null, string sources = null)
     {
+        SyncTimeCodeProgress(userKey);
         await TranslationSubscriptionService.Tick(userKey, ParseSources(sources));
         return ContentTo("{\"success\":true}");
     }
@@ -188,6 +203,9 @@ public class TranslationSubController : BaseController
             return true;
         });
 
+        if (subscribed)
+            SyncTimeCodeProgress(sub.UserKey);
+
         return ContentTo(JsonConvert.SerializeObject(new { success = true, subscribed }));
     }
 
@@ -202,6 +220,9 @@ public class TranslationSubController : BaseController
             return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
 
         var sub = FromJson(body);
+        if (string.IsNullOrWhiteSpace(sub.UserKey))
+            sub.UserKey = "local";
+
         SubscriptionStore.Mutate(list =>
         {
             if (list.Any(x => x.UserKey == sub.UserKey && x.ContentId == sub.ContentId && x.TranslationId == sub.TranslationId && (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1)))
@@ -212,6 +233,7 @@ public class TranslationSubController : BaseController
             list.Add(sub);
         });
 
+        SyncTimeCodeProgress(sub.UserKey);
         return ContentTo("{\"success\":true}");
     }
 
@@ -236,6 +258,8 @@ public class TranslationSubController : BaseController
         int updated = 0;
         int available = 0;
 
+        // Compatibility path for older clients. New clients only use Timeline as a
+        // trigger and let TimeCodeProgressService read the Lampac database directly.
         SubscriptionStore.Mutate(list =>
         {
             var matches = list.Where(x =>
@@ -266,7 +290,8 @@ public class TranslationSubController : BaseController
             availableEpisode = available,
             fromEpisode = available > episode ? episode + 1 : 0,
             toEpisode = available,
-            newCount = Math.Max(0, available - episode)
+            newCount = Math.Max(0, available - episode),
+            source = "legacy-client-hint"
         }));
     }
 
@@ -298,6 +323,26 @@ public class TranslationSubController : BaseController
         return ContentTo("{\"success\":true}");
     }
 
+    int SyncTimeCodeProgress(string userKey)
+    {
+        if (string.IsNullOrWhiteSpace(userKey))
+            return 0;
+
+        string requestUserUid = requestInfo?.user_uid;
+
+        // For anonymous/local Lampac usage TimeCode's own plugin sends uid in query.
+        // Use the same fallback if middleware did not populate requestInfo.user_uid.
+        if (string.IsNullOrWhiteSpace(requestUserUid)
+            && Request.Query.TryGetValue("uid", out var uidQuery))
+            requestUserUid = uidQuery.ToString();
+
+        string profileId = null;
+        if (Request.Query.TryGetValue("profile_id", out var profileQuery))
+            profileId = profileQuery.ToString();
+
+        return TimeCodeProgressService.SyncUser(userKey, requestUserUid, profileId);
+    }
+
     async Task<JObject> ReadBody()
     {
         using var reader = new StreamReader(Request.Body, Encoding.UTF8);
@@ -316,9 +361,6 @@ public class TranslationSubController : BaseController
         int.TryParse(j.Value<string>("year"), out int year);
         bool.TryParse(j.Value<string>("isSerial"), out bool isSerialBool);
 
-        // Старый клиент отправляет variant.episode в currentEpisode. Это не просмотр,
-        // а последняя доступная серия озвучки. Реальный просмотр приходит отдельно
-        // через watchedEpisode или позже через /translationsub/watched.
         int latestEpisode = availableEpisode > 0 ? availableEpisode : legacyAvailableEpisode;
         int watched = Math.Max(0, watchedEpisode);
 
