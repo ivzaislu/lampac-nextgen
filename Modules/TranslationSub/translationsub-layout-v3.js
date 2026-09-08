@@ -7,6 +7,13 @@
     function injectStyles() {
         if (document.getElementById('translationsub-layout-v3-style')) return;
 
+        var bellBody = 'M12 3.5a5.5 5.5 0 0 0-5.5 5.5v3.2c0 1.9-.7 3.5-2.1 4.8l-.9.8h17l-.9-.8c-1.4-1.3-2.1-2.9-2.1-4.8V9A5.5 5.5 0 0 0 12 3.5Z';
+        var bellClapper = 'M9.6 20h4.8c-.35 1.1-1.25 1.7-2.4 1.7S9.95 21.1 9.6 20Z';
+        var bellOutlineSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="' + bellBody + '" fill="none" stroke="white" stroke-width="1.8" stroke-linejoin="round"/><path d="' + bellClapper + '" fill="white"/></svg>';
+        var bellFilledSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="' + bellBody + '" fill="white" stroke="white" stroke-width="1.8" stroke-linejoin="round"/><path d="' + bellClapper + '" fill="white"/></svg>';
+        var bellOutlineMask = 'url("data:image/svg+xml,' + encodeURIComponent(bellOutlineSvg) + '")';
+        var bellFilledMask = 'url("data:image/svg+xml,' + encodeURIComponent(bellFilledSvg) + '")';
+
         var style = document.createElement('style');
         style.id = 'translationsub-layout-v3-style';
         style.textContent =
@@ -28,12 +35,17 @@
                 'padding:.39em .66em!important;font-size:.84em!important;line-height:1.25;' +
             '}' +
 
-            /* Иконки TranslationSub должны совпадать по визуальной массе со штатными иконками Lampa. */
-            '.translationsub-full-button>.translationsub-full-button__bell{' +
-                'width:1.55em!important;height:1.55em!important;flex-shrink:0!important;' +
+            /* Один и тот же силуэт колокольчика: меняется только заполнение. */
+            '.translationsub-full-button>.translationsub-full-button__bell{display:none!important}' +
+            '.translationsub-full-button:before{' +
+                'content:"";display:block!important;width:1.55em!important;height:1.55em!important;' +
+                'flex:0 0 1.55em!important;background:currentColor!important;' +
+                '-webkit-mask:' + bellOutlineMask + ' center/contain no-repeat!important;' +
+                'mask:' + bellOutlineMask + ' center/contain no-repeat!important;' +
             '}' +
-            '.translationsub-full-button--subscribed>.translationsub-full-button__bell{' +
-                'transform:scale(1.11)!important;transform-origin:50% 50%!important;' +
+            '.translationsub-full-button--subscribed:before{' +
+                '-webkit-mask:' + bellFilledMask + ' center/contain no-repeat!important;' +
+                'mask:' + bellFilledMask + ' center/contain no-repeat!important;' +
             '}' +
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
                 'width:2em!important;height:2em!important;transform:scale(1.35)!important;' +
