@@ -9,7 +9,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using TranslationSub.Providers;
 using TranslationSub.Services;
 
 namespace TranslationSub;
@@ -19,21 +18,25 @@ public class TranslationSubSettingsController : BaseController
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/user-settings")]
-    public ActionResult GetSettings(string userKey = null)
+    async public Task<ActionResult> GetSettings(string userKey = null)
     {
+        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveRequestUid()).ConfigureAwait(false);
         var json = JObject.FromObject(TranslationSettingsStore.Get(userKey));
-        json["availableSources"] = JArray.FromObject(TranslationProviderHub.AvailableSources());
+        json["availableSources"] = JArray.FromObject(options.Select(x => x.id));
+        json["availableSourceItems"] = JArray.FromObject(options);
         return ContentTo(json.ToString(Formatting.None));
     }
 
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/sources")]
-    public ActionResult GetSources()
+    async public Task<ActionResult> GetSources()
     {
+        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveRequestUid()).ConfigureAwait(false);
         return ContentTo(JsonConvert.SerializeObject(new
         {
-            sources = TranslationProviderHub.AvailableSources()
+            sources = options.Select(x => x.id).ToList(),
+            items = options
         }));
     }
 
@@ -71,8 +74,8 @@ public class TranslationSubSettingsController : BaseController
         {
             foreach (var item in arr)
             {
-                string value = item?.ToString();
-                if (!string.IsNullOrWhiteSpace(value))
+                string value = TranslationSettingsStore.NormalizeSourceId(item?.ToString());
+                if (value != null)
                     sources.Add(value);
             }
         }
@@ -80,7 +83,12 @@ public class TranslationSubSettingsController : BaseController
         {
             string rawSources = body?.Value<string>("sources");
             if (!string.IsNullOrWhiteSpace(rawSources))
-                sources.AddRange(rawSources.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()));
+            {
+                sources.AddRange(rawSources
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(TranslationSettingsStore.NormalizeSourceId)
+                    .Where(x => x != null));
+            }
         }
 
         var settings = TranslationSettingsStore.Set(
@@ -92,11 +100,28 @@ public class TranslationSubSettingsController : BaseController
             endedRefreshDays,
             newSeasonMode);
 
+        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveRequestUid()).ConfigureAwait(false);
         return ContentTo(JsonConvert.SerializeObject(new
         {
             success = true,
             settings,
-            availableSources = TranslationProviderHub.AvailableSources()
+            availableSources = options.Select(x => x.id).ToList(),
+            availableSourceItems = options
         }));
+    }
+
+    string ResolveRequestUid()
+    {
+        string requestUid = requestInfo?.user_uid;
+        if (!string.IsNullOrWhiteSpace(requestUid))
+            return requestUid.Trim();
+
+        if (Request.Query.TryGetValue("uid", out var uidQuery) && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
+            return uidQuery.ToString().Trim();
+
+        if (Request.Query.TryGetValue("account_email", out var accountQuery) && !string.IsNullOrWhiteSpace(accountQuery.ToString()))
+            return accountQuery.ToString().Trim();
+
+        return null;
     }
 }
