@@ -6,14 +6,6 @@
 
     if (!window.Lampa || !Lampa.Component || typeof Lampa.Component.add !== 'function') return;
 
-    var SOURCE_NAMES = {
-        flixcdn: 'FlixCDN',
-        phantom: 'Phantom',
-        zetflixdb: 'ZetflixDB',
-        cdnvideohub: 'VideoHUB',
-        multi: 'Несколько источников'
-    };
-
     function storageGet(name, fallback) {
         try {
             if (Lampa.Storage && typeof Lampa.Storage.get === 'function') return Lampa.Storage.get(name, fallback);
@@ -98,8 +90,9 @@
     }
 
     function sourceName(value) {
-        value = String(value || '').toLowerCase();
-        return SOURCE_NAMES[value] || value || 'Источник';
+        value = String(value || '').trim();
+        if (!value) return 'Источник';
+        return value.toLowerCase() === 'multi' ? 'Несколько источников' : value;
     }
 
     function posterUrl(path) {
@@ -310,7 +303,6 @@
         window.TranslationSubPageRefresh = reloadRef;
 
         this.initialize = function () {
-            // Одна первичная отрисовка: сначала TimeCode, затем list.
             syncWatched(load);
         };
     }
