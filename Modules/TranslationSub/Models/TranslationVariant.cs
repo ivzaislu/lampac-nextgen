@@ -10,6 +10,13 @@ public class TranslationVariant
     public string translation_id { get; set; }
     public int season { get; set; }
     public int episode { get; set; }
+
+    // Metadata-only availability. `episode` remains the latest episode for
+    // backward compatibility with the current API/JS and subscription logic.
+    public List<int> Episodes { get; set; } = new();
+
+    // Kept for wire compatibility with older clients. Native metadata polling
+    // does not resolve video files/qualities and leaves these fields empty.
     public string quality { get; set; }
     public long file_id { get; set; }
 
@@ -39,6 +46,7 @@ public class TranslationVariantSource
     public string TranslationName { get; set; }
     public int Season { get; set; }
     public int Episode { get; set; }
+    public List<int> Episodes { get; set; } = new();
     public string Quality { get; set; }
 }
 
