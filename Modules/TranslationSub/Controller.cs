@@ -145,6 +145,7 @@ public class TranslationSubController : BaseController
 
         var response = await TranslationProviderHub.GetVariants(new VoiceProviderQuery
         {
+            Uid = ResolveRequestUid(uid),
             ImdbId = imdbId,
             KpId = kp,
             Title = title,
@@ -323,18 +324,30 @@ public class TranslationSubController : BaseController
         return ContentTo("{\"success\":true}");
     }
 
+    string ResolveRequestUid(string explicitUid = null)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitUid))
+            return explicitUid.Trim();
+
+        string requestUid = requestInfo?.user_uid;
+        if (!string.IsNullOrWhiteSpace(requestUid))
+            return requestUid.Trim();
+
+        if (Request.Query.TryGetValue("uid", out var uidQuery) && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
+            return uidQuery.ToString().Trim();
+
+        if (Request.Query.TryGetValue("account_email", out var accountQuery) && !string.IsNullOrWhiteSpace(accountQuery.ToString()))
+            return accountQuery.ToString().Trim();
+
+        return null;
+    }
+
     int SyncTimeCodeProgress(string userKey)
     {
         if (string.IsNullOrWhiteSpace(userKey))
             return 0;
 
-        string requestUserUid = requestInfo?.user_uid;
-
-        // For anonymous/local Lampac usage TimeCode's own plugin sends uid in query.
-        // Use the same fallback if middleware did not populate requestInfo.user_uid.
-        if (string.IsNullOrWhiteSpace(requestUserUid)
-            && Request.Query.TryGetValue("uid", out var uidQuery))
-            requestUserUid = uidQuery.ToString();
+        string requestUserUid = ResolveRequestUid();
 
         string profileId = null;
         if (Request.Query.TryGetValue("profile_id", out var profileQuery))
@@ -367,6 +380,7 @@ public class TranslationSubController : BaseController
         var sub = new TranslationSubscription
         {
             UserKey = j.Value<string>("userKey") ?? "local",
+            Uid = j.Value<string>("uid") ?? j.Value<string>("account_email") ?? ResolveRequestUid(),
             ContentId = j.Value<string>("contentId"),
             Title = j.Value<string>("title"),
             OriginalTitle = j.Value<string>("originalTitle"),
