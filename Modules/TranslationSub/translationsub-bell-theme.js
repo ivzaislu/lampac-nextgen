@@ -84,15 +84,7 @@
                 'content:"";display:block;width:3.5em;height:3.5em;margin:auto;background:currentColor;' +
                 '-webkit-mask:' + outline + ' center/contain no-repeat;' +
                 'mask:' + outline + ' center/contain no-repeat;' +
-            '}' +
-
-            /* Кнопка «Отписаться» на странице подписок использует тот же основной силуэт. */
-            '.translationsub-card__unsubscribe svg{' +
-                'display:block!important;background:currentColor!important;fill:none!important;stroke:none!important;' +
-                '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
-                'mask:' + outline + ' center/contain no-repeat!important;' +
-            '}' +
-            '.translationsub-card__unsubscribe svg>*{display:none!important}';
+            '}';
 
         (document.head || document.documentElement).appendChild(style);
     }
