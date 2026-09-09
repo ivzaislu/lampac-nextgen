@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace TranslationSub.Services;
 
@@ -10,21 +11,19 @@ public class TranslationUserSettings
 {
     public string UserKey { get; set; }
     public int CheckIntervalHours { get; set; } = 1;
-    public List<string> Sources { get; set; } = new() { "flixcdn", "phantom", "zetflixdb", "cdnvideohub" };
-
+    public List<string> Sources { get; set; } = new();
     public bool UseTmdbSchedule { get; set; } = true;
     public int TmdbRefreshHours { get; set; } = 24;
     public int EndedRefreshDays { get; set; } = 7;
     public string NewSeasonMode { get; set; } = "auto";
-
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 }
 
 public static class TranslationSettingsStore
 {
     static readonly object locker = new();
-    static readonly string[] allowedSources = { "flixcdn", "phantom", "zetflixdb", "cdnvideohub" };
     static readonly string[] allowedNewSeasonModes = { "auto", "notify", "off" };
+    static readonly Regex sourceIdRegex = new("^[a-z0-9][a-z0-9._:/-]{0,119}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     static string path => "database/translationsub/settings.json";
 
     static List<TranslationUserSettings> LoadUnsafe()
@@ -69,16 +68,24 @@ public static class TranslationSettingsStore
             value.NewSeasonMode = "auto";
 
         value.Sources = (value.Sources ?? new List<string>())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x.Trim().ToLowerInvariant())
-            .Where(x => allowedSources.Contains(x))
+            .Select(NormalizeSourceId)
+            .Where(x => x != null)
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (touchUpdatedAt)
             value.UpdatedAt = DateTime.Now;
 
         return value;
+    }
+
+    public static string NormalizeSourceId(string value)
+    {
+        string id = value?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(id) || !sourceIdRegex.IsMatch(id))
+            return null;
+        return id;
     }
 
     static TranslationUserSettings Clone(TranslationUserSettings value)
@@ -140,7 +147,6 @@ public static class TranslationSettingsStore
 
             Normalize(current, userKey, true);
             SaveUnsafe(list);
-
             return Clone(current);
         }
     }
