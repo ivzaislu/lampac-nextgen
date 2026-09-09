@@ -50,6 +50,7 @@ for (const name of jsFiles) {
   if (!loadedSet.has(name)) error(`Orphan TranslationSub JS file is not loaded: ${name}`);
 }
 if (jsFiles.includes('translationsub-card.js')) error('Obsolete translationsub-card.js returned to the module');
+if (jsFiles.includes('translationsub-card-actions.js')) error('Obsolete subscription-card unsubscribe button layer returned to the module');
 
 const guards = new Map();
 let observerCount = 0;
@@ -130,6 +131,12 @@ if (/new\s+MutationObserver/.test(badge)) error('Badge state must not own a glob
 
 const ui = read(path.join(moduleDir, 'translationsub-ui.js'));
 if (/repeat\(3\s*,/.test(ui)) error('Obsolete three-column TV layout returned to translationsub-ui.js');
+
+const source = read(path.join(moduleDir, 'translationsub-source.js'));
+if (!source.includes('hover:long.translationsubSource')) error('Subscriptions page long-press context menu is missing');
+if (!source.includes('Lampa.Select.show')) error('Subscriptions page long-press menu must use Lampa.Select');
+if (!source.includes('function restoreContentController')) error('Subscriptions page must restore the Lampa content controller after Select interaction');
+if (source.includes('Lampa.Select.close')) error('Subscriptions page must not call Lampa.Select.close(); it can trigger Android TV WebView/history freezes');
 
 const cardFlow = read(path.join(moduleDir, 'translationsub-card-flow.js'));
 if (/setTimeout\s*\(\s*function\s*\(\)\s*\{\s*openVoices\s*\(/s.test(cardFlow)) error('Card flow can reopen voice selector after an action');
