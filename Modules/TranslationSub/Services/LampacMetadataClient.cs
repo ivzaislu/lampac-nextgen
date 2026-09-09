@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using TranslationSub.Models;
@@ -33,9 +32,17 @@ internal static class LampacMetadataClient
     const int MaxMetadataDepth = 4;
     const int MaxMetadataPages = 64;
 
-    static readonly object clientLocker = new();
-    static HttpClient localClient;
-    static string localClientKey;
+    // Use the same TCP localhost path as Lampac OnlineApi.checkSearch().
+    // Internal Lampac requests are authenticated by xhost/xscheme/lcrqpasswd,
+    // not by a module-specific Unix-socket transport.
+    static readonly HttpClient metadataClient = new(new SocketsHttpHandler
+    {
+        AllowAutoRedirect = false,
+        UseProxy = false
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
 
     // Compatibility fallback for online modules that ignore rjson=true.
     // Normal metadata traversal uses the common Lampac JSON template contract.
@@ -55,15 +62,6 @@ internal static class LampacMetadataClient
         @"(?:season|сезон)\D{0,8}(?<n>\d{1,3})|(?<n2>\d{1,3})\D{0,8}(?:season|сезон)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    static readonly HttpClient externalClient = new(new SocketsHttpHandler
-    {
-        AllowAutoRedirect = false,
-        UseProxy = false
-    })
-    {
-        Timeout = TimeSpan.FromSeconds(30)
-    };
-
     public static async Task<IReadOnlyList<LampacVoiceMetadata>> ReadAsync(TranslationMetadataQuery query)
     {
         if (query == null || query.Sources == null || query.Sources.Count == 0)
@@ -78,7 +76,20 @@ internal static class LampacMetadataClient
         if (discovered.Count == 0)
             return Array.Empty<LampacVoiceMetadata>();
 
-        var values = await Task.WhenAll(discovered.Select(source => ReadSourceAsync(source, query))).ConfigureAwait(false);
+        // Match Lampac's per-balancer failure isolation: one broken source must not
+        // turn a successful response from every other source into an empty result.
+        var values = await Task.WhenAll(discovered.Select(async source =>
+        {
+            try
+            {
+                return await ReadSourceAsync(source, query).ConfigureAwait(false);
+            }
+            catch
+            {
+                return new List<LampacVoiceMetadata>();
+            }
+        })).ConfigureAwait(false);
+
         return values
             .SelectMany(x => x)
             .Where(x => x != null && !string.IsNullOrWhiteSpace(x.VoiceName))
@@ -726,12 +737,20 @@ internal static class LampacMetadataClient
             request.Headers.TryAddWithoutValidation("User-Agent", "Lampac-TranslationSub/1.0");
             request.Headers.TryAddWithoutValidation("X-TranslationSub-Metadata", "1");
 
-            // Lampac itself uses lcrqpasswd for trusted localhost online requests.
-            // Keep the credential strictly on the loopback/unix-socket transport.
-            if (localRoute && !string.IsNullOrWhiteSpace(CoreInit.rootPasswd))
-                request.Headers.TryAddWithoutValidation("lcrqpasswd", CoreInit.rootPasswd);
+            if (localRoute)
+            {
+                string xhost = LocalRequestHost();
+                string xscheme = LocalRequestScheme();
 
-            using var response = await GetClient(localRoute)
+                if (!string.IsNullOrWhiteSpace(xhost))
+                    request.Headers.TryAddWithoutValidation("xhost", xhost);
+                if (!string.IsNullOrWhiteSpace(xscheme))
+                    request.Headers.TryAddWithoutValidation("xscheme", xscheme);
+                if (!string.IsNullOrWhiteSpace(CoreInit.rootPasswd))
+                    request.Headers.TryAddWithoutValidation("lcrqpasswd", CoreInit.rootPasswd);
+            }
+
+            using var response = await metadataClient
                 .SendAsync(request, HttpCompletionOption.ResponseContentRead)
                 .ConfigureAwait(false);
 
@@ -819,56 +838,6 @@ internal static class LampacMetadataClient
         return false;
     }
 
-    static HttpClient GetClient(bool localRoute)
-    {
-        if (!localRoute)
-            return externalClient;
-
-        var listen = CoreInit.conf?.listen;
-        string key = string.Join("|", listen?.sock ?? string.Empty, listen?.localhost ?? string.Empty, listen?.ip ?? string.Empty, listen?.port ?? 0);
-
-        lock (clientLocker)
-        {
-            if (localClient != null && string.Equals(localClientKey, key, StringComparison.Ordinal))
-                return localClient;
-
-            localClient?.Dispose();
-            localClient = CreateLocalClient(listen?.sock);
-            localClientKey = key;
-            return localClient;
-        }
-    }
-
-    static HttpClient CreateLocalClient(string socketName)
-    {
-        var handler = new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            UseProxy = false
-        };
-
-        if (!string.IsNullOrWhiteSpace(socketName))
-        {
-            string socketPath = $"/var/run/{socketName}.sock";
-            handler.ConnectCallback = async (_, cancellationToken) =>
-            {
-                var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                try
-                {
-                    await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), cancellationToken).ConfigureAwait(false);
-                    return new NetworkStream(socket, ownsSocket: true);
-                }
-                catch
-                {
-                    socket.Dispose();
-                    throw;
-                }
-            };
-        }
-
-        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
-    }
-
     static Uri ResolveRequestUri(string pathOrUrl, out bool localRoute)
     {
         localRoute = true;
@@ -888,25 +857,44 @@ internal static class LampacMetadataClient
             path = "/" + path;
 
         var listen = CoreInit.conf?.listen;
+        if (listen == null || listen.port <= 0)
+            return null;
+
+        // This intentionally mirrors OnlineApi.checkSearch(): internal online
+        // routes always go through listen.localhost:listen.port over HTTP.
+        string localHost = string.IsNullOrWhiteSpace(listen.localhost)
+            ? "127.0.0.1"
+            : listen.localhost.Trim();
+
+        if (localHost.Contains(':') && !localHost.StartsWith('['))
+            localHost = $"[{localHost}]";
+
+        return new Uri(new Uri($"http://{localHost}:{listen.port}/"), path.TrimStart('/'));
+    }
+
+    static string LocalRequestHost()
+    {
+        var listen = CoreInit.conf?.listen;
         if (listen == null)
             return null;
 
-        if (!string.IsNullOrWhiteSpace(listen.sock))
-            return new Uri(new Uri("http://localhost/"), path.TrimStart('/'));
-        if (listen.port <= 0)
-            return null;
+        if (!string.IsNullOrWhiteSpace(listen.host))
+            return listen.host.Trim();
 
-        string host = listen.ip;
-        if (string.IsNullOrWhiteSpace(host)
-            || host.Equals("any", StringComparison.OrdinalIgnoreCase)
-            || host.Equals("broadcast", StringComparison.OrdinalIgnoreCase)
-            || host == "0.0.0.0"
-            || host == "::")
-            host = string.IsNullOrWhiteSpace(listen.localhost) ? "127.0.0.1" : listen.localhost;
-        if (IPAddress.TryParse(host, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6)
-            host = $"[{host}]";
+        string localHost = string.IsNullOrWhiteSpace(listen.localhost)
+            ? "127.0.0.1"
+            : listen.localhost.Trim();
 
-        return new Uri(new Uri($"http://{host}:{listen.port}/"), path.TrimStart('/'));
+        if (localHost.Contains(':') && !localHost.StartsWith('['))
+            localHost = $"[{localHost}]";
+
+        return listen.port > 0 ? $"{localHost}:{listen.port}" : localHost;
+    }
+
+    static string LocalRequestScheme()
+    {
+        string scheme = CoreInit.conf?.listen?.scheme;
+        return string.IsNullOrWhiteSpace(scheme) ? "http" : scheme.Trim();
     }
 
     static bool IsLocalAddress(Uri uri)
@@ -917,21 +905,41 @@ internal static class LampacMetadataClient
             return true;
 
         var listen = CoreInit.conf?.listen;
-        string localhost = listen?.localhost;
-        if (!string.IsNullOrWhiteSpace(localhost)
-            && uri.Host.Equals(localhost.Trim('[', ']'), StringComparison.OrdinalIgnoreCase))
+        if (HostMatches(uri, listen?.localhost) || HostMatches(uri, listen?.host))
             return true;
 
-        string listenHost = listen?.ip;
-        if (!string.IsNullOrWhiteSpace(listenHost)
-            && !listenHost.Equals("any", StringComparison.OrdinalIgnoreCase)
-            && !listenHost.Equals("broadcast", StringComparison.OrdinalIgnoreCase)
-            && listenHost != "0.0.0.0"
-            && listenHost != "::"
-            && uri.Host.Equals(listenHost.Trim('[', ']'), StringComparison.OrdinalIgnoreCase))
+        string listenIp = listen?.ip;
+        if (!string.IsNullOrWhiteSpace(listenIp)
+            && !listenIp.Equals("any", StringComparison.OrdinalIgnoreCase)
+            && !listenIp.Equals("broadcast", StringComparison.OrdinalIgnoreCase)
+            && listenIp != "0.0.0.0"
+            && listenIp != "::"
+            && HostMatches(uri, listenIp))
+        {
             return true;
+        }
 
         return false;
+    }
+
+    static bool HostMatches(Uri uri, string configuredHost)
+    {
+        if (uri == null || string.IsNullOrWhiteSpace(configuredHost))
+            return false;
+
+        string value = configuredHost.Trim();
+        if (!value.Contains("://", StringComparison.Ordinal))
+            value = "http://" + value.TrimStart('/');
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out var configured))
+            return uri.Host.Equals(configured.Host, StringComparison.OrdinalIgnoreCase);
+
+        string host = configuredHost.Trim().Trim('[', ']');
+        int colon = host.LastIndexOf(':');
+        if (colon > 0 && host.IndexOf(':') == colon)
+            host = host[..colon];
+
+        return uri.Host.Equals(host.Trim('[', ']'), StringComparison.OrdinalIgnoreCase);
     }
 
     sealed class OnlineNode
