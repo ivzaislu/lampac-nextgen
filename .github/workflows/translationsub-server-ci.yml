@@ -44,6 +44,8 @@ jobs:
             enable: false
           cache:
             type: mem
+          accsdb:
+            enable: false
           listen:
             port: 9118
           YAML
