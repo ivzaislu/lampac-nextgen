@@ -163,17 +163,10 @@
     function sourceLabels(item) {
         var sources = value(item, 'Sources', 'sources', []);
         var names = [];
-        var map = {
-            flixcdn: 'FlixCDN',
-            phantom: 'Phantom',
-            zetflixdb: 'ZetflixDB',
-            cdnvideohub: 'VideoHUB'
-        };
 
         if (Array.isArray(sources)) {
             sources.forEach(function (source) {
-                var key = String(value(source, 'Source', 'source', '') || '').toLowerCase();
-                var name = map[key] || key;
+                var name = String(value(source, 'Source', 'source', '') || '').trim();
                 if (name && names.indexOf(name) === -1) names.push(name);
             });
         }
