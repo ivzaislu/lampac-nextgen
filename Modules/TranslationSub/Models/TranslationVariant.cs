@@ -47,7 +47,7 @@ public class TranslationSourceBlock
 
 public class TranslationVariantsResponse
 {
-    public string Source { get; set; } = "lampac";
+    public string Source { get; set; } = "multi";
     public List<int> Seasons { get; set; } = new();
     public List<TranslationVariant> Translations { get; set; } = new();
     public List<TranslationSourceBlock> Items { get; set; } = new();
