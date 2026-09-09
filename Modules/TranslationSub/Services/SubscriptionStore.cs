@@ -65,6 +65,22 @@ public static class SubscriptionStore
         }
     }
 
+    public static bool MutateIfChanged(Func<List<TranslationSubscription>, bool> action)
+    {
+        if (action == null)
+            return false;
+
+        lock (locker)
+        {
+            var list = LoadUnsafe();
+            if (!action(list))
+                return false;
+
+            SaveUnsafe(list);
+            return true;
+        }
+    }
+
     public static T MutateResult<T>(Func<List<TranslationSubscription>, T> action)
     {
         if (action == null)
