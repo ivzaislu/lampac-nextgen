@@ -4,7 +4,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using TranslationSub.Models;
-using TranslationSub.Providers;
 
 namespace TranslationSub.Services;
 
@@ -16,9 +15,6 @@ public static class TranslationSubscriptionService
     public static void Start()
     {
         Stop();
-
-        // Cheap scheduler wake-up only. External requests happen only when
-        // TMDB/user settings say a subscription is actually due.
         timer = new Timer(async _ => await Tick(), null,
             TimeSpan.FromSeconds(15),
             TimeSpan.FromMinutes(Math.Max(5, ModInit.conf?.check_interval_minutes ?? 15)));
@@ -30,11 +26,8 @@ public static class TranslationSubscriptionService
         timer = null;
     }
 
-    public static async Task Tick(string userKey = null, HashSet<string> enabledSources = null, bool force = false)
+    public static async Task Tick(string userKey = null, HashSet<string> selectedSources = null, bool force = false)
     {
-        // Keep backward compatibility for callers that historically used userKey
-        // as the implicit force flag. Explicit force is required for manual checks
-        // without a userKey (for example local/global maintenance calls).
         force = force || !string.IsNullOrWhiteSpace(userKey);
 
         bool entered = false;
@@ -42,209 +35,223 @@ public static class TranslationSubscriptionService
         {
             if (force)
             {
-                // Manual checks must never disappear just because the background
-                // timer is currently running. Queue and execute them afterwards.
                 await tickGate.WaitAsync().ConfigureAwait(false);
                 entered = true;
             }
             else
             {
-                // Background wake-ups are cheap and may be skipped while another
-                // tick is active. The next timer wake-up will try again.
                 entered = await tickGate.WaitAsync(0).ConfigureAwait(false);
                 if (!entered)
                     return;
             }
 
             DateTime now = DateTime.Now;
+            var snapshot = SubscriptionStore.Load();
+            var settingsCache = new Dictionary<string, TranslationUserSettings>(StringComparer.Ordinal);
+            var tmdbCache = new Dictionary<string, TmdbScheduleSnapshot>(StringComparer.OrdinalIgnoreCase);
+            var variantCache = new Dictionary<string, TranslationVariantsResponse>(StringComparer.Ordinal);
 
-            try
+            foreach (var sub in snapshot)
             {
-                var snapshot = SubscriptionStore.Load();
-                var settingsCache = new Dictionary<string, TranslationUserSettings>(StringComparer.Ordinal);
-                var tmdbCache = new Dictionary<string, TmdbScheduleSnapshot>(StringComparer.OrdinalIgnoreCase);
-                var variantCache = new Dictionary<string, TranslationVariantsResponse>(StringComparer.Ordinal);
+                if (!string.IsNullOrWhiteSpace(userKey) && sub.UserKey != userKey)
+                    continue;
 
-                foreach (var sub in snapshot)
+                try
                 {
-                    if (!string.IsNullOrWhiteSpace(userKey) && sub.UserKey != userKey)
-                        continue;
-
-                    try
+                    string settingsKey = string.IsNullOrWhiteSpace(sub.UserKey) ? "local" : sub.UserKey;
+                    if (!settingsCache.TryGetValue(settingsKey, out var settings))
                     {
-                        string settingsKey = string.IsNullOrWhiteSpace(sub.UserKey) ? "local" : sub.UserKey;
-                        if (!settingsCache.TryGetValue(settingsKey, out var settings))
+                        settings = TranslationSettingsStore.Get(settingsKey);
+                        settingsCache[settingsKey] = settings;
+                    }
+
+                    bool smartTmdb = settings.UseTmdbSchedule && sub.IsSerial
+                        && (IsTmdbId(sub.TmdbId) || IsImdbId(sub.ImdbId));
+                    TmdbScheduleSnapshot tmdb = null;
+
+                    if (smartTmdb)
+                    {
+                        string identityKey = TmdbCacheKey(sub);
+                        if (!string.IsNullOrWhiteSpace(identityKey)
+                            && tmdbCache.TryGetValue(identityKey, out tmdb))
                         {
-                            settings = TranslationSettingsStore.Get(settingsKey);
-                            settingsCache[settingsKey] = settings;
+                            ApplyTmdbState(sub.Id, tmdb, settings, now);
+                            CopyTmdbState(sub, tmdb, settings, now);
+                            HandleNewSeason(sub, tmdb, settings, now);
                         }
-
-                        bool smartTmdb = settings.UseTmdbSchedule && sub.IsSerial
-                            && (IsTmdbId(sub.TmdbId) || IsImdbId(sub.ImdbId));
-                        TmdbScheduleSnapshot tmdb = null;
-
-                        if (smartTmdb)
+                        else if (force || ShouldRefreshTmdb(sub, settings, now))
                         {
-                            string identityKey = TmdbCacheKey(sub);
-
-                            // If another subscription for the same show refreshed TMDB in
-                            // this tick, reuse it. This is important when several voices are
-                            // subscribed for the same series.
-                            if (!string.IsNullOrWhiteSpace(identityKey)
-                                && tmdbCache.TryGetValue(identityKey, out tmdb))
+                            tmdb = await TmdbScheduleService.Get(sub.TmdbId, sub.ImdbId).ConfigureAwait(false);
+                            if (tmdb != null)
                             {
+                                tmdbCache["tmdb:" + tmdb.TmdbId] = tmdb;
+                                if (IsImdbId(tmdb.ImdbId))
+                                    tmdbCache["imdb:" + tmdb.ImdbId.ToLowerInvariant()] = tmdb;
+                                if (!string.IsNullOrWhiteSpace(identityKey))
+                                    tmdbCache[identityKey] = tmdb;
+
                                 ApplyTmdbState(sub.Id, tmdb, settings, now);
                                 CopyTmdbState(sub, tmdb, settings, now);
                                 HandleNewSeason(sub, tmdb, settings, now);
                             }
-                            else if (force || ShouldRefreshTmdb(sub, settings, now))
-                            {
-                                tmdb = await TmdbScheduleService.Get(sub.TmdbId, sub.ImdbId).ConfigureAwait(false);
-                                if (tmdb != null)
-                                {
-                                    string resolvedTmdbKey = "tmdb:" + tmdb.TmdbId;
-                                    tmdbCache[resolvedTmdbKey] = tmdb;
-                                    if (IsImdbId(tmdb.ImdbId))
-                                        tmdbCache["imdb:" + tmdb.ImdbId.ToLowerInvariant()] = tmdb;
-                                    if (!string.IsNullOrWhiteSpace(identityKey))
-                                        tmdbCache[identityKey] = tmdb;
-
-                                    ApplyTmdbState(sub.Id, tmdb, settings, now);
-                                    CopyTmdbState(sub, tmdb, settings, now);
-                                    HandleNewSeason(sub, tmdb, settings, now);
-                                }
-                            }
-
-                            if (tmdb == null)
-                                tmdb = SnapshotFromStored(sub);
                         }
 
-                        int season = sub.IsSerial ? sub.CurrentSeason.GetValueOrDefault(1) : 0;
-                        if (sub.IsSerial && season <= 0)
-                            season = 1;
+                        if (tmdb == null)
+                            tmdb = SnapshotFromStored(sub);
+                    }
 
-                        int expectedAired = smartTmdb ? ExpectedAiredEpisode(sub, tmdb, season, now) : 0;
+                    int season = sub.IsSerial ? sub.CurrentSeason.GetValueOrDefault(1) : 0;
+                    if (sub.IsSerial && season <= 0)
+                        season = 1;
 
-                        if (!force)
+                    int expectedAired = smartTmdb ? ExpectedAiredEpisode(sub, tmdb, season, now) : 0;
+
+                    if (!force)
+                    {
+                        if (smartTmdb && tmdb != null)
                         {
-                            if (smartTmdb && tmdb != null)
+                            if (!ShouldPollBalancersSmart(sub, tmdb, settings, season, expectedAired, now, out string state))
                             {
-                                if (!ShouldPollBalancersSmart(sub, tmdb, settings, season, expectedAired, now, out string state))
-                                {
-                                    SetScheduleState(sub.Id, state, expectedAired);
-                                    continue;
-                                }
-                            }
-                            else if (!IntervalDue(sub.LastCheckedAt, settings.CheckIntervalHours, now))
-                            {
-                                SetScheduleState(sub.Id, smartTmdb ? "tmdb_unavailable" : "interval_wait", expectedAired);
+                                SetScheduleState(sub.Id, state, expectedAired);
                                 continue;
                             }
                         }
-
-                        HashSet<string> sources = ResolveSources(sub, settings, enabledSources, force);
-                        if (sources != null && sources.Count == 0)
+                        else if (!IntervalDue(sub.LastCheckedAt, settings.CheckIntervalHours, now))
                         {
-                            SetScheduleState(sub.Id, "sources_disabled", expectedAired);
+                            SetScheduleState(sub.Id, smartTmdb ? "tmdb_unavailable" : "interval_wait", expectedAired);
                             continue;
                         }
+                    }
 
-                        long.TryParse(sub.KpId, out long kp);
-                        var query = new VoiceProviderQuery
-                        {
-                            Uid = sub.Uid,
-                            ImdbId = sub.ImdbId,
-                            KpId = kp,
-                            Title = sub.Title,
-                            OriginalTitle = sub.OriginalTitle,
-                            Year = sub.Year.GetValueOrDefault(0),
-                            IsSerial = sub.IsSerial,
-                            Season = season,
-                            Sources = sources
-                        };
+                    HashSet<string> sources = ResolveSources(settings, selectedSources);
+                    if (sources.Count == 0)
+                    {
+                        SetScheduleState(sub.Id, "sources_disabled", expectedAired);
+                        continue;
+                    }
 
-                        string cacheKey = BuildVariantCacheKey(query);
-                        if (!variantCache.TryGetValue(cacheKey, out var response))
-                        {
-                            response = await TranslationProviderHub.GetVariants(query).ConfigureAwait(false);
-                            variantCache[cacheKey] = response;
-                        }
+                    long.TryParse(sub.KpId, out long kp);
+                    var query = new TranslationMetadataQuery
+                    {
+                        Uid = sub.Uid,
+                        ContentId = sub.ContentId,
+                        TmdbId = sub.TmdbId,
+                        ImdbId = sub.ImdbId,
+                        KpId = kp,
+                        Title = sub.Title,
+                        OriginalTitle = sub.OriginalTitle,
+                        Year = sub.Year.GetValueOrDefault(0),
+                        IsSerial = sub.IsSerial,
+                        Season = season,
+                        Sources = sources
+                    };
 
-                        var matches = response.Translations.Where(x =>
-                            (!sub.IsSerial || x.season == season) &&
-                            (
-                                (!string.IsNullOrWhiteSpace(sub.TranslationId) && x.translation_id == sub.TranslationId) ||
-                                (!string.IsNullOrWhiteSpace(sub.TranslationName) &&
-                                 VoiceNormalize.Normalize(x.translation) == VoiceNormalize.Normalize(sub.TranslationName))
-                            )
-                        ).ToList();
+                    string cacheKey = BuildVariantCacheKey(query);
+                    if (!variantCache.TryGetValue(cacheKey, out var response))
+                    {
+                        response = await LampacMetadataService.GetVariants(query).ConfigureAwait(false);
+                        variantCache[cacheKey] = response;
+                    }
 
-                        int latestEpisode = matches.Select(x => x.episode).DefaultIfEmpty(0).Max();
-                        if (!sub.IsSerial && matches.Count > 0)
-                            latestEpisode = Math.Max(latestEpisode, 1);
+                    var matches = response.Translations.Where(x =>
+                        (!sub.IsSerial || x.season == season) &&
+                        (
+                            (!string.IsNullOrWhiteSpace(sub.TranslationId) && x.translation_id == sub.TranslationId) ||
+                            (!string.IsNullOrWhiteSpace(sub.TranslationName) &&
+                             VoiceNormalize.Normalize(x.translation) == VoiceNormalize.Normalize(sub.TranslationName))
+                        )
+                    ).ToList();
 
-                        // TMDB is authoritative for what has actually aired. This also
-                        // fixes old bad data such as a balancer reporting E13 while TMDB
-                        // says the season has only aired through E10.
-                        if (smartTmdb && expectedAired > 0)
-                            latestEpisode = Math.Min(latestEpisode, expectedAired);
+                    int latestEpisode = matches.Select(x => x.episode).DefaultIfEmpty(0).Max();
+                    if (!sub.IsSerial && matches.Count > 0)
+                        latestEpisode = Math.Max(latestEpisode, 1);
+                    if (smartTmdb && expectedAired > 0)
+                        latestEpisode = Math.Min(latestEpisode, expectedAired);
 
-                        var best = matches.OrderByDescending(x => x.episode).FirstOrDefault();
-                        var newSources = best?.Sources?.Where(x => x != null).Select(x => new TranslationSubscriptionSource
+                    var best = matches.OrderByDescending(x => x.episode).FirstOrDefault();
+                    var foundSources = best?.Sources?
+                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Source))
+                        .Select(x => new TranslationSubscriptionSource
                         {
                             Source = x.Source,
-                            Path = x.Path,
                             TranslationId = x.TranslationId,
                             TranslationName = x.TranslationName
-                        }).ToList();
+                        })
+                        .ToList();
 
-                        string subscriptionId = sub.Id;
-                        bool isSerial = sub.IsSerial;
+                    string subscriptionId = sub.Id;
+                    bool isSerial = sub.IsSerial;
 
-                        SubscriptionStore.Mutate(list =>
-                        {
-                            var current = list.FirstOrDefault(x => x.Id == subscriptionId);
-                            if (current == null)
-                                return;
-
-                            if (newSources != null && newSources.Count > 0)
-                            {
-                                current.Sources = newSources;
-                                current.Source = newSources.Count > 1 ? "multi" : newSources[0].Source;
-                            }
-
-                            if (latestEpisode > current.LastEpisode.GetValueOrDefault(0))
-                            {
-                                current.LastEpisode = latestEpisode;
-                                current.LastSeason = isSerial ? season : 0;
-                            }
-
-                            if (smartTmdb && expectedAired > 0 && current.LastEpisode.GetValueOrDefault(0) > expectedAired)
-                                current.LastEpisode = expectedAired;
-
-                            current.Notified = current.LastEpisode.GetValueOrDefault(0)
-                                <= current.CurrentEpisode.GetValueOrDefault(0);
-                            current.LastCheckedAt = now;
-                            current.ScheduleState = ResolveAfterCheckState(current, tmdb, settings, expectedAired, now);
-                        });
-                    }
-                    catch
+                    SubscriptionStore.Mutate(list =>
                     {
-                        // One broken subscription/provider must not stop the queue.
-                    }
+                        var current = list.FirstOrDefault(x => x.Id == subscriptionId);
+                        if (current == null)
+                            return;
+
+                        if (foundSources != null && foundSources.Count > 0)
+                        {
+                            current.Sources = foundSources;
+                            current.Source = foundSources.Count > 1 ? "multi" : foundSources[0].Source;
+                        }
+
+                        if (latestEpisode > current.LastEpisode.GetValueOrDefault(0))
+                        {
+                            current.LastEpisode = latestEpisode;
+                            current.LastSeason = isSerial ? season : 0;
+                        }
+
+                        if (smartTmdb && expectedAired > 0 && current.LastEpisode.GetValueOrDefault(0) > expectedAired)
+                            current.LastEpisode = expectedAired;
+
+                        current.Notified = current.LastEpisode.GetValueOrDefault(0)
+                            <= current.CurrentEpisode.GetValueOrDefault(0);
+                        current.LastCheckedAt = now;
+                        current.ScheduleState = ResolveAfterCheckState(current, tmdb, settings, expectedAired, now);
+                    });
+                }
+                catch
+                {
+                    // One broken subscription or balancer must not stop the queue.
                 }
             }
-            catch
-            {
-                // Timer uses an async callback. Never let storage/network failures
-                // escape and terminate the Lampac process.
-            }
+        }
+        catch
+        {
+            // Timer callback must never terminate Lampac on storage/network failures.
         }
         finally
         {
             if (entered)
                 tickGate.Release();
         }
+    }
+
+    static HashSet<string> ResolveSources(TranslationUserSettings settings, HashSet<string> selectedSources)
+    {
+        IEnumerable<string> values = selectedSources ?? settings?.Sources ?? Enumerable.Empty<string>();
+        return values
+            .Select(TranslationSettingsStore.NormalizeSourceId)
+            .Where(x => x != null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    static string BuildVariantCacheKey(TranslationMetadataQuery query)
+    {
+        string sources = string.Join(",", (query.Sources ?? new HashSet<string>())
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
+
+        return string.Join("|",
+            query.Uid ?? string.Empty,
+            query.ContentId ?? string.Empty,
+            query.TmdbId ?? string.Empty,
+            query.KpId,
+            query.ImdbId ?? string.Empty,
+            query.Title ?? string.Empty,
+            query.OriginalTitle ?? string.Empty,
+            query.Year,
+            query.IsSerial ? 1 : 0,
+            query.Season,
+            sources);
     }
 
     static bool IsTmdbId(string value)
@@ -272,15 +279,12 @@ public static class TranslationSubscriptionService
         if (!sub.TmdbLastSyncedAt.HasValue)
             return true;
 
-        // A known release date is a hard wake-up point. Do not wait another
-        // TmdbRefreshHours after the calendar reaches that date.
         if (sub.TmdbNextAirDate.HasValue && sub.TmdbNextAirDate.Value.Date <= now.Date)
         {
             int lastSeason = sub.TmdbLastSeason.GetValueOrDefault(0);
             int lastEpisode = sub.TmdbLastEpisode.GetValueOrDefault(0);
             int nextSeason = sub.TmdbNextSeason.GetValueOrDefault(0);
             int nextEpisode = sub.TmdbNextEpisode.GetValueOrDefault(0);
-
             if (nextSeason > lastSeason || (nextSeason == lastSeason && nextEpisode > lastEpisode))
                 return true;
         }
@@ -289,57 +293,11 @@ public static class TranslationSubscriptionService
         TimeSpan interval = ended
             ? TimeSpan.FromDays(Math.Max(1, settings.EndedRefreshDays))
             : TimeSpan.FromHours(Math.Max(6, settings.TmdbRefreshHours));
-
         return now - sub.TmdbLastSyncedAt.Value >= interval;
     }
 
     static bool IntervalDue(DateTime? last, int hours, DateTime now)
         => !last.HasValue || now - last.Value >= TimeSpan.FromHours(Math.Max(1, Math.Min(24, hours)));
-
-    static HashSet<string> ResolveSources(
-        TranslationSubscription sub,
-        TranslationUserSettings settings,
-        HashSet<string> enabledSources,
-        bool force)
-    {
-        if (enabledSources != null)
-            return enabledSources;
-
-        if (!force)
-        {
-            return (settings.Sources ?? new List<string>())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
-
-        if (sub.Sources != null && sub.Sources.Count > 0)
-        {
-            return sub.Sources
-                .Where(x => !string.IsNullOrWhiteSpace(x.Source))
-                .Select(x => x.Source)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
-
-        return null;
-    }
-
-    static string BuildVariantCacheKey(VoiceProviderQuery query)
-    {
-        string sources = query.Sources == null
-            ? "*"
-            : string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
-
-        return string.Join("|",
-            query.Uid ?? string.Empty,
-            query.KpId,
-            query.ImdbId ?? string.Empty,
-            query.Title ?? string.Empty,
-            query.OriginalTitle ?? string.Empty,
-            query.Year,
-            query.IsSerial ? 1 : 0,
-            query.Season,
-            sources);
-    }
 
     static void ApplyTmdbState(string subscriptionId, TmdbScheduleSnapshot tmdb, TranslationUserSettings settings, DateTime now)
     {
@@ -439,10 +397,8 @@ public static class TranslationSubscriptionService
 
         if (tmdb.LastSeason > season)
             return tmdb.SeasonEpisodeCounts.TryGetValue(season, out int count) ? Math.Max(0, count) : dueNext;
-
         if (tmdb.LastSeason == season)
             return Math.Max(Math.Max(0, tmdb.LastEpisode), dueNext);
-
         return dueNext;
     }
 
@@ -456,25 +412,21 @@ public static class TranslationSubscriptionService
         out string state)
     {
         int available = sub.LastEpisode.GetValueOrDefault(0);
-
         if (expectedAired > available)
         {
             state = "active_dubbing";
             return IntervalDue(sub.LastCheckedAt, settings.CheckIntervalHours, now);
         }
-
         if (tmdb.NextAirDate.HasValue && tmdb.NextAirDate.Value.Date > now.Date)
         {
             state = "waiting_air";
             return false;
         }
-
         if (IsEndedStatus(tmdb.Status))
         {
             state = "ended";
             return false;
         }
-
         if (NewSeasonStarted(tmdb, season, now))
         {
             state = string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase)
@@ -482,7 +434,6 @@ public static class TranslationSubscriptionService
                 : "season_complete";
             return false;
         }
-
         state = "waiting_tmdb";
         return false;
     }
@@ -500,18 +451,14 @@ public static class TranslationSubscriptionService
         int available = current.LastEpisode.GetValueOrDefault(0);
         if (expectedAired > available)
             return "active_dubbing";
-
         if (tmdb.NextAirDate.HasValue && tmdb.NextAirDate.Value.Date > now.Date)
             return "waiting_air";
-
         if (IsEndedStatus(tmdb.Status))
             return "ended";
-
         if (NewSeasonStarted(tmdb, current.CurrentSeason.GetValueOrDefault(1), now))
             return string.Equals(settings.NewSeasonMode, "notify", StringComparison.OrdinalIgnoreCase)
                 ? "new_season"
                 : "season_complete";
-
         return "waiting_tmdb";
     }
 
@@ -519,10 +466,8 @@ public static class TranslationSubscriptionService
     {
         if (tmdb == null)
             return false;
-
         if (tmdb.LastSeason > currentSeason && tmdb.LastAirDate.HasValue && tmdb.LastAirDate.Value.Date <= now.Date)
             return true;
-
         return tmdb.NextSeason > currentSeason
             && tmdb.NextAirDate.HasValue
             && tmdb.NextAirDate.Value.Date <= now.Date;
@@ -547,13 +492,11 @@ public static class TranslationSubscriptionService
                 current.ScheduleState = state;
                 changed = true;
             }
-
             if (expectedAired > 0 && current.TmdbTargetSeasonEpisodes.GetValueOrDefault(0) != expectedAired)
             {
                 current.TmdbTargetSeasonEpisodes = expectedAired;
                 changed = true;
             }
-
             return changed;
         });
     }
@@ -588,7 +531,6 @@ public static class TranslationSubscriptionService
                     (!string.IsNullOrWhiteSpace(sub.TranslationId) && x.TranslationId == sub.TranslationId)
                     || VoiceNormalize.Normalize(x.TranslationName) == normalizedVoice
                 ));
-
             if (exists)
                 return false;
 
@@ -617,7 +559,6 @@ public static class TranslationSubscriptionService
                 Sources = sub.Sources?.Select(x => new TranslationSubscriptionSource
                 {
                     Source = x.Source,
-                    Path = x.Path,
                     TranslationId = x.TranslationId,
                     TranslationName = x.TranslationName
                 }).ToList() ?? new List<TranslationSubscriptionSource>(),
