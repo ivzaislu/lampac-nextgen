@@ -14,16 +14,10 @@
 
     var API = {
         updates: '/translationsub/updates',
-        check: '/translationsub/check'
+        check: '/translationsub/check',
+        settings: '/translationsub/user-settings'
     };
-
-    var SETTINGS = {
-        flixcdn: 'translationsub_flixcdn',
-        phantom: 'translationsub_phantom',
-        zetflixdb: 'translationsub_zetflixdb',
-        videohub: 'translationsub_videohub'
-    };
-
+    var SOURCES_KEY = 'translationsub_sources';
     var state = { started: false };
 
     function log() {
@@ -57,9 +51,7 @@
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
+        } catch (e2) { return fallback; }
     }
 
     function storageSet(name, value) {
@@ -69,23 +61,27 @@
                 return;
             }
         } catch (e) {}
-        try { localStorage.setItem(name, value); } catch (e2) {}
+        try { localStorage.setItem(name, typeof value === 'string' ? value : JSON.stringify(value)); } catch (e2) {}
     }
 
-    function settingBool(name, fallback) {
-        var value = storageGet(name, fallback);
-        if (value === true || value === 1 || value === '1' || value === 'true') return true;
-        if (value === false || value === 0 || value === '0' || value === 'false') return false;
-        return !!fallback;
+    function sourceList(value) {
+        if (typeof value === 'string') {
+            try { value = JSON.parse(value); }
+            catch (e) { value = value ? value.split(',') : []; }
+        }
+        if (!Array.isArray(value)) return [];
+
+        var seen = {};
+        return value.map(function (item) { return String(item || '').trim().toLowerCase(); })
+            .filter(function (item) {
+                if (!item || seen[item]) return false;
+                seen[item] = true;
+                return true;
+            });
     }
 
     function enabledSources() {
-        var result = [];
-        if (settingBool(SETTINGS.flixcdn, true)) result.push('flixcdn');
-        if (settingBool(SETTINGS.phantom, true)) result.push('phantom');
-        if (settingBool(SETTINGS.zetflixdb, true)) result.push('zetflixdb');
-        if (settingBool(SETTINGS.videohub, true)) result.push('cdnvideohub');
-        return result;
+        return sourceList(storageGet(SOURCES_KEY, []));
     }
 
     function lampacUid() {
@@ -148,9 +144,16 @@
                 else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(null);
-        } catch (e) {
-            error(e);
-        }
+        } catch (e) { error(e); }
+    }
+
+    function refreshSourceSelection(done) {
+        done = typeof done === 'function' ? done : function () {};
+        request('GET', API.settings, { userKey: userKey(), uid: lampacUid() }, function (settings) {
+            var sources = sourceList(settings && (settings.Sources || settings.sources));
+            storageSet(SOURCES_KEY, sources);
+            done(sources, settings || {});
+        }, function () { done(enabledSources(), {}); });
     }
 
     function notify(text) {
@@ -177,17 +180,14 @@
             }
             if (!plugins || typeof plugins !== 'object') plugins = Lampa.Manifest.plugins = {};
             plugins[META.component] = META;
-        } catch (e) {
-            log('manifest registration failed', e);
-        }
+        } catch (e) { log('manifest registration failed', e); }
     }
 
     function injectStyles() {
         if (document.getElementById('translationsub-core-style')) return;
         var style = document.createElement('style');
         style.id = 'translationsub-core-style';
-        style.textContent =
-            '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}' +
+        style.textContent = '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}' +
             '.translationsub-head>svg{width:1.8em;height:1.8em;display:block;fill:currentColor;flex:0 0 auto}';
         (document.head || document.documentElement).appendChild(style);
     }
@@ -217,13 +217,11 @@
         if (typeof $ !== 'function') return;
         var row = $('.head__actions').first();
         if (!row.length) return;
-
         var button = row.find('.translationsub-head').first();
         if (!button.length) {
             button = $('<div class="head__action selector translationsub-head" title="Уведомления озвучек">' + bellSvg() + '</div>');
             row.append(button);
         }
-
         button.off('hover:enter.translationsubCore');
         button.on('hover:enter.translationsubCore', openNoticeOrPage);
     }
@@ -237,44 +235,36 @@
             }
         } catch (e) {}
 
-        request('GET', API.updates, {
-            userKey: userKey(),
-            force: 'false',
-            sources: enabledSources().join(',')
-        }, function (updates) {
+        request('GET', API.updates, { userKey: userKey(), force: 'false' }, function (updates) {
             done(Array.isArray(updates) ? updates : []);
         }, function () { done([]); });
     }
 
     function forceCheckUpdatesUI(done) {
         done = typeof done === 'function' ? done : function () {};
-        var sources = enabledSources();
-        if (!sources.length) {
-            notify('Включите хотя бы один балансер в настройках');
-            done([]);
-            return;
-        }
+        refreshSourceSelection(function (sources) {
+            if (!sources.length) {
+                notify('Выберите хотя бы один балансер в настройках');
+                done([]);
+                return;
+            }
 
-        notify('Проверяю новые серии…');
-        request('GET', API.check, { userKey: userKey(), sources: sources.join(',') }, function () {
-            refreshUpdates(function (updates) {
-                notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
-                done(updates);
+            notify('Проверяю новые серии…');
+            request('GET', API.check, { userKey: userKey(), sources: sources.join(',') }, function () {
+                refreshUpdates(function (updates) {
+                    notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
+                    done(updates);
+                });
+            }, function () {
+                notify('Не удалось проверить новые серии');
+                done([]);
             });
-        }, function () {
-            notify('Не удалось проверить новые серии');
-            done([]);
         });
     }
 
     function cardFlow() {
-        try {
-            return window.TranslationSub && window.TranslationSub.cardFlow
-                ? window.TranslationSub.cardFlow
-                : null;
-        } catch (e) {
-            return null;
-        }
+        try { return window.TranslationSub && window.TranslationSub.cardFlow ? window.TranslationSub.cardFlow : null; }
+        catch (e) { return null; }
     }
 
     function openForItem(object) {
@@ -298,6 +288,7 @@
         Lampa.Listener.follow('app', function (event) {
             if (!event || event.type !== 'ready') return;
             injectHeadButton();
+            refreshSourceSelection();
             refreshUpdates();
         });
     }
@@ -305,11 +296,11 @@
     function start() {
         if (state.started || !window.Lampa) return;
         state.started = true;
-
         registerManifest();
         injectStyles();
         injectHeadButton();
         bindLampa();
+        refreshSourceSelection();
 
         window.TranslationSub = {
             version: META.version,
@@ -318,7 +309,8 @@
             checkUpdates: refreshUpdates,
             forceCheckUpdatesUI: forceCheckUpdatesUI,
             refresh: refresh,
-            enabledSources: enabledSources
+            enabledSources: enabledSources,
+            refreshSources: refreshSourceSelection
         };
 
         log('plugin core started', META.version, HOST);
