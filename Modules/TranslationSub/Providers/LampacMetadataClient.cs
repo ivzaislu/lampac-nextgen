@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -60,7 +61,10 @@ internal static class LampacMetadataClient
             if (modules == null || modules.Length == 0)
                 return false;
 
-            return modules.Any(module => module != null && module.enable && ModuleMatches(module, marker));
+            return modules.Any(module => module != null
+                && module.enable
+                && ModuleMatches(module, marker)
+                && NativeConfigEnabled(module));
         }
         catch
         {
@@ -84,6 +88,54 @@ internal static class LampacMetadataClient
         {
             return false;
         }
+    }
+
+    static bool NativeConfigEnabled(RootModule module)
+    {
+        try
+        {
+            var assembly = module?.assembly;
+            if (assembly == null)
+                return true;
+
+            var modInit = assembly.GetTypes().FirstOrDefault(t => t.Name == "ModInit");
+            if (modInit == null)
+                return true;
+
+            object conf = modInit.GetField("conf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null)
+                ?? modInit.GetProperty("conf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+
+            // A module with a native conf slot that has not been initialized yet
+            // is not ready for metadata polling.
+            if (conf == null)
+            {
+                bool hasConfMember = modInit.GetField("conf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static) != null
+                    || modInit.GetProperty("conf", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static) != null;
+                return !hasConfMember;
+            }
+
+            bool? enabled = ReadBool(conf, "enable");
+            bool? rip = ReadBool(conf, "rip");
+            return enabled != false && rip != true;
+        }
+        catch
+        {
+            // The /lite endpoint remains the final authority. Do not hide a loaded
+            // source only because a future module changes its config shape.
+            return true;
+        }
+    }
+
+    static bool? ReadBool(object value, string name)
+    {
+        if (value == null || string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var type = value.GetType();
+        object raw = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(value)
+            ?? type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(value);
+
+        return raw is bool flag ? flag : null;
     }
 
     static bool Contains(string value, string marker)
