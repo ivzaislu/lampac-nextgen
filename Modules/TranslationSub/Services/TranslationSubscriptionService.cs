@@ -533,15 +533,26 @@ public static class TranslationSubscriptionService
 
     static void SetScheduleState(string subscriptionId, string state, int expectedAired)
     {
-        SubscriptionStore.Mutate(list =>
+        SubscriptionStore.MutateIfChanged(list =>
         {
             var current = list.FirstOrDefault(x => x.Id == subscriptionId);
             if (current == null)
-                return;
+                return false;
 
-            current.ScheduleState = state;
-            if (expectedAired > 0)
+            bool changed = false;
+            if (!string.Equals(current.ScheduleState, state, StringComparison.Ordinal))
+            {
+                current.ScheduleState = state;
+                changed = true;
+            }
+
+            if (expectedAired > 0 && current.TmdbTargetSeasonEpisodes.GetValueOrDefault(0) != expectedAired)
+            {
                 current.TmdbTargetSeasonEpisodes = expectedAired;
+                changed = true;
+            }
+
+            return changed;
         });
     }
 
@@ -565,7 +576,7 @@ public static class TranslationSubscriptionService
         int expected = ExpectedAiredEpisode(tmdb, newSeason, now);
         string normalizedVoice = VoiceNormalize.Normalize(sub.TranslationName);
 
-        SubscriptionStore.Mutate(list =>
+        SubscriptionStore.MutateIfChanged(list =>
         {
             bool exists = list.Any(x =>
                 x.UserKey == sub.UserKey
@@ -577,7 +588,7 @@ public static class TranslationSubscriptionService
                 ));
 
             if (exists)
-                return;
+                return false;
 
             list.Add(new TranslationSubscription
             {
@@ -620,6 +631,7 @@ public static class TranslationSubscriptionService
                 ScheduleState = "active_dubbing",
                 TmdbNewSeasonAvailable = false
             });
+            return true;
         });
     }
 }
