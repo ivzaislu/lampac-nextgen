@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using TranslationSub.Models;
 using TranslationSub.Services;
@@ -20,11 +19,13 @@ public static class TranslationProviderHub
 
     public static async Task<TranslationVariantsResponse> GetVariants(VoiceProviderQuery query)
     {
-        if (ModInit.conf?.enable != true)
+        if (ModInit.conf?.enable != true || query == null)
             return new TranslationVariantsResponse();
 
-        IEnumerable<IVoiceProvider> activeProviders = providers;
-        if (query?.Sources != null)
+        IEnumerable<IVoiceProvider> activeProviders = providers
+            .Where(p => LampacMetadataClient.IsSourceAvailable(p.Source));
+
+        if (query.Sources != null)
             activeProviders = activeProviders.Where(p => query.Sources.Contains(p.Source));
 
         var tasks = activeProviders.Select(async provider =>
@@ -43,12 +44,14 @@ public static class TranslationProviderHub
             if (query.IsSerial && query.Season > 0)
                 values = values.Where(x => x != null && x.season == query.Season).ToList();
 
-            foreach (var value in values)
+            foreach (var value in values.Where(x => x != null))
             {
                 value.source ??= provider.Source;
                 value.path ??= provider.Path;
                 value.KpId = query.KpId > 0 ? query.KpId.ToString() : null;
                 value.ImdbId = query.ImdbId;
+                value.Episodes = EpisodeList(value);
+                value.episode = value.Episodes.DefaultIfEmpty(value.episode).Max();
             }
 
             return new TranslationSourceBlock
@@ -60,7 +63,7 @@ public static class TranslationProviderHub
         });
 
         var blocks = (await Task.WhenAll(tasks).ConfigureAwait(false)).ToList();
-        var raw = blocks.SelectMany(x => x.Translations).ToList();
+        var raw = blocks.SelectMany(x => x.Translations).Where(x => x != null).ToList();
 
         var combined = raw
             .Where(x => !string.IsNullOrWhiteSpace(x.translation))
@@ -74,15 +77,18 @@ public static class TranslationProviderHub
             {
                 var best = group
                     .OrderByDescending(x => x.episode)
-                    .ThenByDescending(x => QualityNumber(x.quality))
                     .First();
+
+                var episodes = group
+                    .SelectMany(EpisodeList)
+                    .Where(e => e > 0)
+                    .Distinct()
+                    .OrderBy(e => e)
+                    .ToList();
 
                 var sources = group
                     .GroupBy(x => x.source ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g
-                        .OrderByDescending(x => x.episode)
-                        .ThenByDescending(x => QualityNumber(x.quality))
-                        .First())
+                    .Select(g => g.OrderByDescending(x => x.episode).First())
                     .Select(x => new TranslationVariantSource
                     {
                         Source = x.source,
@@ -91,7 +97,7 @@ public static class TranslationProviderHub
                         TranslationName = x.translation,
                         Season = x.season,
                         Episode = x.episode,
-                        Quality = x.quality
+                        Episodes = EpisodeList(x)
                     })
                     .OrderBy(x => x.Source)
                     .ToList();
@@ -103,8 +109,8 @@ public static class TranslationProviderHub
                     translation = best.translation,
                     translation_id = group.Key.voice,
                     season = group.Key.season,
-                    episode = group.Max(x => x.episode),
-                    quality = BestQuality(group.Select(x => x.quality)),
+                    episode = episodes.DefaultIfEmpty(group.Max(x => x.episode)).Max(),
+                    Episodes = episodes,
                     KpId = best.KpId,
                     ImdbId = best.ImdbId,
                     Sources = sources
@@ -128,6 +134,23 @@ public static class TranslationProviderHub
         };
     }
 
+    public static IReadOnlyList<string> AvailableSources()
+        => LampacMetadataClient.AvailableSources();
+
+    static List<int> EpisodeList(TranslationVariant value)
+    {
+        var episodes = value?.Episodes?
+            .Where(e => e > 0)
+            .Distinct()
+            .OrderBy(e => e)
+            .ToList() ?? new List<int>();
+
+        if (episodes.Count == 0 && value?.episode > 0)
+            episodes.Add(value.episode);
+
+        return episodes;
+    }
+
     static string StableVoiceId(string voice, string source, string sourceId)
     {
         string normalized = VoiceNormalize.Normalize(voice);
@@ -135,21 +158,5 @@ public static class TranslationProviderHub
             return normalized;
 
         return $"{source}:{sourceId}";
-    }
-
-    static string BestQuality(IEnumerable<string> qualities)
-    {
-        return qualities
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .OrderByDescending(QualityNumber)
-            .FirstOrDefault();
-    }
-
-    static int QualityNumber(string quality)
-    {
-        if (string.IsNullOrWhiteSpace(quality))
-            return 0;
-
-        return int.TryParse(Regex.Match(quality, "([0-9]{3,4})").Groups[1].Value, out int q) ? q : 0;
     }
 }
