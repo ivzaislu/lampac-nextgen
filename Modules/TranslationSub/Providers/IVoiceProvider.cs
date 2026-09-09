@@ -6,6 +6,7 @@ namespace TranslationSub.Providers;
 
 public class VoiceProviderQuery
 {
+    public string Uid { get; set; }
     public string ImdbId { get; set; }
     public long KpId { get; set; }
     public string Title { get; set; }
