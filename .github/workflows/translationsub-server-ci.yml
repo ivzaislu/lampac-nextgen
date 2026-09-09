@@ -1,0 +1,186 @@
+name: TranslationSub Server CI
+
+on:
+  push:
+    branches:
+      - TranslationSub-server-fixes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+jobs:
+  test-build:
+    name: TranslationSub build + runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Restore
+        run: dotnet restore --verbosity minimal NextGen.slnx
+
+      - name: Build Release
+        run: dotnet build NextGen.slnx --configuration Release --no-restore --verbosity minimal
+
+      - name: Configure CI runtime
+        run: |
+          cat > init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          listen:
+            port: 9118
+          YAML
+
+      - name: Start Lampac and wait for TranslationSub
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet Core/bin/Release/net10.0/Core.dll > /tmp/lampac.log 2>&1 &
+          echo $! > /tmp/lampac.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              http://127.0.0.1:9118/translationsub/sources \
+              -o /tmp/sources.json; then
+              ready=1
+              break
+            fi
+
+            if ! kill -0 "$(cat /tmp/lampac.pid)" 2>/dev/null; then
+              echo "Lampac exited before TranslationSub became ready"
+              tail -n 250 /tmp/lampac.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != "1" ]; then
+            echo "TranslationSub endpoint did not become ready"
+            tail -n 250 /tmp/lampac.log || true
+            exit 1
+          fi
+
+          echo "TranslationSub is ready"
+          cat /tmp/sources.json
+
+      - name: Validate TranslationSub API shapes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl --silent --show-error --fail --max-time 10 \
+            'http://127.0.0.1:9118/translationsub/user-settings?userKey=ci' \
+            -o /tmp/settings.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            'http://127.0.0.1:9118/translationsub/variants?kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1&sources=__ci_none__' \
+            -o /tmp/empty-variants.json
+
+          python3 - <<'PY'
+          import json
+
+          with open('/tmp/sources.json', encoding='utf-8') as f:
+              sources = json.load(f)
+          assert isinstance(sources, dict), sources
+          assert isinstance(sources.get('sources'), list), sources
+
+          with open('/tmp/settings.json', encoding='utf-8') as f:
+              settings = json.load(f)
+          assert isinstance(settings, dict), settings
+          assert isinstance(settings.get('availableSources'), list), settings
+          assert isinstance(settings.get('sources'), list), settings
+
+          with open('/tmp/empty-variants.json', encoding='utf-8') as f:
+              variants = json.load(f)
+          assert variants.get('Source') == 'multi', variants
+          assert isinstance(variants.get('Seasons'), list), variants
+          assert isinstance(variants.get('Translations'), list), variants
+          assert isinstance(variants.get('Items'), list), variants
+          assert variants['Translations'] == [], variants
+          assert variants['Items'] == [], variants
+
+          print('sources:', sources['sources'])
+          print('settings.availableSources:', settings['availableSources'])
+          print('empty variants:', variants)
+          PY
+
+      - name: Live balancer metadata probes
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          base='http://127.0.0.1:9118/translationsub/variants?kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1'
+
+          for source in flixcdn phantom zetflixdb cdnvideohub; do
+            echo "===== ${source} ====="
+            status=$(curl --silent --show-error --max-time 75 \
+              -w '%{http_code}' \
+              "${base}&sources=${source}" \
+              -o "/tmp/${source}.json" || true)
+            echo "HTTP ${status}"
+
+            SOURCE="$source" python3 - <<'PY'
+          import json, os, pathlib
+          source = os.environ['SOURCE']
+          p = pathlib.Path(f'/tmp/{source}.json')
+          if not p.exists() or p.stat().st_size == 0:
+              print('no response body')
+              raise SystemExit(0)
+          try:
+              data = json.loads(p.read_text(encoding='utf-8'))
+          except Exception as e:
+              print('non-json response:', e)
+              print(p.read_text(encoding='utf-8', errors='replace')[:1500])
+              raise SystemExit(0)
+
+          translations = data.get('Translations') or []
+          items = data.get('Items') or []
+          print('Source:', data.get('Source'))
+          print('Seasons:', data.get('Seasons'))
+          print('Translations:', len(translations))
+          print('Items:', [(x.get('Source'), len(x.get('Translations') or [])) for x in items])
+          for item in translations[:8]:
+              eps = item.get('Episodes') or []
+              print({
+                  'translation': item.get('translation'),
+                  'season': item.get('season'),
+                  'episode': item.get('episode'),
+                  'episodes_count': len(eps),
+                  'episodes_tail': eps[-5:],
+                  'sources': [x.get('Source') for x in (item.get('Sources') or [])]
+              })
+          PY
+          done
+
+      - name: Runtime log tail
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac.log tail ====='
+          tail -n 250 /tmp/lampac.log 2>/dev/null || true
+
+      - name: Stop Lampac
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac.pid ]; then
+            kill "$(cat /tmp/lampac.pid)" 2>/dev/null || true
+          fi
