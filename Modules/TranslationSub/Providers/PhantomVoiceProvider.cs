@@ -1,13 +1,9 @@
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Shared.Models.Base;
-using Shared.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using System.Web;
 using TranslationSub.Models;
 using TranslationSub.Services;
 
@@ -22,365 +18,205 @@ public class PhantomVoiceProvider : IVoiceProvider
     {
         var result = new List<TranslationVariant>();
 
-        if (ModInit.conf?.phantom != true)
+        if (query == null || !LampacMetadataClient.IsSourceAvailable(Source))
             return result;
-
-        string tokenMovie = await FindTokenMovie(query);
-        if (string.IsNullOrWhiteSpace(tokenMovie))
-            return result;
-
-        JToken all = await GetFileList(tokenMovie);
-        if (all == null)
-            return result;
-
-        if (!query.IsSerial)
-        {
-            JToken theatrical = all["theatrical"] ?? all;
-            CollectAnyVoices(theatrical, result, 0, 1);
-        }
-        else
-        {
-            IEnumerable<int> seasons = query.Season > 0
-                ? new[] { query.Season }
-                : GetSeasons(all);
-
-            foreach (int season in seasons.Distinct().Where(s => s > 0).OrderBy(s => s))
-                ExtractSeason(all, result, season);
-        }
-
-        return result
-            .Where(x => !string.IsNullOrWhiteSpace(x.translation))
-            .Where(x => !query.IsSerial || query.Season <= 0 || x.season == query.Season)
-            .GroupBy(x => $"{x.season}:{x.translation_id}:{VoiceNormalize.Normalize(x.translation)}")
-            .Select(g => g.OrderByDescending(x => x.episode).First())
-            .OrderBy(x => x.season)
-            .ThenBy(x => x.translation)
-            .ToList();
-    }
-
-    async Task<string> FindTokenMovie(VoiceProviderQuery query)
-    {
-        string apihost = ModInit.conf.phantom_apihost.TrimEnd('/');
-        string token = ModInit.conf.phantom_token;
-
-        if (query.KpId > 0 || !string.IsNullOrWhiteSpace(query.ImdbId))
-        {
-            try
-            {
-                string url = $"{apihost}/?token={token}&kp={query.KpId}&imdb={HttpUtility.UrlEncode(query.ImdbId)}";
-                string json = await Http.Get(url, timeoutSeconds: 12, httpversion: 2);
-                var root = string.IsNullOrWhiteSpace(json) ? null : JsonConvert.DeserializeObject<JObject>(json);
-                string tokenMovie = root?["data"]?.Value<string>("token_movie");
-                if (!string.IsNullOrWhiteSpace(tokenMovie))
-                    return tokenMovie;
-            }
-            catch { }
-        }
-
-        string title = !string.IsNullOrWhiteSpace(query.Title) ? query.Title : query.OriginalTitle;
-        if (string.IsNullOrWhiteSpace(title))
-            return null;
 
         try
         {
-            string url = $"{apihost}/?token={token}&name={HttpUtility.UrlEncode(title)}&list={(query.IsSerial ? "serial" : "movie")}";
-            string json = await Http.Get(url, timeoutSeconds: 12, httpversion: 2);
-            var root = string.IsNullOrWhiteSpace(json) ? null : JsonConvert.DeserializeObject<JObject>(json);
+            if (!query.IsSerial)
+            {
+                var movie = await LampacMetadataClient.GetAsync(BuildUrl(query, -1)).ConfigureAwait(false);
+                if (movie?.IsSuccess == true)
+                    CollectMovie(movie.Body, result);
 
-            var items = root?["data"] as JArray;
-            if (items == null)
-                return null;
+                return Distinct(result);
+            }
 
-            string expected = NormalizeTitle(title);
-            JToken best = null;
+            if (query.Season > 0)
+            {
+                var seasonResponse = await LampacMetadataClient.GetAsync(BuildUrl(query, query.Season)).ConfigureAwait(false);
+                if (seasonResponse?.IsSuccess == true)
+                    await CollectSeason(seasonResponse.Body, query.Season, result).ConfigureAwait(false);
+
+                return Distinct(result);
+            }
+
+            var seasonsResponse = await LampacMetadataClient.GetAsync(BuildUrl(query, -1)).ConfigureAwait(false);
+            if (seasonsResponse?.IsSuccess != true || string.IsNullOrWhiteSpace(seasonsResponse.Body))
+                return result;
+
+            var seasonsRoot = JObject.Parse(seasonsResponse.Body);
+            if (seasonsRoot["data"] is not JArray seasons)
+                return result;
+
+            foreach (var item in seasons)
+            {
+                int season = item?.Value<int?>("id") ?? 0;
+                string url = item?.Value<string>("url");
+                if (season <= 0 || string.IsNullOrWhiteSpace(url))
+                    continue;
+
+                var seasonResponse = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
+                if (seasonResponse?.IsSuccess == true)
+                    await CollectSeason(seasonResponse.Body, season, result).ConfigureAwait(false);
+            }
+        }
+        catch { }
+
+        return Distinct(result);
+    }
+
+    string BuildUrl(VoiceProviderQuery query, int season)
+    {
+        return $"{Path}?rjson=true"
+            + $"&kinopoisk_id={query.KpId}"
+            + $"&imdb_id={LampacMetadataClient.Encode(query.ImdbId)}"
+            + $"&title={LampacMetadataClient.Encode(query.Title)}"
+            + $"&original_title={LampacMetadataClient.Encode(query.OriginalTitle)}"
+            + $"&year={query.Year}"
+            + $"&serial={(query.IsSerial ? 1 : 0)}"
+            + $"&s={season}";
+    }
+
+    async Task CollectSeason(string json, int season, List<TranslationVariant> result)
+    {
+        if (string.IsNullOrWhiteSpace(json) || season <= 0)
+            return;
+
+        JObject root;
+        try { root = JObject.Parse(json); }
+        catch { return; }
+
+        if (root["voice"] is not JArray voices || voices.Count == 0)
+            return;
+
+        var currentEpisodes = ReadEpisodes(root["data"] as JArray, season);
+
+        foreach (var voice in voices)
+        {
+            string name = voice?.Value<string>("name");
+            string url = voice?.Value<string>("url");
+            bool active = voice?.Value<bool?>("active") == true;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            List<int> episodes = active ? currentEpisodes : null;
+
+            if ((episodes == null || episodes.Count == 0) && !string.IsNullOrWhiteSpace(url))
+            {
+                var voiceResponse = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
+                if (voiceResponse?.IsSuccess == true && !string.IsNullOrWhiteSpace(voiceResponse.Body))
+                {
+                    try
+                    {
+                        var voiceRoot = JObject.Parse(voiceResponse.Body);
+                        episodes = ReadEpisodes(voiceRoot["data"] as JArray, season);
+                    }
+                    catch { }
+                }
+            }
+
+            if (episodes == null || episodes.Count == 0)
+                continue;
+
+            string translationId = QueryValue(url, "t");
+            if (string.IsNullOrWhiteSpace(translationId))
+                translationId = VoiceNormalize.Normalize(name);
+
+            result.Add(new TranslationVariant
+            {
+                source = Source,
+                path = Path,
+                translation = name,
+                translation_id = translationId,
+                season = season,
+                episode = episodes.Max(),
+                Episodes = episodes
+            });
+        }
+    }
+
+    void CollectMovie(string json, List<TranslationVariant> result)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return;
+
+        try
+        {
+            var root = JObject.Parse(json);
+            if (root["data"] is not JArray items)
+                return;
 
             foreach (var item in items)
             {
-                string name = item.Value<string>("name");
-                string original = item.Value<string>("original_name");
-                bool titleMatch = NormalizeTitle(name) == expected || NormalizeTitle(original) == expected;
-                if (!titleMatch)
+                string voice = item?.Value<string>("translate");
+                if (string.IsNullOrWhiteSpace(voice))
                     continue;
 
-                int itemYear = item.Value<int?>("year") ?? 0;
-                if (query.Year > 0 && itemYear > 0 && Math.Abs(itemYear - query.Year) > 1)
-                    continue;
-
-                best = item;
-                break;
-            }
-
-            best ??= items.FirstOrDefault(x =>
-            {
-                int itemYear = x.Value<int?>("year") ?? 0;
-                return query.Year <= 0 || itemYear <= 0 || Math.Abs(itemYear - query.Year) <= 1;
-            });
-
-            return best?.Value<string>("token_movie");
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    async Task<JToken> GetFileList(string tokenMovie)
-    {
-        try
-        {
-            string url = $"{ModInit.conf.phantom_linkhost.TrimEnd('/')}/?token_movie={HttpUtility.UrlEncode(tokenMovie)}&token={ModInit.conf.phantom_token}";
-            string html = await Http.Get(url,
-                referer: "https://kinogo-go.tv/",
-                timeoutSeconds: 15,
-                headers: HeadersModel.Init(
-                    ("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"),
-                    ("sec-fetch-dest", "iframe"),
-                    ("sec-fetch-mode", "navigate"),
-                    ("sec-fetch-site", "cross-site"),
-                    ("upgrade-insecure-requests", "1")
-                ),
-                httpversion: 2);
-
-            if (string.IsNullOrWhiteSpace(html))
-                return null;
-
-            string raw = Regex.Match(html, "fileList = JSON.parse\\('([^\\n\\r]+)'\\);").Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(raw))
-                return null;
-
-            var root = JsonConvert.DeserializeObject<JObject>(raw);
-            return root?["all"];
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    void ExtractSeason(JToken all, List<TranslationVariant> result, int season)
-    {
-        if (all == null || season <= 0)
-            return;
-
-        string key = season.ToString();
-        bool found = false;
-
-        // Основной формат Phantom: all[season] -> episodes -> voices.
-        if (all[key] != null)
-        {
-            CollectSeasonNode(all[key], result, season);
-            found = true;
-        }
-
-        // В некоторых ответах сезоны лежат под all.seasons.
-        if (all["seasons"]?[key] != null)
-        {
-            CollectSeasonNode(all["seasons"][key], result, season);
-            found = true;
-        }
-
-        // Translation-first формат: t... -> file -> season -> episodes.
-        if (all is JObject obj)
-        {
-            foreach (var translation in obj.Properties())
-            {
-                JToken seasonNode = translation.Value?["file"]?[key];
-                if (seasonNode == null)
-                    continue;
-
-                CollectSeasonNode(seasonNode, result, season);
-                found = true;
-            }
-        }
-
-        // Безопасный fallback: берём только объекты, где season указан явно.
-        if (!found)
-            CollectExplicitSeasonVoices(all, result, season);
-    }
-
-    void CollectSeasonNode(JToken node, List<TranslationVariant> result, int season)
-    {
-        if (node == null)
-            return;
-
-        if (node is JArray arr)
-        {
-            for (int i = 0; i < arr.Count; i++)
-            {
-                // В массивном формате номер серии обычно есть внутри voice. Если его нет,
-                // индекс массива является единственным безопасным fallback на уровне серии.
-                CollectEpisodeContainer(arr[i], result, season, i + 1);
-            }
-            return;
-        }
-
-        if (node is JObject obj)
-        {
-            if (obj["translation"] != null)
-            {
-                int episode = obj.Value<int?>("episode") ?? 0;
-                AddVariant(obj, result, season, episode);
-                return;
-            }
-
-            // Здесь числовой ключ действительно является ключом СЕРИИ,
-            // потому что мы уже находимся внутри конкретного сезона.
-            foreach (var episodeNode in obj.Properties())
-            {
-                int episode = int.TryParse(episodeNode.Name, out int parsed) && parsed > 0 ? parsed : 0;
-                CollectEpisodeContainer(episodeNode.Value, result, season, episode);
-            }
-        }
-    }
-
-    void CollectEpisodeContainer(JToken node, List<TranslationVariant> result, int season, int episodeHint)
-    {
-        if (node == null)
-            return;
-
-        if (node is JObject obj)
-        {
-            if (obj["translation"] != null)
-            {
-                int episode = obj.Value<int?>("episode") ?? episodeHint;
-                AddVariant(obj, result, season, episode);
-                return;
-            }
-
-            // Ниже уровня серии числовые ключи могут быть ID озвучки/файла,
-            // поэтому НЕ используем их как episodeHint.
-            foreach (var child in obj.Properties())
-                CollectEpisodeContainer(child.Value, result, season, episodeHint);
-        }
-        else if (node is JArray arr)
-        {
-            foreach (var child in arr)
-                CollectEpisodeContainer(child, result, season, episodeHint);
-        }
-    }
-
-    void CollectExplicitSeasonVoices(JToken node, List<TranslationVariant> result, int targetSeason)
-    {
-        if (node == null)
-            return;
-
-        if (node is JObject obj)
-        {
-            if (obj["translation"] != null)
-            {
-                int objectSeason = obj.Value<int?>("season") ?? 0;
-                if (objectSeason == targetSeason)
+                result.Add(new TranslationVariant
                 {
-                    int episode = obj.Value<int?>("episode") ?? 0;
-                    AddVariant(obj, result, targetSeason, episode);
-                }
-                return;
+                    source = Source,
+                    path = Path,
+                    translation = voice,
+                    translation_id = VoiceNormalize.Normalize(voice),
+                    season = 0,
+                    episode = 1,
+                    Episodes = new List<int> { 1 }
+                });
             }
-
-            foreach (var child in obj.Properties())
-                CollectExplicitSeasonVoices(child.Value, result, targetSeason);
         }
-        else if (node is JArray arr)
-        {
-            foreach (var child in arr)
-                CollectExplicitSeasonVoices(child, result, targetSeason);
-        }
+        catch { }
     }
 
-    void CollectAnyVoices(JToken node, List<TranslationVariant> result, int season, int episodeHint)
+    static List<int> ReadEpisodes(JArray data, int targetSeason)
     {
-        if (node == null)
-            return;
+        if (data == null)
+            return new List<int>();
 
-        if (node is JObject obj)
-        {
-            if (obj["translation"] != null)
+        return data
+            .Where(x => x != null)
+            .Where(x =>
             {
-                int episode = obj.Value<int?>("episode") ?? episodeHint;
-                AddVariant(obj, result, season, episode);
-                return;
-            }
-
-            foreach (var child in obj.Properties())
-                CollectAnyVoices(child.Value, result, season, episodeHint);
-        }
-        else if (node is JArray arr)
-        {
-            foreach (var child in arr)
-                CollectAnyVoices(child, result, season, episodeHint);
-        }
+                int s = x.Value<int?>("s") ?? targetSeason;
+                return s <= 0 || s == targetSeason;
+            })
+            .Select(x => x.Value<int?>("e") ?? 0)
+            .Where(e => e > 0)
+            .Distinct()
+            .OrderBy(e => e)
+            .ToList();
     }
 
-    IEnumerable<int> GetSeasons(JToken all)
+    static string QueryValue(string url, string key)
     {
-        var seasons = new HashSet<int>();
+        if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
+            return null;
 
-        if (all is not JObject obj)
-            return seasons;
+        var match = Regex.Match(url, $"(?:[?&]){Regex.Escape(key)}=([^&#]+)", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            return null;
 
-        // Такой же выбор структуры, как в штатном PhantomController.
-        if (obj["seasons"] is JObject seasonsObj)
-        {
-            foreach (var season in seasonsObj.Properties())
-                if (int.TryParse(season.Name, out int n) && n > 0)
-                    seasons.Add(n);
+        try { return Uri.UnescapeDataString(match.Groups[1].Value.Replace("+", " ")); }
+        catch { return match.Groups[1].Value; }
+    }
 
-            if (seasons.Count > 0)
-                return seasons;
-        }
-
-        var first = obj.Properties().FirstOrDefault();
-        bool translationFirst = first != null && first.Name.StartsWith("t", StringComparison.OrdinalIgnoreCase);
-
-        if (translationFirst)
-        {
-            foreach (var translation in obj.Properties())
+    static List<TranslationVariant> Distinct(List<TranslationVariant> values)
+        => values
+            .Where(x => x != null && !string.IsNullOrWhiteSpace(x.translation))
+            .GroupBy(x => $"{x.season}:{x.translation_id}:{VoiceNormalize.Normalize(x.translation)}")
+            .Select(g =>
             {
-                if (translation.Value?["file"] is not JObject file)
-                    continue;
-
-                foreach (var season in file.Properties())
-                    if (int.TryParse(season.Name, out int n) && n > 0)
-                        seasons.Add(n);
-            }
-        }
-        else
-        {
-            foreach (var season in obj.Properties())
-                if (int.TryParse(season.Name, out int n) && n > 0)
-                    seasons.Add(n);
-        }
-
-        return seasons;
-    }
-
-    void AddVariant(JToken voice, List<TranslationVariant> result, int season, int episode)
-    {
-        string name = voice.Value<string>("translation");
-        if (string.IsNullOrWhiteSpace(name))
-            return;
-
-        int translationId = voice.Value<int?>("id_translation") ?? 0;
-        long fileId = voice.Value<long?>("id") ?? 0;
-
-        result.Add(new TranslationVariant
-        {
-            source = Source,
-            path = Path,
-            translation = name,
-            translation_id = translationId > 0 ? translationId.ToString() : VoiceNormalize.Normalize(name),
-            season = Math.Max(0, season),
-            episode = episode > 0 ? episode : (season > 0 ? 0 : 1),
-            quality = voice.Value<string>("quality"),
-            file_id = fileId
-        });
-    }
-
-    static string NormalizeTitle(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return string.Empty;
-
-        return Regex.Replace(value.ToLowerInvariant(), "[^a-zа-яё0-9]+", "").Trim();
-    }
+                var best = g.OrderByDescending(x => x.episode).First();
+                best.Episodes = g
+                    .SelectMany(x => x.Episodes ?? new List<int>())
+                    .Where(e => e > 0)
+                    .Distinct()
+                    .OrderBy(e => e)
+                    .ToList();
+                best.episode = best.Episodes.DefaultIfEmpty(best.episode).Max();
+                return best;
+            })
+            .OrderBy(x => x.season)
+            .ThenBy(x => x.translation)
+            .ToList();
 }
