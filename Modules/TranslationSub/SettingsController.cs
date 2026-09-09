@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using TranslationSub.Providers;
 using TranslationSub.Services;
 
 namespace TranslationSub;
@@ -20,7 +21,20 @@ public class TranslationSubSettingsController : BaseController
     [Route("translationsub/user-settings")]
     public ActionResult GetSettings(string userKey = null)
     {
-        return ContentTo(JsonConvert.SerializeObject(TranslationSettingsStore.Get(userKey)));
+        var json = JObject.FromObject(TranslationSettingsStore.Get(userKey));
+        json["availableSources"] = JArray.FromObject(TranslationProviderHub.AvailableSources());
+        return ContentTo(json.ToString(Formatting.None));
+    }
+
+    [HttpGet]
+    [AllowAnonymous]
+    [Route("translationsub/sources")]
+    public ActionResult GetSources()
+    {
+        return ContentTo(JsonConvert.SerializeObject(new
+        {
+            sources = TranslationProviderHub.AvailableSources()
+        }));
     }
 
     [HttpPost]
@@ -78,6 +92,11 @@ public class TranslationSubSettingsController : BaseController
             endedRefreshDays,
             newSeasonMode);
 
-        return ContentTo(JsonConvert.SerializeObject(new { success = true, settings }));
+        return ContentTo(JsonConvert.SerializeObject(new
+        {
+            success = true,
+            settings,
+            availableSources = TranslationProviderHub.AvailableSources()
+        }));
     }
 }
