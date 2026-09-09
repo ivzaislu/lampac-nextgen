@@ -1,0 +1,33 @@
+name: TranslationSub Server CI
+
+on:
+  push:
+    branches:
+      - TranslationSub-server-fixes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+jobs:
+  test-build:
+    name: TranslationSub server build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Restore
+        run: dotnet restore --verbosity minimal NextGen.slnx
+
+      - name: Build
+        run: dotnet build NextGen.slnx --configuration Release --no-restore --verbosity minimal
