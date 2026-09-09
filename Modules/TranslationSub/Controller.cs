@@ -10,7 +10,6 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using TranslationSub.Models;
-using TranslationSub.Providers;
 using TranslationSub.Services;
 
 namespace TranslationSub;
@@ -40,13 +39,10 @@ public class TranslationSubController : BaseController
     async public Task<ActionResult> Updates(string userKey = null, bool force = false, string sources = null)
     {
         CaptureUserUid(userKey);
-
-        // Lampac TimeCode is authoritative for watched progress. Reconcile it before
-        // both the balancer check and the notification projection.
         SyncTimeCodeProgress(userKey);
 
         if (force)
-            await TranslationSubscriptionService.Tick(userKey, ParseSources(sources), force: true);
+            await TranslationSubscriptionService.Tick(userKey, ResolveSources(userKey, sources), force: true);
 
         var list = SubscriptionStore.Load();
         if (!string.IsNullOrWhiteSpace(userKey))
@@ -118,6 +114,7 @@ public class TranslationSubController : BaseController
     [Route("translationsub/variants")]
     [Route("transsubscribe/variants")]
     async public Task<ActionResult> Variants(
+        string userKey,
         string contentId,
         string title,
         string originalTitle,
@@ -130,8 +127,7 @@ public class TranslationSubController : BaseController
         string sources,
         int? season,
         long kinopoisk_id = 0,
-        bool serial = true
-    )
+        bool serial = true)
     {
         long kp = kinopoisk_id;
         if (kp <= 0)
@@ -142,14 +138,15 @@ public class TranslationSubController : BaseController
             isTv = isSerial == "1" || isSerial.Equals("true", StringComparison.OrdinalIgnoreCase);
 
         int.TryParse(year, out int contentYear);
-
         int targetSeason = isTv ? season.GetValueOrDefault(0) : 0;
         if (targetSeason < 0)
             targetSeason = 0;
 
-        var response = await TranslationProviderHub.GetVariants(new VoiceProviderQuery
+        var response = await LampacMetadataService.GetVariants(new TranslationMetadataQuery
         {
             Uid = ResolveRequestUid(uid),
+            ContentId = contentId,
+            TmdbId = tmdbId,
             ImdbId = imdbId,
             KpId = kp,
             Title = title,
@@ -157,7 +154,7 @@ public class TranslationSubController : BaseController
             Year = contentYear,
             IsSerial = isTv,
             Season = targetSeason,
-            Sources = ParseSources(sources)
+            Sources = ResolveSources(userKey, sources)
         });
 
         return ContentTo(JsonConvert.SerializeObject(response));
@@ -171,7 +168,7 @@ public class TranslationSubController : BaseController
     {
         CaptureUserUid(userKey);
         SyncTimeCodeProgress(userKey);
-        await TranslationSubscriptionService.Tick(userKey, ParseSources(sources), force: true);
+        await TranslationSubscriptionService.Tick(userKey, ResolveSources(userKey, sources), force: true);
         return ContentTo("{\"success\":true}");
     }
 
@@ -264,23 +261,19 @@ public class TranslationSubController : BaseController
         int updated = 0;
         int available = 0;
 
-        // Compatibility path for older clients. New clients only use Timeline as a
-        // trigger and let TimeCodeProgressService read the Lampac database directly.
         SubscriptionStore.Mutate(list =>
         {
             var matches = list.Where(x =>
                 x.IsSerial &&
                 x.UserKey == userKey &&
                 x.ContentId == contentId &&
-                x.CurrentSeason.GetValueOrDefault(1) == season
-            ).ToList();
+                x.CurrentSeason.GetValueOrDefault(1) == season).ToList();
 
             updated = matches.Count;
             foreach (var item in matches)
             {
                 item.CurrentSeason = season;
                 item.CurrentEpisode = episode;
-
                 int itemAvailable = item.LastEpisode.GetValueOrDefault(0);
                 available = Math.Max(available, itemAvailable);
                 item.Notified = itemAvailable <= episode;
@@ -297,7 +290,7 @@ public class TranslationSubController : BaseController
             fromEpisode = available > episode ? episode + 1 : 0,
             toEpisode = available,
             newCount = Math.Max(0, available - episode),
-            source = "legacy-client-hint"
+            source = "lampac-timecode"
         }));
     }
 
@@ -307,10 +300,7 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/remove")]
     public ActionResult Remove(string id)
     {
-        SubscriptionStore.Mutate(list =>
-        {
-            list.RemoveAll(x => x.Id == id);
-        });
+        SubscriptionStore.Mutate(list => list.RemoveAll(x => x.Id == id));
         return ContentTo("{\"success\":true}");
     }
 
@@ -367,7 +357,6 @@ public class TranslationSubController : BaseController
                 item.Uid = uid;
                 changed = true;
             }
-
             return changed;
         });
     }
@@ -378,7 +367,6 @@ public class TranslationSubController : BaseController
             return 0;
 
         string requestUserUid = ResolveRequestUid();
-
         string profileId = null;
         if (Request.Query.TryGetValue("profile_id", out var profileQuery))
             profileId = profileQuery.ToString();
@@ -420,7 +408,7 @@ public class TranslationSubController : BaseController
             Poster = j.Value<string>("poster"),
             Year = year > 0 ? year : null,
             IsSerial = j["isSerial"]?.Type == JTokenType.Boolean ? j.Value<bool>("isSerial") : isSerialBool,
-            Source = j.Value<string>("source") ?? "multi",
+            Source = j.Value<string>("source") ?? "lampac",
             TranslationId = j.Value<string>("translationId"),
             TranslationName = j.Value<string>("translationName"),
             CurrentSeason = currentSeason > 0 ? currentSeason : 1,
@@ -434,10 +422,13 @@ public class TranslationSubController : BaseController
         {
             foreach (var x in arr.OfType<JObject>())
             {
+                string source = TranslationSettingsStore.NormalizeSourceId(x.Value<string>("source"));
+                if (source == null)
+                    continue;
+
                 sub.Sources.Add(new TranslationSubscriptionSource
                 {
-                    Source = x.Value<string>("source"),
-                    Path = x.Value<string>("path"),
+                    Source = source,
                     TranslationId = x.Value<string>("translationId"),
                     TranslationName = x.Value<string>("translationName")
                 });
@@ -445,6 +436,16 @@ public class TranslationSubController : BaseController
         }
 
         return sub;
+    }
+
+    static HashSet<string> ResolveSources(string userKey, string sources)
+    {
+        var explicitSources = ParseSources(sources);
+        if (explicitSources != null)
+            return explicitSources;
+
+        return (TranslationSettingsStore.Get(userKey).Sources ?? new List<string>())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     static HashSet<string> ParseSources(string sources)
@@ -458,11 +459,10 @@ public class TranslationSubController : BaseController
 
         foreach (string source in sources.Split(',', StringSplitOptions.RemoveEmptyEntries))
         {
-            string value = source.Trim();
-            if (value is "flixcdn" or "phantom" or "zetflixdb" or "cdnvideohub")
+            string value = TranslationSettingsStore.NormalizeSourceId(source);
+            if (value != null)
                 result.Add(value);
         }
-
         return result;
     }
 }
