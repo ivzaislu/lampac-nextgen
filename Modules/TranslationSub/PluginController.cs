@@ -35,7 +35,6 @@ public class TranslationSubPluginController : BaseController
         AppendScript(ref script, "translationsub-layout-v3.js");
         AppendScript(ref script, "translationsub-badge-state.js");
         AppendScript(ref script, "translationsub-navigation.js");
-        AppendScript(ref script, "translationsub-card-actions.js");
         AppendScript(ref script, "translationsub-bell-theme.js");
 
         Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
