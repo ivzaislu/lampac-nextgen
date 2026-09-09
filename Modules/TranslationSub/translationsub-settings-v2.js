@@ -18,6 +18,7 @@
 
     var added = false;
     var availableItems = [];
+    var selectedSources = [];
     var sourceParamKeys = {};
 
     function storageGet(name, fallback) {
@@ -70,7 +71,7 @@
     }
 
     function enabledSources() {
-        return sourceList(storageGet(SOURCES_KEY, []));
+        return sourceList(storageGet(SOURCES_KEY, selectedSources));
     }
 
     function userKey() {
@@ -90,8 +91,7 @@
 
     function notify(text) {
         try {
-            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function')
-                Lampa.Noty.show(text);
+            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text);
         } catch (e) {}
     }
 
@@ -185,28 +185,39 @@
         return values;
     }
 
+    function availableIdSet() {
+        var result = {};
+        availableItems.forEach(function (item) { result[item.id] = true; });
+        return result;
+    }
+
     function currentSelectionFromTriggers() {
-        var result = [];
+        var available = availableIdSet();
+        var result = selectedSources.filter(function (id) { return !available[id]; });
+
         availableItems.forEach(function (item) {
             var key = sourceParamKeys[item.id];
             if (key && settingBool(key, false)) result.push(item.id);
         });
-        return result;
+
+        return sourceList(result);
     }
 
     function syncServerSettings() {
-        var sources = availableItems.length ? currentSelectionFromTriggers() : enabledSources();
-        storageSet(SOURCES_KEY, sources);
+        selectedSources = availableItems.length ? currentSelectionFromTriggers() : enabledSources();
+        storageSet(SOURCES_KEY, selectedSources);
 
         request('POST', '/translationsub/user-settings', {
             userKey: userKey(),
             checkIntervalHours: intSetting(KEYS.interval, 1, 1, 24),
-            sources: sources,
+            sources: selectedSources,
             useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
             tmdbRefreshHours: intSetting(KEYS.tmdbRefreshHours, 24, 6, 168),
             endedRefreshDays: intSetting(KEYS.endedRefreshDays, 7, 1, 90),
             newSeasonMode: newSeasonMode()
-        }, function () {
+        }, function (response) {
+            selectedSources = sourceList(pick(response && response.settings, 'Sources', 'sources', selectedSources));
+            storageSet(SOURCES_KEY, selectedSources);
             try {
                 if (window.TranslationSub && typeof window.TranslationSub.refreshSources === 'function')
                     window.TranslationSub.refreshSources();
@@ -216,8 +227,7 @@
 
     function refreshPlugin() {
         try {
-            if (window.TranslationSub && typeof window.TranslationSub.refresh === 'function')
-                window.TranslationSub.refresh();
+            if (window.TranslationSub && typeof window.TranslationSub.refresh === 'function') window.TranslationSub.refresh();
         } catch (e) {}
     }
 
@@ -236,10 +246,10 @@
         }, 0);
     }
 
-    function addBalancer(item, selected) {
+    function addBalancer(item) {
         var key = sourceParamKey(item.id);
         sourceParamKeys[item.id] = key;
-        storageSet(key, selected.indexOf(item.id) >= 0);
+        storageSet(key, selectedSources.indexOf(item.id) >= 0);
 
         Lampa.SettingsApi.addParam({
             component: BALANCERS,
@@ -249,17 +259,17 @@
                 description: 'Lampac: ' + item.id + '. Использовать этот балансер для поиска озвучек и новых серий.'
             },
             onChange: function () {
-                storageSet(SOURCES_KEY, currentSelectionFromTriggers());
+                selectedSources = currentSelectionFromTriggers();
+                storageSet(SOURCES_KEY, selectedSources);
                 syncServerSettings();
                 refreshPlugin();
             }
         });
     }
 
-    function rebuildSettings(selected) {
+    function rebuildSettings() {
         if (added || !window.Lampa || !Lampa.SettingsApi) return;
         added = true;
-        selected = sourceList(selected);
 
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(ROOT); } catch (e) {}
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(BALANCERS); } catch (e2) {}
@@ -267,13 +277,14 @@
         Lampa.SettingsApi.addComponent({ component: ROOT, name: 'Подписки на озвучки', icon: settingsBellSvg() });
         Lampa.SettingsApi.addComponent({ component: BALANCERS, name: 'Балансеры для опроса', icon: '' });
 
+        var activeCount = selectedSources.filter(function (id) { return availableIdSet()[id]; }).length;
         Lampa.SettingsApi.addParam({
             component: ROOT,
             param: { name: 'translationsub_open_balancers', type: 'button', 'default': '' },
             field: {
                 name: 'Балансеры для опроса',
                 description: availableItems.length
-                    ? 'Выбрано: ' + selected.length + ' из ' + availableItems.length
+                    ? 'Активно выбрано: ' + activeCount + ' из ' + availableItems.length
                     : 'Lampac не вернул доступных online-балансеров'
             },
             onChange: openBalancersSettings
@@ -341,14 +352,14 @@
             field: { name: 'Доступные в Lampac балансеры' }
         });
 
-        availableItems.forEach(function (item) { addBalancer(item, selected); });
+        availableItems.forEach(addBalancer);
     }
 
     function applyServerSettings(data) {
         data = data || {};
-        var selected = sourceList(pick(data, 'Sources', 'sources', []));
+        selectedSources = sourceList(pick(data, 'Sources', 'sources', []));
         availableItems = normalizeItems(data.availableSourceItems || data.AvailableSourceItems || []);
-        storageSet(SOURCES_KEY, selected);
+        storageSet(SOURCES_KEY, selectedSources);
 
         var interval = pick(data, 'CheckIntervalHours', 'checkIntervalHours', null);
         var smart = pick(data, 'UseTmdbSchedule', 'useTmdbSchedule', null);
@@ -361,15 +372,16 @@
         if (endedDays !== null) storageSet(KEYS.endedRefreshDays, String(endedDays));
         if (seasonMode) storageSet(KEYS.newSeasonMode, String(seasonMode));
 
-        rebuildSettings(selected);
+        rebuildSettings();
     }
 
     function loadServerSettings() {
         var path = '/translationsub/user-settings?userKey=' + encodeURIComponent(userKey());
         if (uid()) path += '&uid=' + encodeURIComponent(uid());
         request('GET', path, null, applyServerSettings, function () {
+            selectedSources = enabledSources();
             availableItems = [];
-            rebuildSettings(enabledSources());
+            rebuildSettings();
         });
     }
 
