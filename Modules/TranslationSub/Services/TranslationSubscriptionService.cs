@@ -11,7 +11,7 @@ namespace TranslationSub.Services;
 public static class TranslationSubscriptionService
 {
     static Timer timer;
-    static int running;
+    static readonly SemaphoreSlim tickGate = new(1, 1);
 
     public static void Start()
     {
@@ -30,19 +30,38 @@ public static class TranslationSubscriptionService
         timer = null;
     }
 
-    public static async Task Tick(string userKey = null, HashSet<string> enabledSources = null)
+    public static async Task Tick(string userKey = null, HashSet<string> enabledSources = null, bool force = false)
     {
-        if (Interlocked.Exchange(ref running, 1) == 1)
-            return;
+        // Keep backward compatibility for callers that historically used userKey
+        // as the implicit force flag. Explicit force is required for manual checks
+        // without a userKey (for example local/global maintenance calls).
+        force = force || !string.IsNullOrWhiteSpace(userKey);
 
-        bool force = !string.IsNullOrWhiteSpace(userKey);
-        DateTime now = DateTime.Now;
-
+        bool entered = false;
         try
         {
+            if (force)
+            {
+                // Manual checks must never disappear just because the background
+                // timer is currently running. Queue and execute them afterwards.
+                await tickGate.WaitAsync().ConfigureAwait(false);
+                entered = true;
+            }
+            else
+            {
+                // Background wake-ups are cheap and may be skipped while another
+                // tick is active. The next timer wake-up will try again.
+                entered = await tickGate.WaitAsync(0).ConfigureAwait(false);
+                if (!entered)
+                    return;
+            }
+
+            DateTime now = DateTime.Now;
+
             try
             {
                 var snapshot = SubscriptionStore.Load();
+                var settingsCache = new Dictionary<string, TranslationUserSettings>(StringComparer.Ordinal);
                 var tmdbCache = new Dictionary<string, TmdbScheduleSnapshot>(StringComparer.OrdinalIgnoreCase);
                 var variantCache = new Dictionary<string, TranslationVariantsResponse>(StringComparer.Ordinal);
 
@@ -53,7 +72,13 @@ public static class TranslationSubscriptionService
 
                     try
                     {
-                        var settings = TranslationSettingsStore.Get(sub.UserKey);
+                        string settingsKey = string.IsNullOrWhiteSpace(sub.UserKey) ? "local" : sub.UserKey;
+                        if (!settingsCache.TryGetValue(settingsKey, out var settings))
+                        {
+                            settings = TranslationSettingsStore.Get(settingsKey);
+                            settingsCache[settingsKey] = settings;
+                        }
+
                         bool smartTmdb = settings.UseTmdbSchedule && sub.IsSerial
                             && (IsTmdbId(sub.TmdbId) || IsImdbId(sub.ImdbId));
                         TmdbScheduleSnapshot tmdb = null;
@@ -216,7 +241,8 @@ public static class TranslationSubscriptionService
         }
         finally
         {
-            Volatile.Write(ref running, 0);
+            if (entered)
+                tickGate.Release();
         }
     }
 
