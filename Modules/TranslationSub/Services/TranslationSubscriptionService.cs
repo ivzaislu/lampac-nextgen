@@ -152,6 +152,7 @@ public static class TranslationSubscriptionService
                         long.TryParse(sub.KpId, out long kp);
                         var query = new VoiceProviderQuery
                         {
+                            Uid = sub.Uid,
                             ImdbId = sub.ImdbId,
                             KpId = kp,
                             Title = sub.Title,
@@ -329,6 +330,7 @@ public static class TranslationSubscriptionService
             : string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase));
 
         return string.Join("|",
+            query.Uid ?? string.Empty,
             query.KpId,
             query.ImdbId ?? string.Empty,
             query.Title ?? string.Empty,
@@ -594,6 +596,7 @@ public static class TranslationSubscriptionService
             {
                 Id = Guid.NewGuid().ToString("N"),
                 UserKey = sub.UserKey,
+                Uid = sub.Uid,
                 ContentId = sub.ContentId,
                 Title = sub.Title,
                 OriginalTitle = sub.OriginalTitle,
