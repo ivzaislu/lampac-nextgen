@@ -33,9 +33,28 @@ jobs:
       - name: Build Release
         run: dotnet build NextGen.slnx --configuration Release --no-restore --verbosity minimal
 
-      - name: Configure CI runtime
+      - name: Stage Lampac runtime with TranslationSub
+        shell: bash
         run: |
-          cat > init.yaml <<'YAML'
+          set -euo pipefail
+          runtime='Core/bin/Release/net10.0'
+          mkdir -p "$runtime/module/TranslationSub" "$runtime/module/references"
+
+          cp -a Modules/TranslationSub/. "$runtime/module/TranslationSub/"
+
+          cp Modules/OnlineRUS/FlixCDN/bin/Release/net10.0/FlixCDN.dll "$runtime/module/"
+          cp Modules/OnlineRUS/Phantom/bin/Release/net10.0/Phantom.dll "$runtime/module/"
+          cp Modules/OnlineRUS/ZetflixDB/bin/Release/net10.0/ZetflixDB.dll "$runtime/module/"
+          cp Modules/OnlineRUS/VideoDB/bin/Release/net10.0/VideoDB.dll "$runtime/module/"
+          cp Modules/OnlineRUS/CDNvideohub/bin/Release/net10.0/CDNvideohub.dll "$runtime/module/"
+
+          # TranslationSub TimeCodeProgressService references Microsoft.Data.Sqlite.
+          # Make the compile/runtime dependency visible exactly as a module reference.
+          cp Modules/Sync/TimeCode/bin/Release/net10.0/Microsoft.Data.Sqlite.dll "$runtime/module/references/"
+          find Modules/Sync/TimeCode/bin/Release/net10.0 -maxdepth 1 -type f -name 'SQLitePCLRaw*.dll' \
+            -exec cp {} "$runtime/module/references/" \;
+
+          cat > "$runtime/init.yaml" <<'YAML'
           chromium:
             enable: false
           firefox:
@@ -46,15 +65,25 @@ jobs:
             type: mem
           accsdb:
             enable: false
+          BaseModule:
+            LoadModules:
+              - TranslationSub
           listen:
             port: 9118
           YAML
+
+          echo '===== staged module files ====='
+          find "$runtime/module" -maxdepth 2 -type f | sort
 
       - name: Start Lampac and wait for TranslationSub
         shell: bash
         run: |
           set -euo pipefail
-          dotnet Core/bin/Release/net10.0/Core.dll > /tmp/lampac.log 2>&1 &
+          runtime='Core/bin/Release/net10.0'
+          (
+            cd "$runtime"
+            dotnet Core.dll > /tmp/lampac.log 2>&1
+          ) &
           echo $! > /tmp/lampac.pid
 
           ready=0
@@ -68,7 +97,7 @@ jobs:
 
             if ! kill -0 "$(cat /tmp/lampac.pid)" 2>/dev/null; then
               echo "Lampac exited before TranslationSub became ready"
-              tail -n 250 /tmp/lampac.log || true
+              tail -n 300 /tmp/lampac.log || true
               exit 1
             fi
             sleep 1
@@ -76,7 +105,7 @@ jobs:
 
           if [ "$ready" != "1" ]; then
             echo "TranslationSub endpoint did not become ready"
-            tail -n 250 /tmp/lampac.log || true
+            tail -n 300 /tmp/lampac.log || true
             exit 1
           fi
 
@@ -177,7 +206,7 @@ jobs:
         shell: bash
         run: |
           echo '===== lampac.log tail ====='
-          tail -n 250 /tmp/lampac.log 2>/dev/null || true
+          tail -n 300 /tmp/lampac.log 2>/dev/null || true
 
       - name: Stop Lampac
         if: always()
