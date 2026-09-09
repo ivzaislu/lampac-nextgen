@@ -43,7 +43,7 @@ public class TranslationSubController : BaseController
         SyncTimeCodeProgress(userKey);
 
         if (force)
-            await TranslationSubscriptionService.Tick(userKey, ParseSources(sources));
+            await TranslationSubscriptionService.Tick(userKey, ParseSources(sources), force: true);
 
         var list = SubscriptionStore.Load();
         if (!string.IsNullOrWhiteSpace(userKey))
@@ -165,7 +165,7 @@ public class TranslationSubController : BaseController
     async public Task<ActionResult> Check(string userKey = null, string sources = null)
     {
         SyncTimeCodeProgress(userKey);
-        await TranslationSubscriptionService.Tick(userKey, ParseSources(sources));
+        await TranslationSubscriptionService.Tick(userKey, ParseSources(sources), force: true);
         return ContentTo("{\"success\":true}");
     }
 
