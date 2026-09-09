@@ -142,13 +142,16 @@ internal static class LampacMetadataClient
         => !string.IsNullOrWhiteSpace(value)
             && value.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
 
-    public static async Task<LampacMetadataResponse> GetAsync(string pathOrUrl)
+    public static async Task<LampacMetadataResponse> GetAsync(string pathOrUrl, string uid = null)
     {
         if (string.IsNullOrWhiteSpace(pathOrUrl))
             return null;
 
         try
         {
+            if (!string.IsNullOrWhiteSpace(uid) && !HasQueryKey(pathOrUrl, "uid"))
+                pathOrUrl = AppendQuery(pathOrUrl, "uid", uid.Trim());
+
             Uri uri = ResolveLocalUri(pathOrUrl);
             if (uri == null)
                 return null;
@@ -179,9 +182,33 @@ internal static class LampacMetadataClient
         if (string.IsNullOrWhiteSpace(pathOrUrl) || string.IsNullOrWhiteSpace(key))
             return pathOrUrl;
 
+        if (HasQueryKey(pathOrUrl, key))
+            return pathOrUrl;
+
         string separator = pathOrUrl.Contains('?') ? "&" : "?";
         return pathOrUrl + separator
             + Uri.EscapeDataString(key) + "=" + Uri.EscapeDataString(value ?? string.Empty);
+    }
+
+    static bool HasQueryKey(string pathOrUrl, string key)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUrl) || string.IsNullOrWhiteSpace(key))
+            return false;
+
+        int queryIndex = pathOrUrl.IndexOf('?');
+        if (queryIndex < 0 || queryIndex >= pathOrUrl.Length - 1)
+            return false;
+
+        string query = pathOrUrl[(queryIndex + 1)..];
+        foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string name = pair.Split('=', 2)[0];
+            try { name = Uri.UnescapeDataString(name); } catch { }
+            if (name.Equals(key, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     public static string Encode(string value)
