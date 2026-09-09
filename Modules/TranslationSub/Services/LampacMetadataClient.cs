@@ -1,10 +1,11 @@
 using Newtonsoft.Json.Linq;
 using Shared;
+using Shared.Models;
+using Shared.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using TranslationSub.Models;
@@ -31,18 +32,6 @@ internal static class LampacMetadataClient
 {
     const int MaxMetadataDepth = 4;
     const int MaxMetadataPages = 64;
-
-    // Use the same TCP localhost path as Lampac OnlineApi.checkSearch().
-    // Internal Lampac requests are authenticated by xhost/xscheme/lcrqpasswd,
-    // not by a module-specific Unix-socket transport.
-    static readonly HttpClient metadataClient = new(new SocketsHttpHandler
-    {
-        AllowAutoRedirect = false,
-        UseProxy = false
-    })
-    {
-        Timeout = TimeSpan.FromSeconds(30)
-    };
 
     // Compatibility fallback for online modules that ignore rjson=true.
     // Normal metadata traversal uses the common Lampac JSON template contract.
@@ -732,37 +721,34 @@ internal static class LampacMetadataClient
             if (uri == null)
                 return null;
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/html;q=0.5");
-            request.Headers.TryAddWithoutValidation("User-Agent", "Lampac-TranslationSub/1.0");
-            request.Headers.TryAddWithoutValidation("X-TranslationSub-Metadata", "1");
-
+            IReadOnlyList<HeadersModel> headers = null;
             if (localRoute)
             {
-                string xhost = LocalRequestHost();
-                string xscheme = LocalRequestScheme();
-
-                if (!string.IsNullOrWhiteSpace(xhost))
-                    request.Headers.TryAddWithoutValidation("xhost", xhost);
-                if (!string.IsNullOrWhiteSpace(xscheme))
-                    request.Headers.TryAddWithoutValidation("xscheme", xscheme);
-                if (!string.IsNullOrWhiteSpace(CoreInit.rootPasswd))
-                    request.Headers.TryAddWithoutValidation("lcrqpasswd", CoreInit.rootPasswd);
+                headers = HeadersModel.Init(
+                    ("xhost", LocalRequestHost()),
+                    ("xscheme", LocalRequestScheme()),
+                    ("lcrqpasswd", CoreInit.rootPasswd)
+                );
             }
 
-            using var response = await metadataClient
-                .SendAsync(request, HttpCompletionOption.ResponseContentRead)
-                .ConfigureAwait(false);
+            // Use Lampac's shared HTTP stack just like OnlineApi.checkSearch().
+            // It applies the same client factory, redirects, decompression and HTTP hooks.
+            string body = await Http.Get(
+                uri.ToString(),
+                timeoutSeconds: 30,
+                headers: headers,
+                statusCodeOK: true,
+                weblog: false
+            ).ConfigureAwait(false);
 
-            string body = response.Content == null
-                ? null
-                : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (body == null)
+                return null;
 
             return new LampacMetadataResponse
             {
-                StatusCode = (int)response.StatusCode,
+                StatusCode = 200,
                 Body = body,
-                Location = response.Headers.Location?.ToString()
+                Location = null
             };
         }
         catch
