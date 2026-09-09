@@ -31,14 +31,14 @@ internal sealed class LampacMetadataResponse
 internal static class LampacMetadataClient
 {
     const int MaxMetadataDepth = 4;
-    const int MaxMetadataPages = 48;
+    const int MaxMetadataPages = 64;
 
     static readonly object clientLocker = new();
     static HttpClient localClient;
     static string localClientKey;
 
-    // Generic HTML emitted by Shared.Models.Templates (SeasonTpl/VoiceTpl/EpisodeTpl/MovieTpl).
-    // There are intentionally no branches for individual online modules here.
+    // Compatibility fallback for online modules that ignore rjson=true.
+    // Normal metadata traversal uses the common Lampac JSON template contract.
     static readonly Regex onlineElementRegex = new(
         @"<(?<tag>[a-zA-Z0-9]+)\b(?<attrs>[^>]*videos__(?:item|button)[^>]*)>(?<inner>.*?)</\k<tag>>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
@@ -66,12 +66,13 @@ internal static class LampacMetadataClient
 
     public static async Task<IReadOnlyList<LampacVoiceMetadata>> ReadAsync(TranslationMetadataQuery query)
     {
-        if (query == null || query.Sources?.Count == 0)
+        if (query == null || query.Sources == null || query.Sources.Count == 0)
             return Array.Empty<LampacVoiceMetadata>();
 
         var discovered = await DiscoverSourcesAsync(query).ConfigureAwait(false);
         discovered = discovered
-            .Where(x => query.Sources.Any(id => string.Equals(id, x.Id, StringComparison.OrdinalIgnoreCase)))
+            .Where(x => query.Sources.Any(id =>
+                string.Equals(id, x.Id, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (discovered.Count == 0)
@@ -90,35 +91,38 @@ internal static class LampacMetadataClient
     static async Task<List<LampacSourceDescriptor>> DiscoverSourcesAsync(TranslationMetadataQuery query)
     {
         string url = "/lite/events";
-        url = AppendQuery(url, "serial", query?.IsSerial == false ? "0" : "1");
+        url = AppendQuery(url, "serial", query.IsSerial ? "1" : "0");
         url = AppendQuery(url, "source", "tmdb");
         url = AppendQuery(url, "islite", "true");
 
-        if (query != null)
-        {
-            if (!string.IsNullOrWhiteSpace(query.ContentId))
-                url = AppendQuery(url, "id", query.ContentId);
-            if (query.KpId > 0)
-                url = AppendQuery(url, "kinopoisk_id", query.KpId.ToString());
-            if (long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
-                url = AppendQuery(url, "tmdb_id", tmdbId.ToString());
-            if (!string.IsNullOrWhiteSpace(query.ImdbId))
-                url = AppendQuery(url, "imdb_id", query.ImdbId);
-            if (!string.IsNullOrWhiteSpace(query.Title))
-                url = AppendQuery(url, "title", query.Title);
-            if (!string.IsNullOrWhiteSpace(query.OriginalTitle))
-                url = AppendQuery(url, "original_title", query.OriginalTitle);
-            if (query.Year > 0)
-                url = AppendQuery(url, "year", query.Year.ToString());
-        }
+        if (!string.IsNullOrWhiteSpace(query.ContentId))
+            url = AppendQuery(url, "id", query.ContentId);
+        if (query.KpId > 0)
+            url = AppendQuery(url, "kinopoisk_id", query.KpId.ToString());
+        if (long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
+            url = AppendQuery(url, "tmdb_id", tmdbId.ToString());
+        if (!string.IsNullOrWhiteSpace(query.ImdbId))
+            url = AppendQuery(url, "imdb_id", query.ImdbId);
+        if (!string.IsNullOrWhiteSpace(query.Title))
+            url = AppendQuery(url, "title", query.Title);
+        if (!string.IsNullOrWhiteSpace(query.OriginalTitle))
+            url = AppendQuery(url, "original_title", query.OriginalTitle);
+        if (query.Year > 0)
+            url = AppendQuery(url, "year", query.Year.ToString());
 
-        var response = await GetAsync(url, query?.Uid).ConfigureAwait(false);
+        var response = await GetAsync(url, query.Uid).ConfigureAwait(false);
         if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
             return new List<LampacSourceDescriptor>();
 
         JToken root;
-        try { root = JToken.Parse(response.Body); }
-        catch { return new List<LampacSourceDescriptor>(); }
+        try
+        {
+            root = JToken.Parse(response.Body);
+        }
+        catch
+        {
+            return new List<LampacSourceDescriptor>();
+        }
 
         JArray array = root as JArray;
         if (array == null && root is JObject obj)
@@ -175,8 +179,7 @@ internal static class LampacMetadataClient
         if (index < 0)
             return null;
 
-        string id = path[(index + marker.Length)..].Trim('/');
-        return NormalizeSourceId(id);
+        return NormalizeSourceId(path[(index + marker.Length)..].Trim('/'));
     }
 
     static async Task<List<LampacVoiceMetadata>> ReadSourceAsync(LampacSourceDescriptor source, TranslationMetadataQuery query)
@@ -220,7 +223,8 @@ internal static class LampacMetadataClient
 
     static string BuildSourceRequest(string sourceUrl, TranslationMetadataQuery query)
     {
-        string url = sourceUrl;
+        string url = ForceMetadataJson(sourceUrl);
+
         if (!string.IsNullOrWhiteSpace(query.ContentId))
             url = AppendQuery(url, "id", query.ContentId);
         if (query.KpId > 0)
@@ -255,6 +259,7 @@ internal static class LampacMetadataClient
         if (depth > MaxMetadataDepth || visited.Count >= MaxMetadataPages || string.IsNullOrWhiteSpace(url))
             return;
 
+        url = ForceMetadataJson(url);
         if (!visited.Add(url.Trim()))
             return;
 
@@ -266,17 +271,20 @@ internal static class LampacMetadataClient
         if (nodes.Count == 0)
             return;
 
-        var voices = nodes.Where(x => x.Kind == "button" || x.Kind == "voice").ToList();
-        var activeVoice = voices.FirstOrDefault(x => x.Active) ?? voices.FirstOrDefault();
+        var voices = nodes.Where(x => x.Kind == "voice" || x.Kind == "button").ToList();
+        var activeVoice = voices.FirstOrDefault(x => x.Active);
+        if (activeVoice == null && string.IsNullOrWhiteSpace(inheritedVoiceName))
+            activeVoice = voices.FirstOrDefault();
+
         string pageVoiceName = inheritedVoiceName;
         string pageVoiceId = inheritedVoiceId;
         if (activeVoice != null)
         {
             pageVoiceName = activeVoice.VoiceName ?? activeVoice.Text ?? pageVoiceName;
-            pageVoiceId = activeVoice.VoiceId;
-            if (string.IsNullOrWhiteSpace(pageVoiceId))
-                pageVoiceId = StableMetadataVoiceId(pageVoiceName, source.Id);
+            pageVoiceId = activeVoice.VoiceId ?? pageVoiceId;
         }
+        if (!string.IsNullOrWhiteSpace(pageVoiceName) && string.IsNullOrWhiteSpace(pageVoiceId))
+            pageVoiceId = StableMetadataVoiceId(pageVoiceName, source.Id);
 
         var follow = new List<FollowNode>();
         int terminalOrdinal = 0;
@@ -287,13 +295,15 @@ internal static class LampacMetadataClient
             string voiceId = !string.IsNullOrWhiteSpace(node.VoiceId) ? node.VoiceId : pageVoiceId;
             int season = node.Season > 0 ? node.Season : inheritedSeason;
 
-            if (node.Kind == "button" || node.Kind == "voice")
+            if (node.Kind == "voice" || node.Kind == "button")
             {
                 voiceName = node.VoiceName ?? node.Text ?? voiceName;
                 if (string.IsNullOrWhiteSpace(voiceId))
                     voiceId = StableMetadataVoiceId(voiceName, source.Id);
 
-                if (!string.IsNullOrWhiteSpace(node.Url))
+                // The active voice's episodes are already present in EpisodeTpl.data.
+                // Follow only the other voice links to avoid a redundant request.
+                if (!string.IsNullOrWhiteSpace(node.Url) && !node.Active)
                 {
                     follow.Add(new FollowNode
                     {
@@ -322,7 +332,7 @@ internal static class LampacMetadataClient
                 {
                     season = 0;
                     if (string.IsNullOrWhiteSpace(voiceName))
-                        voiceName = node.VoiceName ?? node.Text;
+                        voiceName = node.Text;
                 }
                 else if (season <= 0 && query.Season > 0)
                 {
@@ -342,7 +352,7 @@ internal static class LampacMetadataClient
                     Episode = episode
                 });
 
-                // Playback boundary: never follow play/call/episode/movie URLs.
+                // Playback boundary: terminal items are recorded, never followed.
                 continue;
             }
 
@@ -367,6 +377,9 @@ internal static class LampacMetadataClient
 
         foreach (var next in follow.Where(x => !string.IsNullOrWhiteSpace(x.Url)))
         {
+            if (visited.Count >= MaxMetadataPages)
+                break;
+
             await TraverseAsync(
                 source,
                 query,
@@ -391,24 +404,26 @@ internal static class LampacMetadataClient
 
     static List<OnlineNode> ParseMetadataNodes(string body)
     {
-        var result = ParseHtmlNodes(body);
-        if (result.Count > 0)
+        var result = new List<OnlineNode>();
+        if (string.IsNullOrWhiteSpace(body))
             return result;
 
+        // rjson=true is the primary protocol because all common Lampac templates
+        // serialize season/voice/episode/movie metadata through this shape.
         try
         {
             JToken root = JToken.Parse(body);
             AddJsonNodes(root, null, null, 0, null, result);
+            if (result.Count > 0)
+                return result;
         }
-        catch { }
+        catch
+        {
+        }
 
-        return result;
+        return ParseHtmlNodes(body);
     }
 
-    // Shared.Models.Templates JSON contract:
-    // { type: "season|episode|movie", voice: VoiceDto[], data: *Dto[] }.
-    // Child DTOs intentionally have no `type`, so their semantic kind comes from
-    // the response type/property instead of provider-specific fields.
     static void AddJsonNodes(
         JToken token,
         string inheritedVoiceName,
@@ -431,7 +446,7 @@ internal static class LampacMetadataClient
             return;
 
         string responseType = NormalizeNodeKind(ReadJsonString(obj, "type"));
-        if (responseType != null && (obj["data"] is JArray || obj["voice"] is JArray))
+        if (responseType != null && (obj["data"] != null || obj["voice"] != null))
         {
             AddJsonNodes(obj["voice"], inheritedVoiceName, inheritedVoiceId, inheritedSeason, "voice", result);
             AddJsonNodes(obj["data"], inheritedVoiceName, inheritedVoiceId, inheritedSeason, responseType, result);
@@ -451,11 +466,11 @@ internal static class LampacMetadataClient
             return;
         }
 
-        string text = ReadJsonString(obj, "name", "title", "text", "translate");
-        string voiceName = ReadJsonString(obj, "voice_name", "voiceName", "translation", "voice") ?? inheritedVoiceName;
+        string text = ReadJsonString(obj, "name", "title", "translate", "text");
+        string voiceName = ReadJsonString(obj, "voice_name", "voiceName", "details", "translation", "voice") ?? inheritedVoiceName;
         string voiceId = ReadJsonString(obj, "voice_id", "voiceId", "translation_id", "translationId") ?? inheritedVoiceId;
-        int season = ReadJsonInt(obj, "season", "season_number", "s");
-        int episode = ReadJsonInt(obj, "episode", "episode_number", "e");
+        int season = ReadJsonInt(obj, "s", "season", "season_number");
+        int episode = ReadJsonInt(obj, "e", "episode", "episode_number");
 
         if (kind == "season" && season <= 0)
             season = ReadJsonInt(obj, "id");
@@ -470,7 +485,7 @@ internal static class LampacMetadataClient
         }
         else if (kind == "movie" && string.IsNullOrWhiteSpace(voiceName))
         {
-            voiceName = ReadJsonString(obj, "voice_name", "translate") ?? text;
+            voiceName = ReadJsonString(obj, "voice_name", "details", "translate") ?? text;
         }
 
         result.Add(new OnlineNode
@@ -515,8 +530,13 @@ internal static class LampacMetadataClient
             string rawJson = ReadAttribute(attrs, "data-json");
             if (!string.IsNullOrWhiteSpace(rawJson))
             {
-                try { data = JObject.Parse(WebUtility.HtmlDecode(rawJson)); }
-                catch { }
+                try
+                {
+                    data = JObject.Parse(WebUtility.HtmlDecode(rawJson));
+                }
+                catch
+                {
+                }
             }
 
             string text = WebUtility.HtmlDecode(tagRegex.Replace(match.Groups["inner"].Value, " "));
@@ -524,21 +544,18 @@ internal static class LampacMetadataClient
 
             int season = ReadInt(ReadAttribute(attrs, "s"));
             if (season <= 0)
-                season = ReadJsonInt(data, "season", "season_number", "s");
+                season = ReadJsonInt(data, "s", "season", "season_number");
 
             int episode = ReadInt(ReadAttribute(attrs, "e"));
             if (episode <= 0)
-                episode = ReadJsonInt(data, "episode", "episode_number", "e");
+                episode = ReadJsonInt(data, "e", "episode", "episode_number");
 
-            string voiceName = ReadJsonString(data, "voice_name", "voiceName", "translation", "voice");
+            string voiceName = ReadJsonString(data, "voice_name", "voiceName", "details", "translation", "voice");
             string voiceId = ReadJsonString(data, "voice_id", "voiceId", "translation_id", "translationId");
             if (kind == "button" && string.IsNullOrWhiteSpace(voiceName))
                 voiceName = text;
 
-            string semanticKind = kind;
-            string jsonType = NormalizeNodeKind(ReadJsonString(data, "type"));
-            if (jsonType != null)
-                semanticKind = jsonType;
+            string semanticKind = NormalizeNodeKind(ReadJsonString(data, "type")) ?? kind;
 
             result.Add(new OnlineNode
             {
@@ -583,9 +600,9 @@ internal static class LampacMetadataClient
 
         nextUrl = WebUtility.HtmlDecode(nextUrl.Trim());
         if (Uri.TryCreate(nextUrl, UriKind.Absolute, out _))
-            return nextUrl;
+            return ForceMetadataJson(nextUrl);
         if (nextUrl.StartsWith('/'))
-            return nextUrl;
+            return ForceMetadataJson(nextUrl);
 
         try
         {
@@ -593,13 +610,14 @@ internal static class LampacMetadataClient
                 ? absolute
                 : new Uri(new Uri("http://lampac.local/"), currentUrl.TrimStart('/'));
             Uri resolved = new Uri(current, nextUrl);
-            if (resolved.Host.Equals("lampac.local", StringComparison.OrdinalIgnoreCase))
-                return resolved.PathAndQuery;
-            return resolved.ToString();
+            string value = resolved.Host.Equals("lampac.local", StringComparison.OrdinalIgnoreCase)
+                ? resolved.PathAndQuery
+                : resolved.ToString();
+            return ForceMetadataJson(value);
         }
         catch
         {
-            return nextUrl;
+            return ForceMetadataJson(nextUrl);
         }
     }
 
@@ -635,6 +653,7 @@ internal static class LampacMetadataClient
     {
         if (value == null)
             return 0;
+
         foreach (string name in names)
         {
             JToken token = value[name];
@@ -648,9 +667,14 @@ internal static class LampacMetadataClient
     {
         if (value == null)
             return null;
+
         foreach (string name in names)
         {
-            string text = value.Value<string>(name);
+            JToken token = value[name];
+            if (token == null || token.Type is JTokenType.Object or JTokenType.Array or JTokenType.Null)
+                continue;
+
+            string text = token.ToString();
             if (!string.IsNullOrWhiteSpace(text))
                 return text.Trim();
         }
@@ -661,6 +685,7 @@ internal static class LampacMetadataClient
     {
         if (value == null || value[name] == null)
             return false;
+
         JToken token = value[name];
         if (token.Type == JTokenType.Boolean)
             return token.Value<bool>();
@@ -669,7 +694,7 @@ internal static class LampacMetadataClient
 
     static async Task<LampacMetadataResponse> GetFollowingRedirectsAsync(string pathOrUrl, string uid)
     {
-        string current = pathOrUrl;
+        string current = ForceMetadataJson(pathOrUrl);
         for (int i = 0; i < 4; i++)
         {
             var response = await GetAsync(current, uid).ConfigureAwait(false);
@@ -697,11 +722,19 @@ internal static class LampacMetadataClient
                 return null;
 
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.TryAddWithoutValidation("Accept", "application/json, text/html;q=0.5");
+            request.Headers.TryAddWithoutValidation("User-Agent", "Lampac-TranslationSub/1.0");
             request.Headers.TryAddWithoutValidation("X-TranslationSub-Metadata", "1");
+
+            // Lampac itself uses lcrqpasswd for trusted localhost online requests.
+            // Keep the credential strictly on the loopback/unix-socket transport.
+            if (localRoute && !string.IsNullOrWhiteSpace(CoreInit.rootPasswd))
+                request.Headers.TryAddWithoutValidation("lcrqpasswd", CoreInit.rootPasswd);
 
             using var response = await GetClient(localRoute)
                 .SendAsync(request, HttpCompletionOption.ResponseContentRead)
                 .ConfigureAwait(false);
+
             string body = response.Content == null
                 ? null
                 : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -728,6 +761,43 @@ internal static class LampacMetadataClient
         return pathOrUrl + separator + Uri.EscapeDataString(key) + "=" + Uri.EscapeDataString(value ?? string.Empty);
     }
 
+    static string ForceMetadataJson(string pathOrUrl)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUrl))
+            return pathOrUrl;
+
+        int fragmentIndex = pathOrUrl.IndexOf('#');
+        string fragment = fragmentIndex >= 0 ? pathOrUrl[fragmentIndex..] : string.Empty;
+        string value = fragmentIndex >= 0 ? pathOrUrl[..fragmentIndex] : pathOrUrl;
+
+        int queryIndex = value.IndexOf('?');
+        if (queryIndex < 0)
+            return value + "?rjson=true" + fragment;
+
+        string prefix = value[..(queryIndex + 1)];
+        string query = value[(queryIndex + 1)..];
+        var pairs = query.Split('&', StringSplitOptions.RemoveEmptyEntries).ToList();
+        bool replaced = false;
+
+        for (int i = 0; i < pairs.Count; i++)
+        {
+            string rawName = pairs[i].Split('=', 2)[0];
+            string name = rawName;
+            try { name = Uri.UnescapeDataString(rawName); } catch { }
+
+            if (!name.Equals("rjson", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            pairs[i] = "rjson=true";
+            replaced = true;
+        }
+
+        if (!replaced)
+            pairs.Add("rjson=true");
+
+        return prefix + string.Join("&", pairs) + fragment;
+    }
+
     static bool HasQueryKey(string pathOrUrl, string key)
     {
         int queryIndex = pathOrUrl?.IndexOf('?') ?? -1;
@@ -735,6 +805,10 @@ internal static class LampacMetadataClient
             return false;
 
         string query = pathOrUrl[(queryIndex + 1)..];
+        int fragmentIndex = query.IndexOf('#');
+        if (fragmentIndex >= 0)
+            query = query[..fragmentIndex];
+
         foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             string name = pair.Split('=', 2)[0];
@@ -751,7 +825,7 @@ internal static class LampacMetadataClient
             return externalClient;
 
         var listen = CoreInit.conf?.listen;
-        string key = string.Join("|", listen?.sock ?? string.Empty, listen?.ip ?? string.Empty, listen?.port ?? 0);
+        string key = string.Join("|", listen?.sock ?? string.Empty, listen?.localhost ?? string.Empty, listen?.ip ?? string.Empty, listen?.port ?? 0);
 
         lock (clientLocker)
         {
@@ -828,8 +902,8 @@ internal static class LampacMetadataClient
             || host.Equals("broadcast", StringComparison.OrdinalIgnoreCase)
             || host == "0.0.0.0"
             || host == "::")
-            host = "127.0.0.1";
-        else if (IPAddress.TryParse(host, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6)
+            host = string.IsNullOrWhiteSpace(listen.localhost) ? "127.0.0.1" : listen.localhost;
+        if (IPAddress.TryParse(host, out var address) && address.AddressFamily == AddressFamily.InterNetworkV6)
             host = $"[{host}]";
 
         return new Uri(new Uri($"http://{host}:{listen.port}/"), path.TrimStart('/'));
@@ -842,10 +916,18 @@ internal static class LampacMetadataClient
         if (uri.IsLoopback || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        string listenHost = CoreInit.conf?.listen?.ip;
+        var listen = CoreInit.conf?.listen;
+        string localhost = listen?.localhost;
+        if (!string.IsNullOrWhiteSpace(localhost)
+            && uri.Host.Equals(localhost.Trim('[', ']'), StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        string listenHost = listen?.ip;
         if (!string.IsNullOrWhiteSpace(listenHost)
             && !listenHost.Equals("any", StringComparison.OrdinalIgnoreCase)
             && !listenHost.Equals("broadcast", StringComparison.OrdinalIgnoreCase)
+            && listenHost != "0.0.0.0"
+            && listenHost != "::"
             && uri.Host.Equals(listenHost.Trim('[', ']'), StringComparison.OrdinalIgnoreCase))
             return true;
 
