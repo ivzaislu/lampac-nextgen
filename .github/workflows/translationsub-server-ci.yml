@@ -154,7 +154,7 @@ jobs:
           assert isinstance(settings, dict), settings
           assert 'accsdb' not in settings, settings
           assert isinstance(settings.get('availableSources'), list), settings
-          assert isinstance(settings.get('sources'), list), settings
+          assert isinstance(settings.get('Sources'), list), settings
           assert expected.issubset(set(settings['availableSources'])), settings
 
           with open('/tmp/empty-variants.json', encoding='utf-8') as f:
@@ -168,6 +168,7 @@ jobs:
           assert variants['Items'] == [], variants
 
           print('sources:', sources['sources'])
+          print('settings.Sources:', settings['Sources'])
           print('settings.availableSources:', settings['availableSources'])
           print('empty variants:', variants)
           PY
