@@ -125,7 +125,7 @@ public static class LampacMetadataService
 
         return new TranslationVariantsResponse
         {
-            Source = "lampac",
+            Source = "multi",
             Seasons = combined
                 .Where(x => x.season > 0)
                 .Select(x => x.season)
