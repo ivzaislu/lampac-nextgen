@@ -23,6 +23,7 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/list")]
     public ActionResult List(string userKey = null)
     {
+        CaptureUserUid(userKey);
         SyncTimeCodeProgress(userKey);
 
         var list = SubscriptionStore.Load();
@@ -38,6 +39,8 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/updates")]
     async public Task<ActionResult> Updates(string userKey = null, bool force = false, string sources = null)
     {
+        CaptureUserUid(userKey);
+
         // Lampac TimeCode is authoritative for watched progress. Reconcile it before
         // both the balancer check and the notification projection.
         SyncTimeCodeProgress(userKey);
@@ -94,6 +97,7 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/progress")]
     public ActionResult Progress(string userKey = null)
     {
+        CaptureUserUid(userKey);
         int synced = SyncTimeCodeProgress(userKey);
 
         var list = SubscriptionStore.Load();
@@ -165,6 +169,7 @@ public class TranslationSubController : BaseController
     [Route("transsubscribe/check")]
     async public Task<ActionResult> Check(string userKey = null, string sources = null)
     {
+        CaptureUserUid(userKey);
         SyncTimeCodeProgress(userKey);
         await TranslationSubscriptionService.Tick(userKey, ParseSources(sources), force: true);
         return ContentTo("{\"success\":true}");
@@ -340,6 +345,31 @@ public class TranslationSubController : BaseController
             return accountQuery.ToString().Trim();
 
         return null;
+    }
+
+    void CaptureUserUid(string userKey)
+    {
+        if (string.IsNullOrWhiteSpace(userKey))
+            return;
+
+        string uid = ResolveRequestUid();
+        if (string.IsNullOrWhiteSpace(uid))
+            return;
+
+        SubscriptionStore.MutateIfChanged(list =>
+        {
+            bool changed = false;
+            foreach (var item in list.Where(x => x.UserKey == userKey))
+            {
+                if (string.Equals(item.Uid, uid, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                item.Uid = uid;
+                changed = true;
+            }
+
+            return changed;
+        });
     }
 
     int SyncTimeCodeProgress(string userKey)
