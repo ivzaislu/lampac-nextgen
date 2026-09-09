@@ -58,7 +58,9 @@ jobs:
           cache:
             type: mem
           accsdb:
-            enable: false
+            enable: true
+            accounts:
+              ci@translationsub.test: '2099-01-01T00:00:00'
           BaseModule:
             LoadModules:
               - TranslationSub
@@ -89,10 +91,20 @@ jobs:
           ready=0
           for i in $(seq 1 120); do
             if curl --silent --show-error --fail --max-time 2 \
-              http://127.0.0.1:9118/translationsub/sources \
+              'http://127.0.0.1:9118/translationsub/sources?uid=ci%40translationsub.test' \
               -o /tmp/sources.json; then
-              ready=1
-              break
+              if python3 - <<'PY'
+          import json
+          try:
+              data = json.load(open('/tmp/sources.json', encoding='utf-8'))
+              raise SystemExit(0 if isinstance(data.get('sources'), list) else 1)
+          except Exception:
+              raise SystemExit(1)
+          PY
+              then
+                ready=1
+                break
+              fi
             fi
 
             if ! kill -0 "$(cat /tmp/lampac.pid)" 2>/dev/null; then
@@ -104,12 +116,13 @@ jobs:
           done
 
           if [ "$ready" != "1" ]; then
-            echo "TranslationSub endpoint did not become ready"
+            echo "TranslationSub endpoint did not become ready with authenticated uid"
+            cat /tmp/sources.json 2>/dev/null || true
             tail -n 400 /tmp/lampac.log || true
             exit 1
           fi
 
-          echo "TranslationSub is ready"
+          echo "TranslationSub is ready with uid login"
           cat /tmp/sources.json
 
       - name: Validate TranslationSub API shapes
@@ -118,11 +131,11 @@ jobs:
           set -euo pipefail
 
           curl --silent --show-error --fail --max-time 10 \
-            'http://127.0.0.1:9118/translationsub/user-settings?userKey=ci' \
+            'http://127.0.0.1:9118/translationsub/user-settings?userKey=ci&uid=ci%40translationsub.test' \
             -o /tmp/settings.json
 
           curl --silent --show-error --fail --max-time 10 \
-            'http://127.0.0.1:9118/translationsub/variants?kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1&sources=__ci_none__' \
+            'http://127.0.0.1:9118/translationsub/variants?uid=ci%40translationsub.test&kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1&sources=__ci_none__' \
             -o /tmp/empty-variants.json
 
           python3 - <<'PY'
@@ -131,6 +144,7 @@ jobs:
           with open('/tmp/sources.json', encoding='utf-8') as f:
               sources = json.load(f)
           assert isinstance(sources, dict), sources
+          assert 'accsdb' not in sources, sources
           assert isinstance(sources.get('sources'), list), sources
           expected = {'flixcdn', 'phantom', 'zetflixdb', 'cdnvideohub'}
           assert expected.issubset(set(sources['sources'])), sources
@@ -138,12 +152,14 @@ jobs:
           with open('/tmp/settings.json', encoding='utf-8') as f:
               settings = json.load(f)
           assert isinstance(settings, dict), settings
+          assert 'accsdb' not in settings, settings
           assert isinstance(settings.get('availableSources'), list), settings
           assert isinstance(settings.get('sources'), list), settings
           assert expected.issubset(set(settings['availableSources'])), settings
 
           with open('/tmp/empty-variants.json', encoding='utf-8') as f:
               variants = json.load(f)
+          assert 'accsdb' not in variants, variants
           assert variants.get('Source') == 'multi', variants
           assert isinstance(variants.get('Seasons'), list), variants
           assert isinstance(variants.get('Translations'), list), variants
@@ -161,7 +177,7 @@ jobs:
         shell: bash
         run: |
           set -u
-          base='http://127.0.0.1:9118/translationsub/variants?kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1'
+          base='http://127.0.0.1:9118/translationsub/variants?uid=ci%40translationsub.test&kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1'
 
           for source in flixcdn phantom zetflixdb cdnvideohub; do
             echo "===== ${source} ====="
@@ -183,6 +199,10 @@ jobs:
           except Exception as e:
               print('non-json response:', e)
               print(p.read_text(encoding='utf-8', errors='replace')[:1500])
+              raise SystemExit(0)
+
+          if data.get('accsdb'):
+              print('AUTH FAILURE:', data)
               raise SystemExit(0)
 
           translations = data.get('Translations') or []
