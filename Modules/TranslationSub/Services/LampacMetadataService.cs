@@ -138,7 +138,7 @@ public static class LampacMetadataService
     }
 
     public static Task<IReadOnlyList<LampacSourceOption>> AvailableSourcesAsync(string uid = null)
-        => LampacMetadataClient.AvailableSourcesAsync(uid);
+        => Task.FromResult<IReadOnlyList<LampacSourceOption>>(LampacSourceRegistry.AvailableSources());
 
     static string SourceVoiceId(string sourceId, string voiceName, string source)
     {
