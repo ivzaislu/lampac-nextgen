@@ -12,21 +12,6 @@
         externalids: '/externalids'
     };
 
-    var SETTINGS = {
-        flixcdn: 'translationsub_flixcdn',
-        phantom: 'translationsub_phantom',
-        zetflixdb: 'translationsub_zetflixdb',
-        videohub: 'translationsub_videohub'
-    };
-
-    var SOURCE_NAMES = {
-        flixcdn: 'FlixCDN',
-        phantom: 'Phantom',
-        zetflixdb: 'ZetflixDB',
-        cdnvideohub: 'VideoHUB',
-        multi: 'Несколько источников'
-    };
-
     var lastEvent = null;
     var applyTimer = null;
     var flowToken = 0;
@@ -48,9 +33,7 @@
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
+        } catch (e2) { return fallback; }
     }
 
     function storageSet(name, value) {
@@ -63,20 +46,12 @@
         try { localStorage.setItem(name, value); } catch (e2) {}
     }
 
-    function settingBool(name, fallback) {
-        var value = storageGet(name, fallback);
-        if (truthy(value)) return true;
-        if (value === false || value === 0 || value === '0' || value === 'false') return false;
-        return !!fallback;
-    }
-
-    function enabledSources() {
-        var result = [];
-        if (settingBool(SETTINGS.flixcdn, true)) result.push('flixcdn');
-        if (settingBool(SETTINGS.phantom, true)) result.push('phantom');
-        if (settingBool(SETTINGS.zetflixdb, true)) result.push('zetflixdb');
-        if (settingBool(SETTINGS.videohub, true)) result.push('cdnvideohub');
-        return result;
+    function selectedSources() {
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.enabledSources === 'function')
+                return window.TranslationSub.enabledSources() || [];
+        } catch (e) {}
+        return [];
     }
 
     function lampacUid() {
@@ -161,9 +136,7 @@
                 else error(new Error('HTTP ' + xhr.status));
             };
             xhr.send(body && method !== 'GET' ? JSON.stringify(body) : null);
-        } catch (e2) {
-            error(e2);
-        }
+        } catch (e2) { error(e2); }
     }
 
     function notify(text) {
@@ -182,7 +155,6 @@
                 '<path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"></path>' +
             '</svg>';
         }
-
         return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
             '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>' +
             '<path d="M10 21h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>' +
@@ -220,18 +192,15 @@
     function detectSerialCard(object, card) {
         object = object || {};
         card = card || {};
-
         var method = lower(object.method || card.method);
         var mediaType = lower(object.media_type || card.media_type || object.type || card.type);
         var explicitMovie = method === 'movie' || method === 'film' || mediaType === 'movie' || mediaType === 'film';
         var explicitTv = method === 'tv' || method === 'serial' || mediaType === 'tv' || mediaType === 'serial' || mediaType === 'series';
-
         if (explicitTv) return true;
         if (truthy(object.serial) || truthy(card.serial) || truthy(object.is_serial) || truthy(card.is_serial) || truthy(card.isSerial)) return true;
         if (Number(object.season || card.season || 0) > 0) return true;
         if (hasSeasonData(card)) return true;
         if (card.original_name && !card.original_title) return true;
-
         if (explicitMovie) return false;
         if (card.release_date || card.original_title) return false;
         return false;
@@ -310,17 +279,11 @@
         return String(variant.Id || variant.id || variant.translation_id || '');
     }
 
-    function sourceName(source) {
-        source = lower(source);
-        return SOURCE_NAMES[source] || source || 'Источник';
-    }
-
     function variantSources(variant) {
         var sources = variant.Sources || variant.sources || [];
         if (Array.isArray(sources) && sources.length) return sources;
         return [{
             Source: variant.source || variant.Source || '',
-            Path: variant.path || variant.Path || '',
             TranslationId: variant.translation_id || variant.Id || variant.id || '',
             TranslationName: variant.translation || variant.Name || variant.name || ''
         }];
@@ -329,7 +292,7 @@
     function sourceSummary(variant) {
         var names = [];
         variantSources(variant).forEach(function (source) {
-            var name = sourceName(source.Source || source.source || '');
+            var name = String(source.Source || source.source || '').trim();
             if (name && names.indexOf(name) === -1) names.push(name);
         });
         return names.join(', ');
@@ -361,11 +324,8 @@
     }
 
     function activeFull() {
-        try {
-            return typeof $ === 'function' && $('.full-start:visible,.full-start-new:visible').length > 0;
-        } catch (e) {
-            return false;
-        }
+        try { return typeof $ === 'function' && $('.full-start:visible,.full-start-new:visible').length > 0; }
+        catch (e) { return false; }
     }
 
     function validFlow(token) {
@@ -393,9 +353,7 @@
             onSelect: function (item) {
                 restoreContentController();
                 if (item && typeof item.onclick === 'function') {
-                    setTimeout(function () {
-                        if (token === flowToken) item.onclick();
-                    }, 0);
+                    setTimeout(function () { if (token === flowToken) item.onclick(); }, 0);
                 }
             },
             onBack: function () {
@@ -424,7 +382,7 @@
             isSerial: true,
             season: Number(season || 1),
             serial: true,
-            sources: enabledSources().join(',')
+            uid: lampacUid()
         }, null, success, error);
     }
 
@@ -432,8 +390,7 @@
         if (!value) return false;
         var time = new Date(value).getTime();
         if (isNaN(time)) return false;
-        var now = Date.now ? Date.now() : new Date().getTime();
-        return time <= now;
+        return time <= (Date.now ? Date.now() : new Date().getTime());
     }
 
     function latestAiredSeason(context) {
@@ -462,9 +419,7 @@
             if (nextNumber > 1) return nextSeason;
             if (nextSeason > 1) return nextSeason - 1;
         }
-
         if (bestKnown > 0) return bestKnown;
-
         var total = Number(card.number_of_seasons || card.seasons_count || 0) || 0;
         if (total > 0) return total;
         if (context && context.season > 0) return context.season;
@@ -487,21 +442,20 @@
         if (busy) return;
         busy = true;
 
-        var sources = variantSources(variant);
-        var bodySources = sources.map(function (source) {
+        var bodySources = variantSources(variant).map(function (source) {
             return {
                 source: source.Source || source.source || '',
-                path: source.Path || source.path || '',
                 translationId: String(source.TranslationId || source.translationId || voiceId(variant)),
                 translationName: source.TranslationName || source.translationName || voiceName(variant)
             };
         });
         var latestEpisode = Number(variant.episode || 0) || 0;
         var mainSource = bodySources.length > 1 ? 'multi' :
-            (bodySources.length ? bodySources[0].source : (variant.source || 'multi'));
+            (bodySources.length ? bodySources[0].source : (variant.source || 'lampac'));
 
         request('POST', API.add, null, {
             userKey: userKey(),
+            uid: lampacUid(),
             contentId: context.contentId,
             title: context.title,
             originalTitle: context.originalTitle,
@@ -561,7 +515,9 @@
                 });
 
                 if (!variants.length) {
-                    notify('Озвучки для ' + season + ' сезона пока не найдены');
+                    notify(selectedSources().length
+                        ? ('Озвучки для ' + season + ' сезона пока не найдены')
+                        : 'Выберите балансеры для опроса в настройках TranslationSub');
                     restoreContentController();
                     return;
                 }
@@ -577,14 +533,11 @@
                     var existing = findExisting(subscriptions, context, variant, season);
                     var sources = sourceSummary(variant);
                     var latest = Number(variant.episode || 0) || 0;
-                    var quality = String(variant.quality || '').trim();
                     var subtitle = [];
-
                     if (existing) subtitle.push('Подписка активна · нажмите, чтобы отписаться');
                     else if (latest > 0) subtitle.push('Доступно до ' + latest + ' серии');
                     else subtitle.push('Нажмите, чтобы подписаться');
                     if (sources) subtitle.push(sources);
-                    if (quality) subtitle.push(quality);
 
                     return {
                         title: (existing ? '✓ ' : '') + voiceName(variant),
@@ -612,7 +565,6 @@
         var context = object && object.card && object.contentId ? object : normalizeFull(object || {});
         if (!context.isSerial) return;
         if (!context.contentId && !context.title) return notify('Не удалось определить карточку сериала');
-        if (!enabledSources().length) return notify('Включите хотя бы один балансер в настройках');
 
         var token = ++flowToken;
         ensureExternalIds(context, function (resolved) {
@@ -644,14 +596,11 @@
         if (typeof $ !== 'function') return null;
         var root = buttonRoot(event);
         if (!root || !root.length) return null;
-
         var button = root.find('.translationsub-full-button').first();
         if (button.length) return button;
-
         var row = root.find('.full-start-new__buttons').first();
         if (!row.length) row = root.find('.full-start__buttons').first();
         if (!row.length) return null;
-
         button = $('<div class="full-start__button selector translationsub-full-button"></div>');
         row.append(button);
         return button;
@@ -666,10 +615,8 @@
 
     function applyButton(event) {
         if (typeof $ !== 'function') return;
-
         var payload = event && (event.data || event.object) || {};
         var context = normalizeFull(payload);
-
         if (!context.isSerial || (!context.contentId && !context.title)) {
             removeButton(event);
             return;
@@ -677,7 +624,6 @@
 
         var button = ensureButton(event);
         if (!button || !button.length) return;
-
         button.off('.translationsubCardFlow');
         renderButton(button, false);
         button.attr('data-translationsub-card-flow', '1');
@@ -728,7 +674,6 @@
         injectStyles();
         bind();
         expose();
-
         var attempts = 0;
         var wait = setInterval(function () {
             attempts++;
@@ -744,9 +689,7 @@
             if (window.Lampa) {
                 clearInterval(wait);
                 start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
+            } else if (attempts > 80) clearInterval(wait);
         }, 250);
     }
 })();
