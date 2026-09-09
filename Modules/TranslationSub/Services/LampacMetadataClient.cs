@@ -37,23 +37,19 @@ internal static class LampacMetadataClient
     static HttpClient localClient;
     static string localClientKey;
 
-    // This is the generic markup contract used by Online/plugin.js itself.
+    // Generic HTML emitted by Shared.Models.Templates (SeasonTpl/VoiceTpl/EpisodeTpl/MovieTpl).
     // There are intentionally no branches for individual online modules here.
     static readonly Regex onlineElementRegex = new(
         @"<(?<tag>[a-zA-Z0-9]+)\b(?<attrs>[^>]*videos__(?:item|button)[^>]*)>(?<inner>.*?)</\k<tag>>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
 
     static readonly Regex attributeRegex = new(
-        @"(?<name>[\w:-]+)\s*=\s*(?:""(?<dq>[^""]*)""|'(?<sq>[^']*)')",
+        @"(?<name>[\w:-]+)\s*=\s*(?:\"(?<dq>[^\"]*)\"|'(?<sq>[^']*)')",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     static readonly Regex tagRegex = new(
         @"<[^>]+>",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.CultureInvariant);
-
-    static readonly Regex firstNumberRegex = new(
-        @"(?<!\d)(?<n>\d{1,4})(?!\d)",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     static readonly Regex seasonTextRegex = new(
         @"(?:season|сезон)\D{0,8}(?<n>\d{1,3})|(?<n2>\d{1,3})\D{0,8}(?:season|сезон)",
@@ -68,46 +64,15 @@ internal static class LampacMetadataClient
         Timeout = TimeSpan.FromSeconds(30)
     };
 
-    public static async Task<IReadOnlyList<LampacSourceOption>> AvailableSourcesAsync(string uid = null)
-    {
-        var serialTask = DiscoverSourcesAsync(new TranslationMetadataQuery
-        {
-            Uid = uid,
-            IsSerial = true,
-            Title = "TranslationSub",
-            OriginalTitle = "TranslationSub"
-        });
-        var movieTask = DiscoverSourcesAsync(new TranslationMetadataQuery
-        {
-            Uid = uid,
-            IsSerial = false,
-            Title = "TranslationSub",
-            OriginalTitle = "TranslationSub"
-        });
-
-        var groups = (await Task.WhenAll(serialTask, movieTask).ConfigureAwait(false))
-            .SelectMany(x => x)
-            .GroupBy(x => x.Id, StringComparer.OrdinalIgnoreCase);
-
-        return groups
-            .Select(group =>
-            {
-                var best = group.First();
-                return new LampacSourceOption { id = best.Id, name = best.Name };
-            })
-            .OrderBy(x => x.name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(x => x.id, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-
     public static async Task<IReadOnlyList<LampacVoiceMetadata>> ReadAsync(TranslationMetadataQuery query)
     {
         if (query == null || query.Sources?.Count == 0)
             return Array.Empty<LampacVoiceMetadata>();
 
         var discovered = await DiscoverSourcesAsync(query).ConfigureAwait(false);
-        if (query.Sources != null)
-            discovered = discovered.Where(x => query.Sources.Contains(x.Id)).ToList();
+        discovered = discovered
+            .Where(x => query.Sources.Any(id => string.Equals(id, x.Id, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
 
         if (discovered.Count == 0)
             return Array.Empty<LampacVoiceMetadata>();
@@ -218,12 +183,11 @@ internal static class LampacMetadataClient
     {
         var rows = new List<MetadataRow>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string requestUrl = BuildSourceRequest(source.Url, query);
 
         await TraverseAsync(
             source,
             query,
-            requestUrl,
+            BuildSourceRequest(source.Url, query),
             null,
             null,
             query.Season,
@@ -291,8 +255,7 @@ internal static class LampacMetadataClient
         if (depth > MaxMetadataDepth || visited.Count >= MaxMetadataPages || string.IsNullOrWhiteSpace(url))
             return;
 
-        string visitKey = url.Trim();
-        if (!visited.Add(visitKey))
+        if (!visited.Add(url.Trim()))
             return;
 
         var response = await GetFollowingRedirectsAsync(url, query.Uid).ConfigureAwait(false);
@@ -303,14 +266,14 @@ internal static class LampacMetadataClient
         if (nodes.Count == 0)
             return;
 
-        var buttons = nodes.Where(x => x.Kind == "button" || x.Kind == "voice").ToList();
-        var activeButton = buttons.FirstOrDefault(x => x.Active) ?? buttons.FirstOrDefault();
+        var voices = nodes.Where(x => x.Kind == "button" || x.Kind == "voice").ToList();
+        var activeVoice = voices.FirstOrDefault(x => x.Active) ?? voices.FirstOrDefault();
         string pageVoiceName = inheritedVoiceName;
         string pageVoiceId = inheritedVoiceId;
-        if (activeButton != null)
+        if (activeVoice != null)
         {
-            pageVoiceName = activeButton.VoiceName ?? activeButton.Text ?? pageVoiceName;
-            pageVoiceId = activeButton.VoiceId;
+            pageVoiceName = activeVoice.VoiceName ?? activeVoice.Text ?? pageVoiceName;
+            pageVoiceId = activeVoice.VoiceId;
             if (string.IsNullOrWhiteSpace(pageVoiceId))
                 pageVoiceId = StableMetadataVoiceId(pageVoiceName, source.Id);
         }
@@ -320,12 +283,8 @@ internal static class LampacMetadataClient
 
         foreach (var node in nodes)
         {
-            string voiceName = !string.IsNullOrWhiteSpace(node.VoiceName)
-                ? node.VoiceName
-                : pageVoiceName;
-            string voiceId = !string.IsNullOrWhiteSpace(node.VoiceId)
-                ? node.VoiceId
-                : pageVoiceId;
+            string voiceName = !string.IsNullOrWhiteSpace(node.VoiceName) ? node.VoiceName : pageVoiceName;
+            string voiceId = !string.IsNullOrWhiteSpace(node.VoiceId) ? node.VoiceId : pageVoiceId;
             int season = node.Season > 0 ? node.Season : inheritedSeason;
 
             if (node.Kind == "button" || node.Kind == "voice")
@@ -363,7 +322,7 @@ internal static class LampacMetadataClient
                 {
                     season = 0;
                     if (string.IsNullOrWhiteSpace(voiceName))
-                        voiceName = node.Text;
+                        voiceName = node.VoiceName ?? node.Text;
                 }
                 else if (season <= 0 && query.Season > 0)
                 {
@@ -383,8 +342,7 @@ internal static class LampacMetadataClient
                     Episode = episode
                 });
 
-                // This is the critical boundary: play/call/episode/movie URLs are
-                // playback endpoints. TranslationSub never follows them.
+                // Playback boundary: never follow play/call/episode/movie URLs.
                 continue;
             }
 
@@ -440,62 +398,103 @@ internal static class LampacMetadataClient
         try
         {
             JToken root = JToken.Parse(body);
-            AddJsonNodes(root, null, null, 0, result);
+            AddJsonNodes(root, null, null, 0, null, result);
         }
         catch { }
 
         return result;
     }
 
-    static void AddJsonNodes(JToken token, string inheritedVoiceName, string inheritedVoiceId, int inheritedSeason, List<OnlineNode> result)
+    // Shared.Models.Templates JSON contract:
+    // { type: "season|episode|movie", voice: VoiceDto[], data: *Dto[] }.
+    // Child DTOs intentionally have no `type`, so their semantic kind comes from
+    // the response type/property instead of provider-specific fields.
+    static void AddJsonNodes(
+        JToken token,
+        string inheritedVoiceName,
+        string inheritedVoiceId,
+        int inheritedSeason,
+        string contextualKind,
+        List<OnlineNode> result)
     {
         if (token == null)
             return;
 
-        if (token is JObject obj)
-        {
-            string type = ReadJsonString(obj, "type")?.ToLowerInvariant();
-            string voiceName = ReadJsonString(obj, "voice_name", "voiceName", "translation", "voice") ?? inheritedVoiceName;
-            string voiceId = ReadJsonString(obj, "voice_id", "voiceId", "translation_id", "translationId") ?? inheritedVoiceId;
-            string text = ReadJsonString(obj, "title", "name", "text");
-            int season = ReadJsonInt(obj, "season", "season_number", "s");
-            if (season <= 0)
-                season = inheritedSeason;
-
-            if (type == "voice" && string.IsNullOrWhiteSpace(voiceName))
-                voiceName = text;
-
-            if (type is "season" or "voice" or "episode" or "movie")
-            {
-                result.Add(new OnlineNode
-                {
-                    Kind = type,
-                    Text = text,
-                    Url = ReadJsonString(obj, "url", "link"),
-                    Method = ReadJsonString(obj, "method"),
-                    Season = season,
-                    Episode = ReadJsonInt(obj, "episode", "episode_number", "e"),
-                    VoiceName = voiceName,
-                    VoiceId = voiceId,
-                    Similar = ReadJsonBool(obj, "similar"),
-                    Active = ReadJsonBool(obj, "active")
-                });
-            }
-
-            string childVoiceName = type == "voice" ? voiceName : inheritedVoiceName;
-            string childVoiceId = type == "voice" ? voiceId : inheritedVoiceId;
-            int childSeason = type == "season" ? season : inheritedSeason;
-
-            foreach (var property in obj.Properties())
-                AddJsonNodes(property.Value, childVoiceName, childVoiceId, childSeason, result);
-            return;
-        }
-
         if (token is JArray array)
         {
             foreach (var child in array)
-                AddJsonNodes(child, inheritedVoiceName, inheritedVoiceId, inheritedSeason, result);
+                AddJsonNodes(child, inheritedVoiceName, inheritedVoiceId, inheritedSeason, contextualKind, result);
+            return;
         }
+
+        if (token is not JObject obj)
+            return;
+
+        string responseType = NormalizeNodeKind(ReadJsonString(obj, "type"));
+        if (responseType != null && (obj["data"] is JArray || obj["voice"] is JArray))
+        {
+            AddJsonNodes(obj["voice"], inheritedVoiceName, inheritedVoiceId, inheritedSeason, "voice", result);
+            AddJsonNodes(obj["data"], inheritedVoiceName, inheritedVoiceId, inheritedSeason, responseType, result);
+            return;
+        }
+
+        string kind = NormalizeNodeKind(contextualKind) ?? responseType;
+        if (kind == null)
+        {
+            foreach (var property in obj.Properties())
+            {
+                string childKind = property.Name.Equals("voice", StringComparison.OrdinalIgnoreCase)
+                    ? "voice"
+                    : null;
+                AddJsonNodes(property.Value, inheritedVoiceName, inheritedVoiceId, inheritedSeason, childKind, result);
+            }
+            return;
+        }
+
+        string text = ReadJsonString(obj, "name", "title", "text", "translate");
+        string voiceName = ReadJsonString(obj, "voice_name", "voiceName", "translation", "voice") ?? inheritedVoiceName;
+        string voiceId = ReadJsonString(obj, "voice_id", "voiceId", "translation_id", "translationId") ?? inheritedVoiceId;
+        int season = ReadJsonInt(obj, "season", "season_number", "s");
+        int episode = ReadJsonInt(obj, "episode", "episode_number", "e");
+
+        if (kind == "season" && season <= 0)
+            season = ReadJsonInt(obj, "id");
+        if (season <= 0)
+            season = inheritedSeason;
+
+        if (kind == "voice")
+        {
+            voiceName = text ?? voiceName;
+            if (string.IsNullOrWhiteSpace(voiceId))
+                voiceId = VoiceNormalize.Normalize(voiceName);
+        }
+        else if (kind == "movie" && string.IsNullOrWhiteSpace(voiceName))
+        {
+            voiceName = ReadJsonString(obj, "voice_name", "translate") ?? text;
+        }
+
+        result.Add(new OnlineNode
+        {
+            Kind = kind,
+            Text = text,
+            Url = ReadJsonString(obj, "url", "link"),
+            Method = ReadJsonString(obj, "method"),
+            Season = season,
+            Episode = episode,
+            VoiceName = voiceName,
+            VoiceId = voiceId,
+            Similar = ReadJsonBool(obj, "similar"),
+            Active = ReadJsonBool(obj, "active")
+        });
+    }
+
+    static string NormalizeNodeKind(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        string kind = value.Trim().ToLowerInvariant();
+        return kind is "season" or "voice" or "episode" or "movie" ? kind : null;
     }
 
     static List<OnlineNode> ParseHtmlNodes(string html)
@@ -537,8 +536,8 @@ internal static class LampacMetadataClient
                 voiceName = text;
 
             string semanticKind = kind;
-            string jsonType = ReadJsonString(data, "type")?.ToLowerInvariant();
-            if (jsonType is "season" or "voice" or "episode" or "movie")
+            string jsonType = NormalizeNodeKind(ReadJsonString(data, "type"));
+            if (jsonType != null)
                 semanticKind = jsonType;
 
             result.Add(new OnlineNode
@@ -609,25 +608,12 @@ internal static class LampacMetadataClient
         if (string.IsNullOrWhiteSpace(value))
             return 0;
 
-        Match seasonMatch = seasonTextRegex.Match(value);
-        if (seasonMatch.Success)
-        {
-            string raw = seasonMatch.Groups["n"].Success
-                ? seasonMatch.Groups["n"].Value
-                : seasonMatch.Groups["n2"].Value;
-            if (int.TryParse(raw, out int season) && season > 0)
-                return season;
-        }
-
-        return 0;
-    }
-
-    static int NumberFromText(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
+        Match match = seasonTextRegex.Match(value);
+        if (!match.Success)
             return 0;
-        Match match = firstNumberRegex.Match(value);
-        return match.Success && int.TryParse(match.Groups["n"].Value, out int number) ? number : 0;
+
+        string raw = match.Groups["n"].Success ? match.Groups["n"].Value : match.Groups["n2"].Value;
+        return int.TryParse(raw, out int season) && season > 0 ? season : 0;
     }
 
     static string StableMetadataVoiceId(string voiceName, string sourceId)
@@ -713,7 +699,9 @@ internal static class LampacMetadataClient
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.TryAddWithoutValidation("X-TranslationSub-Metadata", "1");
 
-            using var response = await GetClient(localRoute).SendAsync(request, HttpCompletionOption.ResponseContentRead).ConfigureAwait(false);
+            using var response = await GetClient(localRoute)
+                .SendAsync(request, HttpCompletionOption.ResponseContentRead)
+                .ConfigureAwait(false);
             string body = response.Content == null
                 ? null
                 : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
