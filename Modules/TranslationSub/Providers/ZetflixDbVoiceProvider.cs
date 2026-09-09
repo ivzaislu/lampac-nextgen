@@ -1,11 +1,7 @@
 using Newtonsoft.Json;
-using Shared.Models.Base;
-using Shared.Services;
-using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using TranslationSub.Models;
@@ -22,63 +18,46 @@ public class ZetflixDbVoiceProvider : IVoiceProvider
     {
         var result = new List<TranslationVariant>();
 
-        if (ModInit.conf?.zetflixdb != true || query.KpId <= 0)
+        if (query == null || query.KpId <= 0 || !LampacMetadataClient.IsSourceAvailable(Source))
             return result;
 
         try
         {
-            string encodedKp = EncodeKp(query.KpId);
-            if (string.IsNullOrWhiteSpace(encodedKp))
+            string firstUrl = $"{Path}?kinopoisk_id={query.KpId}"
+                + $"&title={LampacMetadataClient.Encode(query.Title)}"
+                + $"&original_title={LampacMetadataClient.Encode(query.OriginalTitle)}";
+
+            var redirect = await LampacMetadataClient.GetAsync(firstUrl).ConfigureAwait(false);
+            if (redirect?.IsRedirect != true)
                 return result;
 
-            string host = ModInit.conf.zetflixdb_apihost.TrimEnd('/');
-            string url = $"{host}/embed/AO/kinopoisk/{encodedKp}/";
-
-            string html = await Http.Get(url,
-                referer: host + "/",
-                timeoutSeconds: 15,
-                headers: HeadersModel.Init(Http.defaultFullHeaders,
-                    ("sec-fetch-dest", "iframe"),
-                    ("sec-fetch-mode", "navigate"),
-                    ("sec-fetch-site", "cross-site")
-                ),
-                httpversion: 2);
-
-            if (string.IsNullOrWhiteSpace(html))
+            string metadataUrl = LampacMetadataClient.AppendQuery(redirect.Location, "origsource", "true");
+            var response = await LampacMetadataClient.GetAsync(metadataUrl).ConfigureAwait(false);
+            if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
                 return result;
 
-            string json = DecodePlayer(html);
-            if (string.IsNullOrWhiteSpace(json))
+            var root = JsonConvert.DeserializeObject<EmbedModel>(response.Body);
+            if (root?.pl == null || root.pl.Length == 0)
                 return result;
 
-            var root = JsonConvert.DeserializeObject<RootNode>(json);
-            if (root?.file == null || root.file.Length == 0)
-                return result;
-
-            bool isMovie = !json.Contains("\"folder\":", StringComparison.Ordinal);
-            string quality = DetectQuality(json);
-
-            if (isMovie)
+            if (root.movie)
             {
-                foreach (var item in root.file)
+                foreach (var item in root.pl)
                 {
-                    if (string.IsNullOrWhiteSpace(item?.title))
-                        continue;
-
-                    result.Add(Create(item.title, 0, 1, quality));
+                    if (!string.IsNullOrWhiteSpace(item?.title))
+                        result.Add(Create(item.title, 0, new[] { 1 }));
                 }
 
                 return Distinct(result);
             }
 
-            foreach (var seasonNode in root.file)
+            foreach (var seasonNode in root.pl)
             {
                 int season = ParseLeadingNumber(seasonNode?.title);
-                if (season <= 0 || (query.Season > 0 && season != query.Season))
+                if (season <= 0 || (query.Season > 0 && season != query.Season) || seasonNode?.folder == null)
                     continue;
 
-                if (seasonNode?.folder == null)
-                    continue;
+                var byVoice = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var episodeNode in seasonNode.folder)
                 {
@@ -92,9 +71,18 @@ public class ZetflixDbVoiceProvider : IVoiceProvider
                         if (string.IsNullOrWhiteSpace(voice))
                             continue;
 
-                        result.Add(Create(voice, season, episode, quality));
+                        if (!byVoice.TryGetValue(voice, out var episodes))
+                        {
+                            episodes = new HashSet<int>();
+                            byVoice[voice] = episodes;
+                        }
+
+                        episodes.Add(episode);
                     }
                 }
+
+                foreach (var voice in byVoice)
+                    result.Add(Create(voice.Key, season, voice.Value));
             }
         }
         catch { }
@@ -102,8 +90,14 @@ public class ZetflixDbVoiceProvider : IVoiceProvider
         return Distinct(result);
     }
 
-    TranslationVariant Create(string voice, int season, int episode, string quality)
+    TranslationVariant Create(string voice, int season, IEnumerable<int> episodes)
     {
+        var available = (episodes ?? Array.Empty<int>())
+            .Where(e => e > 0)
+            .Distinct()
+            .OrderBy(e => e)
+            .ToList();
+
         return new TranslationVariant
         {
             source = Source,
@@ -111,50 +105,30 @@ public class ZetflixDbVoiceProvider : IVoiceProvider
             translation = voice,
             translation_id = VoiceNormalize.Normalize(voice),
             season = season,
-            episode = episode,
-            quality = quality
+            episode = available.DefaultIfEmpty(0).Max(),
+            Episodes = available
         };
     }
 
     static List<TranslationVariant> Distinct(List<TranslationVariant> values)
         => values
-            .Where(x => !string.IsNullOrWhiteSpace(x.translation))
+            .Where(x => x != null && !string.IsNullOrWhiteSpace(x.translation))
             .GroupBy(x => $"{x.season}:{VoiceNormalize.Normalize(x.translation)}")
-            .Select(g => g.OrderByDescending(x => x.episode).First())
+            .Select(g =>
+            {
+                var best = g.OrderByDescending(x => x.episode).First();
+                best.Episodes = g
+                    .SelectMany(x => x.Episodes ?? new List<int>())
+                    .Where(e => e > 0)
+                    .Distinct()
+                    .OrderBy(e => e)
+                    .ToList();
+                best.episode = best.Episodes.DefaultIfEmpty(best.episode).Max();
+                return best;
+            })
             .OrderBy(x => x.season)
             .ThenBy(x => x.translation)
             .ToList();
-
-    static string EncodeKp(long kp)
-    {
-        string base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(kp.ToString())).TrimEnd('=');
-        return new string(base64.Reverse().ToArray());
-    }
-
-    static string DecodePlayer(string html)
-    {
-        const string startMarker = "new Player(\"";
-        const string endMarker = "\");";
-
-        int start = html.IndexOf(startMarker, StringComparison.Ordinal);
-        if (start < 0)
-            return null;
-
-        start += startMarker.Length;
-        int end = html.IndexOf(endMarker, start, StringComparison.Ordinal);
-        if (end <= start)
-            return null;
-
-        string payload = html.Substring(start, end - start);
-        if (payload.Length <= 73)
-            return null;
-
-        string base64 = payload.Substring(73);
-        if (Regex.IsMatch(base64, "//[^=]+="))
-            base64 = Regex.Replace(base64, "//[^=]+=", "");
-
-        return CrypTo.DecodeBase64(base64);
-    }
 
     static string NormalizeVoiceTitle(string value)
     {
@@ -172,23 +146,21 @@ public class ZetflixDbVoiceProvider : IVoiceProvider
         return int.TryParse(Regex.Match(value, "^([0-9]+)").Groups[1].Value, out int n) ? n : 0;
     }
 
-    static string DetectQuality(string json)
+    class EmbedModel
     {
-        if (json.Contains("2160p", StringComparison.OrdinalIgnoreCase)) return "2160p";
-        if (json.Contains("1080p", StringComparison.OrdinalIgnoreCase)) return "1080p";
-        if (json.Contains("720p", StringComparison.OrdinalIgnoreCase)) return "720p";
-        return "480p";
+        public RootObject[] pl { get; set; }
+        public bool movie { get; set; }
     }
 
-    class RootNode
-    {
-        public Node[] file { get; set; }
-    }
-
-    class Node
+    class RootObject
     {
         public string title { get; set; }
-        public string file { get; set; }
-        public Node[] folder { get; set; }
+        public Folder[] folder { get; set; }
+    }
+
+    class Folder
+    {
+        public string title { get; set; }
+        public Folder[] folder { get; set; }
     }
 }
