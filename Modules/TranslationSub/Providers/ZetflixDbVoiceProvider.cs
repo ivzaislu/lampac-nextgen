@@ -27,12 +27,12 @@ public class ZetflixDbVoiceProvider : IVoiceProvider
                 + $"&title={LampacMetadataClient.Encode(query.Title)}"
                 + $"&original_title={LampacMetadataClient.Encode(query.OriginalTitle)}";
 
-            var redirect = await LampacMetadataClient.GetAsync(firstUrl).ConfigureAwait(false);
+            var redirect = await LampacMetadataClient.GetAsync(firstUrl, query.Uid).ConfigureAwait(false);
             if (redirect?.IsRedirect != true)
                 return result;
 
             string metadataUrl = LampacMetadataClient.AppendQuery(redirect.Location, "origsource", "true");
-            var response = await LampacMetadataClient.GetAsync(metadataUrl).ConfigureAwait(false);
+            var response = await LampacMetadataClient.GetAsync(metadataUrl, query.Uid).ConfigureAwait(false);
             if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
                 return result;
 
