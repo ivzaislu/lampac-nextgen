@@ -16,6 +16,7 @@
     "Services/TranslationSubscriptionService.cs",
     "Services/VoiceNormalize.cs",
     "Providers/IVoiceProvider.cs",
+    "Providers/LampacMetadataClient.cs",
     "Providers/TranslationProviderHub.cs",
     "Providers/FlixCdnVoiceProvider.cs",
     "Providers/PhantomVoiceProvider.cs",
