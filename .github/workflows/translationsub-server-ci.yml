@@ -15,7 +15,7 @@ jobs:
   test-build:
     name: TranslationSub build + runtime smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -33,28 +33,22 @@ jobs:
       - name: Build Release
         run: dotnet build NextGen.slnx --configuration Release --no-restore --verbosity minimal
 
-      - name: Stage Lampac runtime with TranslationSub
+      - name: Publish Lampac runtime
         shell: bash
         run: |
           set -euo pipefail
-          runtime='Core/bin/Release/net10.0'
-          mkdir -p "$runtime/module/TranslationSub" "$runtime/module/references"
+          rm -rf /tmp/lampac-runtime
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-runtime \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
 
-          cp -a Modules/TranslationSub/. "$runtime/module/TranslationSub/"
+          test -f /tmp/lampac-runtime/Core.dll
+          test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
+          test -d /tmp/lampac-runtime/runtimes/references
 
-          cp Modules/OnlineRUS/FlixCDN/bin/Release/net10.0/FlixCDN.dll "$runtime/module/"
-          cp Modules/OnlineRUS/Phantom/bin/Release/net10.0/Phantom.dll "$runtime/module/"
-          cp Modules/OnlineRUS/ZetflixDB/bin/Release/net10.0/ZetflixDB.dll "$runtime/module/"
-          cp Modules/OnlineRUS/VideoDB/bin/Release/net10.0/VideoDB.dll "$runtime/module/"
-          cp Modules/OnlineRUS/CDNvideohub/bin/Release/net10.0/CDNvideohub.dll "$runtime/module/"
-
-          # TranslationSub TimeCodeProgressService references Microsoft.Data.Sqlite.
-          # Make the compile/runtime dependency visible exactly as a module reference.
-          cp Modules/Sync/TimeCode/bin/Release/net10.0/Microsoft.Data.Sqlite.dll "$runtime/module/references/"
-          find Modules/Sync/TimeCode/bin/Release/net10.0 -maxdepth 1 -type f -name 'SQLitePCLRaw*.dll' \
-            -exec cp {} "$runtime/module/references/" \;
-
-          cat > "$runtime/init.yaml" <<'YAML'
+          cat > /tmp/lampac-runtime/init.yaml <<'YAML'
           chromium:
             enable: false
           firefox:
@@ -68,20 +62,26 @@ jobs:
           BaseModule:
             LoadModules:
               - TranslationSub
+              - FlixCDN
+              - Phantom
+              - ZetflixDB
+              - VideoDB
+              - CDNvideohub
           listen:
             port: 9118
           YAML
 
-          echo '===== staged module files ====='
-          find "$runtime/module" -maxdepth 2 -type f | sort
+          echo '===== TranslationSub publish tree ====='
+          find /tmp/lampac-runtime/module/TranslationSub -maxdepth 3 -type f | sort
+          echo '===== required managed reference ====='
+          find /tmp/lampac-runtime/runtimes/references -type f -name 'Microsoft.Data.Sqlite.dll' -print
 
       - name: Start Lampac and wait for TranslationSub
         shell: bash
         run: |
           set -euo pipefail
-          runtime='Core/bin/Release/net10.0'
           (
-            cd "$runtime"
+            cd /tmp/lampac-runtime
             dotnet Core.dll > /tmp/lampac.log 2>&1
           ) &
           echo $! > /tmp/lampac.pid
@@ -97,7 +97,7 @@ jobs:
 
             if ! kill -0 "$(cat /tmp/lampac.pid)" 2>/dev/null; then
               echo "Lampac exited before TranslationSub became ready"
-              tail -n 300 /tmp/lampac.log || true
+              tail -n 400 /tmp/lampac.log || true
               exit 1
             fi
             sleep 1
@@ -105,7 +105,7 @@ jobs:
 
           if [ "$ready" != "1" ]; then
             echo "TranslationSub endpoint did not become ready"
-            tail -n 300 /tmp/lampac.log || true
+            tail -n 400 /tmp/lampac.log || true
             exit 1
           fi
 
@@ -132,12 +132,15 @@ jobs:
               sources = json.load(f)
           assert isinstance(sources, dict), sources
           assert isinstance(sources.get('sources'), list), sources
+          expected = {'flixcdn', 'phantom', 'zetflixdb', 'cdnvideohub'}
+          assert expected.issubset(set(sources['sources'])), sources
 
           with open('/tmp/settings.json', encoding='utf-8') as f:
               settings = json.load(f)
           assert isinstance(settings, dict), settings
           assert isinstance(settings.get('availableSources'), list), settings
           assert isinstance(settings.get('sources'), list), settings
+          assert expected.issubset(set(settings['availableSources'])), settings
 
           with open('/tmp/empty-variants.json', encoding='utf-8') as f:
               variants = json.load(f)
@@ -206,7 +209,7 @@ jobs:
         shell: bash
         run: |
           echo '===== lampac.log tail ====='
-          tail -n 300 /tmp/lampac.log 2>/dev/null || true
+          tail -n 400 /tmp/lampac.log 2>/dev/null || true
 
       - name: Stop Lampac
         if: always()
