@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using TranslationSub.Models;
+using TranslationSub.Services;
 
 namespace TranslationSub.Providers;
 
@@ -22,7 +23,7 @@ public class FlixCdnVoiceProvider : IVoiceProvider
         try
         {
             string url = $"{Path}?kinopoisk_id={query.KpId}&origsource=true";
-            var response = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
+            var response = await LampacMetadataClient.GetAsync(url, query.Uid).ConfigureAwait(false);
             if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
                 return result;
 
