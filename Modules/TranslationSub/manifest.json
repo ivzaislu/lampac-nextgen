@@ -7,20 +7,16 @@
     "PluginController.cs",
     "ModInit.cs",
     "ModuleConf.cs",
+    "Models/TranslationMetadata.cs",
     "Models/TranslationSubscription.cs",
     "Models/TranslationVariant.cs",
     "Services/SubscriptionStore.cs",
     "Services/TranslationSettingsStore.cs",
     "Services/TmdbScheduleService.cs",
     "Services/TimeCodeProgressService.cs",
+    "Services/LampacMetadataClient.cs",
+    "Services/LampacMetadataService.cs",
     "Services/TranslationSubscriptionService.cs",
-    "Services/VoiceNormalize.cs",
-    "Providers/IVoiceProvider.cs",
-    "Providers/LampacMetadataClient.cs",
-    "Providers/TranslationProviderHub.cs",
-    "Providers/FlixCdnVoiceProvider.cs",
-    "Providers/PhantomVoiceProvider.cs",
-    "Providers/ZetflixDbVoiceProvider.cs",
-    "Providers/CdnVideoHubVoiceProvider.cs"
+    "Services/VoiceNormalize.cs"
   ]
 }
