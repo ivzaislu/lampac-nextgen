@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
 
 namespace TranslationSub.Models;
 
@@ -48,8 +47,4 @@ public class TranslationSubscriptionSource
     public string Source { get; set; }
     public string TranslationId { get; set; }
     public string TranslationName { get; set; }
-
-    // Old databases can still deserialize this field, but the alpha never writes it.
-    [JsonIgnore]
-    public string Path { get; set; }
 }
