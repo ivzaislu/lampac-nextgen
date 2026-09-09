@@ -25,7 +25,7 @@ public class PhantomVoiceProvider : IVoiceProvider
         {
             if (!query.IsSerial)
             {
-                var movie = await LampacMetadataClient.GetAsync(BuildUrl(query, -1)).ConfigureAwait(false);
+                var movie = await LampacMetadataClient.GetAsync(BuildUrl(query, -1), query.Uid).ConfigureAwait(false);
                 if (movie?.IsSuccess == true)
                     CollectMovie(movie.Body, result);
 
@@ -34,14 +34,14 @@ public class PhantomVoiceProvider : IVoiceProvider
 
             if (query.Season > 0)
             {
-                var seasonResponse = await LampacMetadataClient.GetAsync(BuildUrl(query, query.Season)).ConfigureAwait(false);
+                var seasonResponse = await LampacMetadataClient.GetAsync(BuildUrl(query, query.Season), query.Uid).ConfigureAwait(false);
                 if (seasonResponse?.IsSuccess == true)
-                    await CollectSeason(seasonResponse.Body, query.Season, result).ConfigureAwait(false);
+                    await CollectSeason(seasonResponse.Body, query.Season, query.Uid, result).ConfigureAwait(false);
 
                 return Distinct(result);
             }
 
-            var seasonsResponse = await LampacMetadataClient.GetAsync(BuildUrl(query, -1)).ConfigureAwait(false);
+            var seasonsResponse = await LampacMetadataClient.GetAsync(BuildUrl(query, -1), query.Uid).ConfigureAwait(false);
             if (seasonsResponse?.IsSuccess != true || string.IsNullOrWhiteSpace(seasonsResponse.Body))
                 return result;
 
@@ -57,9 +57,9 @@ public class PhantomVoiceProvider : IVoiceProvider
                     continue;
 
                 url = LampacMetadataClient.AppendQuery(url, "serial", "1");
-                var seasonResponse = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
+                var seasonResponse = await LampacMetadataClient.GetAsync(url, query.Uid).ConfigureAwait(false);
                 if (seasonResponse?.IsSuccess == true)
-                    await CollectSeason(seasonResponse.Body, season, result).ConfigureAwait(false);
+                    await CollectSeason(seasonResponse.Body, season, query.Uid, result).ConfigureAwait(false);
             }
         }
         catch { }
@@ -79,7 +79,7 @@ public class PhantomVoiceProvider : IVoiceProvider
             + $"&s={season}";
     }
 
-    async Task CollectSeason(string json, int season, List<TranslationVariant> result)
+    async Task CollectSeason(string json, int season, string uid, List<TranslationVariant> result)
     {
         if (string.IsNullOrWhiteSpace(json) || season <= 0)
             return;
@@ -106,7 +106,7 @@ public class PhantomVoiceProvider : IVoiceProvider
             if ((episodes == null || episodes.Count == 0) && !string.IsNullOrWhiteSpace(url))
             {
                 string voiceUrl = LampacMetadataClient.AppendQuery(url, "serial", "1");
-                var voiceResponse = await LampacMetadataClient.GetAsync(voiceUrl).ConfigureAwait(false);
+                var voiceResponse = await LampacMetadataClient.GetAsync(voiceUrl, uid).ConfigureAwait(false);
                 if (voiceResponse?.IsSuccess == true && !string.IsNullOrWhiteSpace(voiceResponse.Body))
                 {
                     try
