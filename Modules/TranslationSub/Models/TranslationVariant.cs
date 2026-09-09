@@ -36,11 +36,6 @@ public class TranslationVariantSource
     public int Season { get; set; }
     public int Episode { get; set; }
     public List<int> Episodes { get; set; } = new();
-
-    // Compile-only compatibility for the pre-alpha queue. The generic reader never
-    // assigns playback paths and subscriptions do not persist them.
-    [Newtonsoft.Json.JsonIgnore]
-    public string Path { get; set; }
 }
 
 public class TranslationSourceBlock
