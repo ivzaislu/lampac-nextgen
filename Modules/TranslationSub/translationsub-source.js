@@ -5,6 +5,7 @@
     window.__TranslationSubSourceStarted = true;
 
     var SOURCE_SETTING = 'translationsub_card_source';
+    var menuOpen = false;
 
     function storageGet(name, fallback) {
         try {
@@ -24,11 +25,62 @@
         return String(storageGet(SOURCE_SETTING, 'tmdb') || 'tmdb').toLowerCase() === 'cub' ? 'cub' : 'tmdb';
     }
 
+    function sourceTitle(source) {
+        return source === 'cub' ? 'CUB' : 'TMDB';
+    }
+
     function notify(text) {
         try {
             if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function')
                 Lampa.Noty.show(text);
         } catch (e) {}
+    }
+
+    function host() {
+        try {
+            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
+            return window.location.origin || '';
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function request(method, path, success, error) {
+        success = success || function () {};
+        error = error || function () {};
+        var url = host() + path;
+
+        if (typeof fetch === 'function') {
+            fetch(url, { method: method, cache: 'no-store' })
+                .then(function (response) {
+                    if (!response.ok) throw new Error('HTTP ' + response.status);
+                    return response.text();
+                })
+                .then(function (text) {
+                    var data = {};
+                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+                    success(data);
+                })
+                .catch(error);
+            return;
+        }
+
+        try {
+            var xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
+            xhr.setRequestHeader('Cache-Control', 'no-cache');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) return;
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    var data = {};
+                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) {}
+                    success(data);
+                } else error(new Error('HTTP ' + xhr.status));
+            };
+            xhr.send(null);
+        } catch (e2) {
+            error(e2);
+        }
     }
 
     function value(item, pascal, camel, fallback) {
@@ -70,6 +122,120 @@
         });
     }
 
+    function syncWatched(done) {
+        done = typeof done === 'function' ? done : function () {};
+        try {
+            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
+                window.TranslationSubWatch.sync(done);
+                return;
+            }
+        } catch (e) {}
+        done();
+    }
+
+    function refreshPage() {
+        try {
+            if (typeof window.TranslationSubPageRefresh === 'function') window.TranslationSubPageRefresh();
+        } catch (e) {}
+    }
+
+    function refreshState() {
+        refreshPage();
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+                window.TranslationSubBadgeState.refresh();
+                return;
+            }
+        } catch (e) {}
+
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.checkUpdates === 'function')
+                window.TranslationSub.checkUpdates();
+        } catch (e2) {}
+    }
+
+    function restoreContentController() {
+        setTimeout(function () {
+            try {
+                if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function')
+                    Lampa.Controller.toggle('content');
+            } catch (e) {}
+        }, 0);
+    }
+
+    function runAction(action) {
+        restoreContentController();
+        if (!action || typeof action.onclick !== 'function') return;
+        setTimeout(function () {
+            try { action.onclick(); } catch (e) {}
+        }, 0);
+    }
+
+    function showActions(item) {
+        if (menuOpen) return;
+        if (!window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
+
+        var id = String(value(item, 'Id', 'id', '') || '');
+        var title = String(value(item, 'Title', 'title', 'Подписка') || 'Подписка');
+        var voice = String(value(item, 'TranslationName', 'translationName', 'Озвучка') || 'Озвучка');
+        var season = Number(value(item, 'CurrentSeason', 'currentSeason', 1) || 1);
+        var isSerial = value(item, 'IsSerial', 'isSerial', true) !== false;
+        var watched = Number(value(item, 'CurrentEpisode', 'currentEpisode', 0) || 0);
+        var available = Number(value(item, 'LastEpisode', 'lastEpisode', 0) || 0);
+        var actions = [];
+
+        if (available > watched) {
+            actions.push({
+                title: 'Доступны серии ' + (watched + 1) + (available > watched + 1 ? '–' + available : ''),
+                subtitle: 'Просмотрено до ' + watched + ' серии',
+                onclick: function () { openCard(item); }
+            });
+        }
+
+        actions.push({
+            title: 'Открыть карточку · ' + sourceTitle(selectedSource()),
+            onclick: function () { openCard(item); }
+        });
+
+        actions.push({
+            title: 'Обновить прогресс просмотра',
+            onclick: function () { syncWatched(refreshPage); }
+        });
+
+        actions.push({
+            title: 'Отписаться от озвучки',
+            subtitle: voice + (isSerial ? (' · ' + season + ' сезон') : ''),
+            onclick: function () {
+                if (!id) return;
+                request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
+                    notify('Вы отписались · ' + voice + (isSerial ? (' · ' + season + ' сезон') : ''));
+                    refreshState();
+                }, function () {
+                    notify('Не удалось отписаться · ' + voice);
+                });
+            }
+        });
+
+        menuOpen = true;
+        try {
+            Lampa.Select.show({
+                title: title,
+                items: actions,
+                onSelect: function (action) {
+                    menuOpen = false;
+                    runAction(action);
+                },
+                onBack: function () {
+                    menuOpen = false;
+                    restoreContentController();
+                }
+            });
+        } catch (e) {
+            menuOpen = false;
+            restoreContentController();
+        }
+    }
+
     function bindPage(root, list) {
         if (typeof $ !== 'function') return;
         root = root && root.jquery ? root : $(root);
@@ -90,13 +256,13 @@
             card.attr('data-translationsub-card-source', selectedSource());
             card.off('.translationsubSource');
 
-            /*
-             * На странице подписок оставляем только обычное открытие карточки.
-             * Long-press/Select здесь намеренно отсутствуют: ручной Select.close()
-             * в этом пути вызывал зависание Android TV WebView/history.
-             */
             card.on('hover:enter.translationsubSource', function () {
                 openCard(item);
+            });
+
+            card.on('hover:long.translationsubSource', function (event) {
+                try { if (event && typeof event.stopPropagation === 'function') event.stopPropagation(); } catch (e) {}
+                showActions(item);
             });
         });
     }
@@ -105,7 +271,8 @@
         window.TranslationSubCardSource = {
             get: selectedSource,
             open: openCard,
-            bindPage: bindPage
+            bindPage: bindPage,
+            actions: showActions
         };
     }
 
