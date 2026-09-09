@@ -44,7 +44,7 @@ internal static class LampacMetadataClient
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
 
     static readonly Regex attributeRegex = new(
-        @"(?<name>[\w:-]+)\s*=\s*(?:\"(?<dq>[^\"]*)\"|'(?<sq>[^']*)')",
+        @"(?<name>[\w:-]+)\s*=\s*(?:""(?<dq>[^""]*)""|'(?<sq>[^']*)')",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     static readonly Regex tagRegex = new(
