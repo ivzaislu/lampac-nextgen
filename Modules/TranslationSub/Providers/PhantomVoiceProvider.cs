@@ -56,6 +56,7 @@ public class PhantomVoiceProvider : IVoiceProvider
                 if (season <= 0 || string.IsNullOrWhiteSpace(url))
                     continue;
 
+                url = LampacMetadataClient.AppendQuery(url, "serial", "1");
                 var seasonResponse = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
                 if (seasonResponse?.IsSuccess == true)
                     await CollectSeason(seasonResponse.Body, season, result).ConfigureAwait(false);
@@ -104,7 +105,8 @@ public class PhantomVoiceProvider : IVoiceProvider
 
             if ((episodes == null || episodes.Count == 0) && !string.IsNullOrWhiteSpace(url))
             {
-                var voiceResponse = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
+                string voiceUrl = LampacMetadataClient.AppendQuery(url, "serial", "1");
+                var voiceResponse = await LampacMetadataClient.GetAsync(voiceUrl).ConfigureAwait(false);
                 if (voiceResponse?.IsSuccess == true && !string.IsNullOrWhiteSpace(voiceResponse.Body))
                 {
                     try
