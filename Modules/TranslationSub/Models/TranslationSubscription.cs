@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
 
 namespace TranslationSub.Models;
 
@@ -29,8 +30,6 @@ public class TranslationSubscription
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime? LastCheckedAt { get; set; }
 
-    // TMDB is the scheduling source: it tells us when there is actually
-    // something new to look for in the voice balancers.
     public string TmdbStatus { get; set; }
     public int? TmdbLastSeason { get; set; }
     public int? TmdbLastEpisode { get; set; }
@@ -47,7 +46,10 @@ public class TranslationSubscription
 public class TranslationSubscriptionSource
 {
     public string Source { get; set; }
-    public string Path { get; set; }
     public string TranslationId { get; set; }
     public string TranslationName { get; set; }
+
+    // Old databases can still deserialize this field, but the alpha never writes it.
+    [JsonIgnore]
+    public string Path { get; set; }
 }
