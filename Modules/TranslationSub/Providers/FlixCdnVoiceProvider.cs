@@ -1,5 +1,4 @@
 using Newtonsoft.Json;
-using Shared.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,28 +16,17 @@ public class FlixCdnVoiceProvider : IVoiceProvider
     {
         var result = new List<TranslationVariant>();
 
-        if (ModInit.conf?.flixcdn != true || query.KpId <= 0)
+        if (query == null || query.KpId <= 0 || !LampacMetadataClient.IsSourceAvailable(Source))
             return result;
 
         try
         {
-            string url = $"{ModInit.conf.flixcdn_host.TrimEnd('/')}/show/kinopoisk/{query.KpId}?extrans=1&extepi=1&unfseason=1";
-            string html = await Http.Get(url, timeoutSeconds: 12);
-            if (string.IsNullOrWhiteSpace(html))
+            string url = $"{Path}?kinopoisk_id={query.KpId}&origsource=true";
+            var response = await LampacMetadataClient.GetAsync(url).ConfigureAwait(false);
+            if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
                 return result;
 
-            const string marker = "window.__PLAYER_PAYLOAD__ = ";
-            int start = html.IndexOf(marker, StringComparison.Ordinal);
-            if (start < 0)
-                return result;
-
-            start += marker.Length;
-            int end = html.IndexOf(';', start);
-            if (end < 0)
-                return result;
-
-            string json = html.Substring(start, end - start).Trim();
-            var player = JsonConvert.DeserializeObject<PlayerPayload>(json);
+            var player = JsonConvert.DeserializeObject<PlayerPayload>(response.Body);
             if (player == null || player.id <= 0)
                 return result;
 
@@ -63,7 +51,7 @@ public class FlixCdnVoiceProvider : IVoiceProvider
             if (!player.is_serial)
             {
                 foreach (var voice in voices)
-                    result.Add(Create(voice, 0, 1));
+                    result.Add(Create(voice, 0, new[] { 1 }));
 
                 return result;
             }
@@ -74,7 +62,7 @@ public class FlixCdnVoiceProvider : IVoiceProvider
 
             foreach (short season in targetSeasons)
             {
-                if (!seasons.TryGetValue(season, out var episodes) || episodes == null || episodes.Length == 0)
+                if (!seasons.TryGetValue(season, out var seasonEpisodes) || seasonEpisodes == null || seasonEpisodes.Length == 0)
                     continue;
 
                 foreach (var voice in voices)
@@ -83,11 +71,15 @@ public class FlixCdnVoiceProvider : IVoiceProvider
                     if (count <= 0)
                         continue;
 
-                    int latestEpisode = episodes.Take(count).DefaultIfEmpty(0).Max();
-                    if (latestEpisode <= 0)
-                        continue;
+                    var episodes = seasonEpisodes
+                        .Take(count)
+                        .Where(e => e > 0)
+                        .Distinct()
+                        .OrderBy(e => e)
+                        .ToList();
 
-                    result.Add(Create(voice, season, latestEpisode));
+                    if (episodes.Count > 0)
+                        result.Add(Create(voice, season, episodes));
                 }
             }
         }
@@ -96,8 +88,14 @@ public class FlixCdnVoiceProvider : IVoiceProvider
         return result;
     }
 
-    TranslationVariant Create(PlayerTranslation voice, int season, int episode)
+    TranslationVariant Create(PlayerTranslation voice, int season, IEnumerable<int> episodes)
     {
+        var available = (episodes ?? Array.Empty<int>())
+            .Where(e => e > 0)
+            .Distinct()
+            .OrderBy(e => e)
+            .ToList();
+
         return new TranslationVariant
         {
             source = Source,
@@ -105,8 +103,8 @@ public class FlixCdnVoiceProvider : IVoiceProvider
             translation = voice.title,
             translation_id = voice.id.ToString(),
             season = season,
-            episode = episode,
-            quality = "1080p"
+            episode = available.DefaultIfEmpty(0).Max(),
+            Episodes = available
         };
     }
 
@@ -121,14 +119,14 @@ public class FlixCdnVoiceProvider : IVoiceProvider
                 if (!short.TryParse(item.Key, out short season) || season <= 0 || item.Value == null)
                     continue;
 
-                var episodes = item.Value.Where(e => e > 0).ToArray();
+                var episodes = item.Value.Where(e => e > 0).Distinct().OrderBy(e => e).ToArray();
                 if (episodes.Length > 0)
                     seasons[season] = episodes;
             }
         }
 
         if (seasons.Count == 0 && player?.season > 0 && player.episodes?.Length > 0)
-            seasons[player.season.Value] = player.episodes.Where(e => e > 0).ToArray();
+            seasons[player.season.Value] = player.episodes.Where(e => e > 0).Distinct().OrderBy(e => e).ToArray();
 
         return seasons;
     }
