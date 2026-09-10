@@ -24,7 +24,6 @@ public class TranslationSubPluginController : BaseController
 
         AppendScript(ref script, "translationsub-api.js");
         AppendScript(ref script, "translationsub-page.js");
-        AppendScript(ref script, "translationsub-watch.js");
         AppendScript(ref script, "translationsub-ui.js");
         AppendScript(ref script, "translationsub-source.js");
         AppendScript(ref script, "translationsub-notice.js");
