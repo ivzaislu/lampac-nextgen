@@ -46,12 +46,6 @@ public static class SubscriptionStore
             return LoadUnsafe();
     }
 
-    public static void Save(List<TranslationSubscription> list)
-    {
-        lock (locker)
-            SaveUnsafe(list);
-    }
-
     public static void Mutate(Action<List<TranslationSubscription>> action)
     {
         if (action == null)
@@ -78,20 +72,6 @@ public static class SubscriptionStore
 
             SaveUnsafe(list);
             return true;
-        }
-    }
-
-    public static T MutateResult<T>(Func<List<TranslationSubscription>, T> action)
-    {
-        if (action == null)
-            return default;
-
-        lock (locker)
-        {
-            var list = LoadUnsafe();
-            T result = action(list);
-            SaveUnsafe(list);
-            return result;
         }
     }
 }
