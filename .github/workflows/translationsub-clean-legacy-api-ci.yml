@@ -87,6 +87,12 @@ jobs:
             grep -Fq "$route" "$api"
           done
 
+          if grep -Eq "request\('(PUT|DELETE)'" "$api"; then
+            echo 'Thin TranslationSub client uses unsupported dynamic-module HTTP verbs'
+            exit 1
+          fi
+          grep -Fq "'/translationsub/v2/subscriptions/' + id + '/remove'" "$api"
+
       - name: Assert legacy HTTP surface stays removed
         shell: bash
         run: |
@@ -211,10 +217,10 @@ jobs:
 
           curl --silent --show-error --fail --max-time 10 \
             -H 'Content-Type: application/json' \
-            -X PUT \
+            -X POST \
             --data '{"checkIntervalHours":1,"sources":[],"useTmdbSchedule":true,"tmdbRefreshHours":24,"endedRefreshDays":7,"newSeasonMode":"auto"}' \
             "$base/translationsub/v2/settings?uid=$uid" \
-            -o /tmp/settings-put.json
+            -o /tmp/settings-post.json
 
           curl --silent --show-error --fail --max-time 10 \
             "$base/translationsub/v2/snapshot?uid=$uid&profile_id=7" \
@@ -240,10 +246,16 @@ jobs:
             "$base/translationsub/v2/subscriptions?uid=$uid&profile_id=7" \
             -o /tmp/subscribe.json
 
+          curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' \
+            -X POST --data '{}' \
+            "$base/translationsub/v2/subscriptions/missing/remove?uid=$uid&profile_id=7" \
+            -o /tmp/unsubscribe.json
+
           python3 - <<'PY'
           import json
 
-          settings = json.load(open('/tmp/settings-put.json', encoding='utf-8'))
+          settings = json.load(open('/tmp/settings-post.json', encoding='utf-8'))
           assert settings.get('success') is True, settings
           canonical = settings.get('settings') or {}
           assert canonical.get('Sources', canonical.get('sources')) == [], settings
@@ -262,6 +274,9 @@ jobs:
 
           subscribe = json.load(open('/tmp/subscribe.json', encoding='utf-8'))
           assert subscribe.get('success') is False and subscribe.get('error') == 'not_serial', subscribe
+
+          unsubscribe = json.load(open('/tmp/unsubscribe.json', encoding='utf-8'))
+          assert unsubscribe.get('success') is False and unsubscribe.get('error') == 'subscription_not_found', unsubscribe
           print('TranslationSub canonical v2 runtime smoke passed')
           PY
 
@@ -282,7 +297,7 @@ jobs:
               -o "$body" -w '%{http_code}' \
               -H 'Content-Type: application/json' \
               -X "$method" \
-              ${method:+--data '{}'} \
+              --data '{}' \
               "$base$path")
 
             if [ "$status" = '404' ]; then return 0; fi
