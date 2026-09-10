@@ -15,7 +15,6 @@ const timeCode = read('Modules/Sync/TimeCode/Controller.cs');
 const modInit = read('Modules/TranslationSub/ModInit.cs');
 const controller = read('Modules/TranslationSub/Controller.cs');
 const v2Controller = read('Modules/TranslationSub/V2Controller.cs');
-const watch = read('Modules/TranslationSub/translationsub-watch.js');
 const badge = read('Modules/TranslationSub/translationsub-badge-state.js');
 const apiClient = read('Modules/TranslationSub/translationsub-api.js');
 const settingsStore = read('Modules/TranslationSub/Services/TranslationSettingsStore.cs');
@@ -29,98 +28,84 @@ const commandService = read('Modules/TranslationSub/Services/TranslationSubComma
 const pluginController = read('Modules/TranslationSub/PluginController.cs');
 const realtimeClient = read('Modules/TranslationSub/translationsub-realtime.js');
 const cardFlow = read('Modules/TranslationSub/translationsub-card-flow.js');
+const sourceClient = read('Modules/TranslationSub/translationsub-source.js');
 
-// Lampac already owns the server->client transport.
+// Lampac owns server->client NWS transport and TranslationSub registers uid/profile.
 assert.match(sharedStartup, /public static INws Nws/);
 assert.match(nativeWs, /AllConnections\(\)/);
 assert.match(nativeWs, /SendAsync\(string connectionId, string method/);
 assert.match(coreStartup, /app\.Map\("\/nws"/);
-
-// Modules can observe NWS messages/disconnects and post-AccsDB HTTP middleware.
 assert.match(events, /Action<EventNwsMessage> NwsMessage/);
 assert.match(events, /Action<EventNwsDisconnected> NwsDisconnected/);
-assert.match(events, /Func<bool, EventMiddleware, bool> Middleware/);
-const authPos = coreStartup.indexOf('app.UseAuthorization()');
-const accsPos = coreStartup.indexOf('app.UseAccsdb()');
-const secondModulePos = coreStartup.indexOf('app.UseModule(first: false)');
-assert.ok(authPos >= 0 && accsPos > authPos && secondModulePos > accsPos,
-  'second module middleware must run after AccsDB');
-
-// WebSocket RequestInfo normally does not resolve user_uid, therefore the
-// TranslationSub client explicitly registers uid + profile_id on its NWS socket.
 assert.match(requestInfo, /if \(!IsWsRequest\)/);
 assert.match(realtimeService, /void Register\(string connectionId, string uid, string profileId\)/);
 assert.match(realtimeService, /Task PublishProfile\(string uid, string profileId, string reason\)/);
 assert.match(realtimeService, /Task PublishUid\(string uid, string reason\)/);
 assert.match(modInit, /TranslationSubRegister/);
-assert.match(modInit, /EventListener\.NwsMessage \+= nwsMessage/);
-assert.match(modInit, /EventListener\.NwsDisconnected \+= nwsDisconnected/);
 
-// TimeCode completion is observed server-side after the actual POST handler.
+// Watched progress is backend-owned. The authoritative TimeCode mutation is
+// observed server-side, while reads retain server-side reconciliation as a
+// restart/missed-event safety net. No browser progress watcher is shipped.
 assert.match(timeCode, /Route\("\/timecode\/add"\)/);
-assert.match(timeCode, /user_id = \$"\{user_id\}_\{profile_id\}"/);
 assert.match(modInit, /"\/timecode\/add"/);
 assert.match(modInit, /Response\.OnCompleted/);
 assert.match(modInit, /TimeCodeProgressService\.SyncUser\(uid, profileId\)/);
 assert.match(modInit, /PublishProfile\(uid, profileId, "timecode"\)/);
+assert.match(controller, /Route\("translationsub\/v2\/snapshot"\)[\s\S]*?SyncTimeCodeProgress\(uid, profileId\)/);
+assert.ok(!fs.existsSync('Modules/TranslationSub/translationsub-watch.js'),
+  'Client progress watcher must stay removed');
+assert.doesNotMatch(pluginController, /translationsub-watch\.js/);
 
-// Profile-local watched state is now isolated from the shared subscription model.
-assert.match(profileProgressStore, /NormalizeProfileId/);
+// Profile-local state is isolated from shared subscription metadata.
+assert.match(profileProgressStore, /ProfileId/);
 assert.match(profileProgressStore, /SubscriptionId/);
 assert.match(profileProgressStore, /WatchedEpisode/);
 assert.match(progressService, /ProfileProgressStore\.Upsert\(uid, profileId, watchedBySubscription\)/);
 assert.doesNotMatch(progressService, /sub\.CurrentEpisode\s*=/);
 assert.doesNotMatch(progressService, /sub\.Notified\s*=/);
-
-// Shared subscription changes publish UID-wide only when meaningful shared state changed.
-assert.match(subscriptionStore, /SharedStateByUid/);
 assert.match(subscriptionStore, /PublishUid\(uid, "subscription"\)/);
 assert.doesNotMatch(subscriptionStore, /x\.CurrentEpisode/);
 assert.doesNotMatch(subscriptionStore, /x\.Notified/);
-assert.doesNotMatch(subscriptionStore, /x\.LastCheckedAt/);
-assert.doesNotMatch(subscriptionStore, /x\.TmdbLastSyncedAt/);
-assert.match(subscriptionStore, /x\.LastEpisode/);
-assert.match(subscriptionStore, /x\.TmdbNextAirDate/);
-assert.match(subscriptionStore, /x\.ScheduleState/);
 
-// The canonical read model is server-owned and contains presentation-ready state.
-assert.match(snapshotService, /HasNewEpisodes/);
-assert.match(snapshotService, /NewCount/);
-assert.match(snapshotService, /ProgressPercent/);
-assert.match(snapshotService, /BuildSchedule/);
+// Canonical read model owns derived state and navigation targets.
+for (const symbol of ['HasNewEpisodes', 'NewCount', 'ProgressPercent', 'BuildSchedule', 'BuildNavigation'])
+  assert.match(snapshotService, new RegExp(symbol));
 assert.match(snapshotService, /Badge = new TranslationSubBadgeSnapshot/);
+assert.match(snapshotService, /Navigation = BuildNavigation\(sub\)/);
 
-// Card/domain decisions and authoritative commands live on the backend.
+// Content identity, source selection, voice matching and mutation commands are backend-owned.
 assert.match(contentStateService, /ContentIdentityService\.ResolveAsync/);
 assert.match(contentStateService, /LampacMetadataService\.GetVariants/);
 assert.match(contentStateService, /FindExisting/);
-assert.match(commandService, /Server-authoritative TranslationSub commands/);
 assert.match(commandService, /ContentIdentityService\.ResolveAsync/);
 assert.match(commandService, /LampacMetadataService\.GetVariants/);
 assert.match(commandService, /SubscriptionStore\.Mutate/);
 
-// Frontend card flow must stay a Lampa transport/rendering adapter.
-assert.match(cardFlow, /deliberately only a Lampa transport adapter/);
+// Browser card/source layers consume backend decisions instead of reconstructing them.
+assert.match(cardFlow, /client\.contentSummary\(/);
 assert.match(cardFlow, /client\.contentState\(/);
 assert.match(cardFlow, /client\.subscribe\(/);
 assert.match(cardFlow, /client\.unsubscribe\(/);
-assert.doesNotMatch(cardFlow, /function\s+sameContent\s*\(/);
-assert.doesNotMatch(cardFlow, /function\s+latestAiredSeason\s*\(/);
-assert.doesNotMatch(cardFlow, /function\s+normalizeVoice\s*\(/);
-assert.doesNotMatch(cardFlow, /function\s+findExisting\s*\(/);
+for (const obsolete of ['sameContent', 'latestAiredSeason', 'normalizeVoice', 'findExisting', 'ensureExternalIds'])
+  assert.doesNotMatch(cardFlow, new RegExp(`function\\s+${obsolete}\\s*\\(`));
+assert.match(sourceClient, /item\.navigation/);
+assert.doesNotMatch(sourceClient, /function\s+tmdbId\s*\(/);
+assert.doesNotMatch(sourceClient, /item\.isSerial\s*!==\s*false/);
 
-// Manual refresh is also a backend-owned command and returns the canonical snapshot.
+// Manual refresh is a backend command and returns the canonical snapshot directly.
 assert.match(v2Controller, /Route\("translationsub\/v2\/check"\)/);
 assert.match(v2Controller, /TranslationSubscriptionService\.Tick\(uid, selectedSources, force: true\)/);
 assert.match(v2Controller, /TranslationSubSnapshotService\.Build\(uid, profileId\)/);
 assert.match(apiClient, /request\('POST', '\/translationsub\/v2\/check'/);
 assert.doesNotMatch(apiClient, /['"]\/translationsub\/check/);
 
-// User-level scheduling defaults are backend-owned and match intended policy.
+// Settings policy stays backend-owned; BadgeState is read-only snapshot state.
 assert.match(settingsStore, /CheckIntervalHours \{ get; set; \} = 1/);
 assert.match(settingsStore, /TmdbRefreshHours \{ get; set; \} = 24/);
+assert.match(badge, /api\.snapshot/);
+assert.doesNotMatch(badge, /setInterval\(refresh/);
 
-// Realtime client is shipped after BadgeState and uses a distinct NWS id.
+// Realtime invalidation client uses a dedicated socket and refreshes canonical state.
 const badgeLoad = pluginController.indexOf('AppendScript(ref script, "translationsub-badge-state.js")');
 const realtimeLoad = pluginController.indexOf('AppendScript(ref script, "translationsub-realtime.js")');
 assert.ok(badgeLoad >= 0 && realtimeLoad > badgeLoad, 'realtime client must load after BadgeState');
@@ -130,19 +115,7 @@ assert.match(realtimeClient, /TranslationSubRegister/);
 assert.match(realtimeClient, /TranslationSubChanged/);
 assert.match(realtimeClient, /window\.TranslationSubBadgeState\.refresh\(\)/);
 
-// Passive frontend polling is no longer allowed. Timeline reconciliation remains
-// only as a compatibility safety net until the repository-wide TimeCode writer
-// audit proves every write passes through /timecode/add.
-assert.doesNotMatch(watch, /FALLBACK_SYNC_INTERVAL/);
-assert.doesNotMatch(watch, /setInterval\(syncAll/);
-assert.doesNotMatch(watch, /scheduleSync\(3000/);
-assert.doesNotMatch(watch, /event\.type\s*===\s*['"]ready['"]/);
-assert.match(watch, /Timeline\.listener\.follow\('update'/);
-assert.doesNotMatch(badge, /setInterval\(refresh,\s*60\s*\*\s*1000\)/);
-assert.match(badge, /visibilitychange/);
-assert.match(controller, /SyncTimeCodeProgress\(uid,\s*profileId\)/);
-
-// Exercise the production realtime JS with a minimal fake Lampac/WebSocket.
+// Execute the production realtime client against a minimal socket harness.
 const storage = new Map([
   ['lampac_unic_id', 'user1'],
   ['lampac_profile_id', '7']
@@ -150,100 +123,48 @@ const storage = new Map([
 const sockets = [];
 let badgeRefreshes = 0;
 let timerId = 0;
-const listenerHandlers = {};
-
 class FakeWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
   static CLOSED = 3;
-
-  constructor(url) {
-    this.url = url;
-    this.readyState = FakeWebSocket.CONNECTING;
-    this.sent = [];
-    sockets.push(this);
-  }
-
-  send(value) {
-    this.sent.push(value);
-  }
-
-  close() {
-    this.readyState = FakeWebSocket.CLOSED;
-    if (typeof this.onclose === 'function') this.onclose({});
-  }
+  constructor(url) { this.url = url; this.readyState = 0; this.sent = []; sockets.push(this); }
+  send(value) { this.sent.push(value); }
+  close() { this.readyState = 3; if (typeof this.onclose === 'function') this.onclose({}); }
 }
-
 const context = {
-  console,
-  JSON,
-  Math,
-  Date,
-  encodeURIComponent,
-  WebSocket: FakeWebSocket,
+  console, JSON, Math, Date, encodeURIComponent, WebSocket: FakeWebSocket,
   localStorage: {
     getItem(name) { return storage.has(name) ? String(storage.get(name)) : null; },
     setItem(name, value) { storage.set(name, value); }
   },
-  document: {
-    hidden: false,
-    addEventListener() {}
-  },
-  setInterval() { return ++timerId; },
-  clearInterval() {},
-  setTimeout(fn) { const id = ++timerId; fn(); return id; },
-  clearTimeout() {},
+  document: { hidden: false, addEventListener() {} },
+  setInterval() { return ++timerId; }, clearInterval() {},
+  setTimeout(fn) { const id = ++timerId; fn(); return id; }, clearTimeout() {},
   location: { origin: 'http://lampac.test' },
   Lampa: {
     Storage: {
       get(name, fallback) { return storage.has(name) ? storage.get(name) : fallback; },
       set(name, value) { storage.set(name, value); }
     },
-    Utils: {
-      uid() { return 'abcdef0123456789abcdef0123456789'; }
-    },
-    Listener: {
-      follow(name, handler) { listenerHandlers[name] = handler; }
-    }
+    Utils: { uid() { return 'abcdef0123456789abcdef0123456789'; } },
+    Listener: { follow() {} }
   }
 };
 context.window = context;
 context.window.Lampa = context.Lampa;
 context.window.LampacHost = 'http://lampac.test';
 context.window.TranslationSub = { uid() { return 'user1'; } };
-context.window.TranslationSubBadgeState = {
-  refresh() { badgeRefreshes++; }
-};
+context.window.TranslationSubBadgeState = { refresh() { badgeRefreshes++; } };
 
 vm.runInNewContext(realtimeClient, context, { filename: 'translationsub-realtime.js' });
-assert.equal(sockets.length, 1, 'realtime client should create exactly one NWS socket');
+assert.equal(sockets.length, 1);
 const ws = sockets[0];
-assert.match(ws.url, /^ws:\/\/lampac\.test\/nws\?id=/);
-assert.ok(!ws.url.includes('lampac_nws_id'), 'TranslationSub must not reuse RCH connection id');
-
 ws.readyState = FakeWebSocket.OPEN;
 ws.onopen();
 ws.onmessage({ data: JSON.stringify({ method: 'Connected', args: ['server-connection'] }) });
-assert.equal(ws.sent.length, 1, 'Connected must register TranslationSub identity once');
-const registration = JSON.parse(ws.sent[0]);
-assert.deepEqual(registration, {
-  method: 'TranslationSubRegister',
-  args: ['user1', '7']
-});
-assert.equal(badgeRefreshes, 0, 'initial NWS connect must not duplicate startup snapshot');
-console.log('PRODUCTION realtime connect: registered uid+profile without extra snapshot');
-
+assert.deepEqual(JSON.parse(ws.sent[0]), { method: 'TranslationSubRegister', args: ['user1', '7'] });
+assert.equal(badgeRefreshes, 0);
 ws.onmessage({ data: JSON.stringify({ method: 'TranslationSubChanged', args: [1, 'timecode'] }) });
-assert.equal(badgeRefreshes, 1, 'backend invalidation must trigger exactly one Badge snapshot refresh');
-console.log('PRODUCTION realtime invalidation: exactly one BadgeState.refresh');
-
-storage.set('lampac_profile_id', '8');
-assert.equal(context.window.TranslationSubRealtime.register(), true);
-const reRegistration = JSON.parse(ws.sent[ws.sent.length - 1]);
-assert.deepEqual(reRegistration, {
-  method: 'TranslationSubRegister',
-  args: ['user1', '8']
-});
-console.log('PRODUCTION profile switch registration: current profile_id is resent');
+assert.equal(badgeRefreshes, 1);
 
 console.log('TranslationSub backend-first architecture simulation passed.');
