@@ -4,7 +4,6 @@ public class ModuleConf
 {
     public bool enable { get; set; } = true;
     public int check_interval_minutes { get; set; } = 15;
-    public bool notifications { get; set; } = true;
 
     // TranslationSub owns only its scheduling metadata. Online balancer
     // enable/host/token/proxy/cache configuration is read and enforced by the
