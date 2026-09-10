@@ -37,29 +37,22 @@
     }
 
     function lampacUid() {
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
+                return String(window.TranslationSub.uid() || '');
+        } catch (e) {}
+
         var uid = String(storageGet('lampac_unic_id', '') || '');
         if (uid) return uid;
 
         try {
             if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
                 uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
-        } catch (e) {}
+        } catch (e2) {}
 
         if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
         storageSet('lampac_unic_id', uid);
         return uid;
-    }
-
-    function userKey() {
-        return String(storageGet('client_uid', '') || lampacUid() || 'local');
-    }
-
-    function accountEmail() {
-        var account = storageGet('account', {});
-        if (typeof account === 'string') {
-            try { account = JSON.parse(account || '{}'); } catch (e) { account = {}; }
-        }
-        return String(account && account.email || '');
     }
 
     function profileId() {
@@ -82,9 +75,7 @@
 
     function updatesUrl() {
         var parts = [];
-        addQuery(parts, 'userKey', userKey());
         addQuery(parts, 'uid', lampacUid());
-        addQuery(parts, 'account_email', accountEmail());
         addQuery(parts, 'profile_id', profileId());
         addQuery(parts, 'force', 'false');
         addQuery(parts, '_ts', Date.now ? Date.now() : new Date().getTime());
