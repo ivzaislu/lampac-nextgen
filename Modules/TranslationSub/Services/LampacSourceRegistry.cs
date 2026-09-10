@@ -12,19 +12,55 @@ internal static class LampacSourceRegistry
 {
     public static IReadOnlyList<LampacSourceOption> AvailableSources()
     {
-        OnlineModuleEntry.EnsureCache();
-
-        var result = new Dictionary<string, LampacSourceOption>(StringComparer.OrdinalIgnoreCase);
-        AddModules(OnlineModuleEntry.Modules?.Cast<object>(), result);
-        AddModules(OnlineModuleEntry.ModulesAsync?.Cast<object>(), result);
-
-        return result.Values
+        var routes = CollectSources(null);
+        return routes.Values
+            .Select(x => new LampacSourceOption
+            {
+                id = x.Id,
+                name = x.Name
+            })
             .OrderBy(x => x.name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.id, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
-    static void AddModules(IEnumerable<object> modules, Dictionary<string, LampacSourceOption> result)
+    public static IReadOnlyList<LampacSourceDescriptor> ResolveSelected(IEnumerable<string> sourceIds)
+    {
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (sourceIds != null)
+        {
+            foreach (string sourceId in sourceIds)
+            {
+                string id = TranslationSettingsStore.NormalizeSourceId(sourceId);
+                if (id != null)
+                    selected.Add(id);
+            }
+        }
+
+        if (selected.Count == 0)
+            return Array.Empty<LampacSourceDescriptor>();
+
+        var routes = CollectSources(selected);
+        return routes.Values
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    static Dictionary<string, LampacSourceDescriptor> CollectSources(HashSet<string> selected)
+    {
+        OnlineModuleEntry.EnsureCache();
+
+        var result = new Dictionary<string, LampacSourceDescriptor>(StringComparer.OrdinalIgnoreCase);
+        AddModules(OnlineModuleEntry.Modules?.Cast<object>(), result, selected);
+        AddModules(OnlineModuleEntry.ModulesAsync?.Cast<object>(), result, selected);
+        return result;
+    }
+
+    static void AddModules(
+        IEnumerable<object> modules,
+        Dictionary<string, LampacSourceDescriptor> result,
+        HashSet<string> selected)
     {
         if (modules == null)
             return;
@@ -36,11 +72,15 @@ internal static class LampacSourceRegistry
 
             foreach (BaseSettings settings in FindSettings(module))
             {
-                if (settings == null || !CanProduceOnlineSource(settings))
+                if (settings == null)
                     continue;
 
                 string id = TranslationSettingsStore.NormalizeSourceId(settings.plugin);
-                if (id == null)
+                if (id == null || (selected != null && !selected.Contains(id)))
+                    continue;
+
+                string route = EffectiveRoute(settings, id);
+                if (string.IsNullOrWhiteSpace(route))
                     continue;
 
                 string name = settings.displayname;
@@ -49,30 +89,38 @@ internal static class LampacSourceRegistry
                 if (string.IsNullOrWhiteSpace(name))
                     name = id;
 
-                result[id] = new LampacSourceOption
+                result[id] = new LampacSourceDescriptor
                 {
-                    id = id,
-                    name = name.Trim()
+                    Id = id,
+                    Name = name.Trim(),
+                    Url = route
                 };
             }
         }
     }
 
-    static bool CanProduceOnlineSource(BaseSettings settings)
+    static string EffectiveRoute(BaseSettings settings, string id)
     {
+        // Mirror OnlineApi.send() route precedence without invoking the provider:
+        // a remote override wins when overridepasswd is not set; otherwise an
+        // enabled local module is addressed through its normal /lite/{plugin} route.
+        if (string.IsNullOrEmpty(settings.overridepasswd))
+        {
+            if (!string.IsNullOrWhiteSpace(settings.overridehost))
+                return settings.overridehost.Trim();
+
+            string[] hosts = settings.overridehosts?
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .ToArray();
+            if (hosts?.Length > 0)
+                return hosts[Random.Shared.Next(0, hosts.Length)];
+        }
+
         if (settings.enable && !settings.rip)
-            return true;
+            return "/lite/" + id;
 
-        // Mirror OnlineApi.send(): a configured remote override can remain usable
-        // even when the local provider is disabled/rip, unless overridepasswd
-        // intentionally suppresses the override route.
-        if (!string.IsNullOrEmpty(settings.overridepasswd))
-            return false;
-
-        if (!string.IsNullOrWhiteSpace(settings.overridehost))
-            return true;
-
-        return settings.overridehosts?.Any(x => !string.IsNullOrWhiteSpace(x)) == true;
+        return null;
     }
 
     static IEnumerable<BaseSettings> FindSettings(object module)
