@@ -21,6 +21,14 @@
         }
     }
 
+    function uid() {
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
+                return String(window.TranslationSub.uid() || '');
+        } catch (e) {}
+        return String(storageGet('lampac_unic_id', '') || '');
+    }
+
     function selectedSource() {
         return String(storageGet(SOURCE_SETTING, 'tmdb') || 'tmdb').toLowerCase() === 'cub' ? 'cub' : 'tmdb';
     }
@@ -207,7 +215,7 @@
             subtitle: voice + (isSerial ? (' · ' + season + ' сезон') : ''),
             onclick: function () {
                 if (!id) return;
-                request('POST', '/translationsub/remove?id=' + encodeURIComponent(id), function () {
+                request('POST', '/translationsub/remove?id=' + encodeURIComponent(id) + '&uid=' + encodeURIComponent(uid()), function () {
                     notify('Вы отписались · ' + voice + (isSerial ? (' · ' + season + ' сезон') : ''));
                     refreshState();
                 }, function () {
