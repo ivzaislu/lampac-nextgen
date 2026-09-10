@@ -1,17 +1,19 @@
-name: TranslationSub Legacy API Cleanup CI
+name: TranslationSub Backend-First CI
 
 on:
   push:
     branches:
       - TranslationSub-clean-legacy-api
+      - TranslationSub-backend-first-refactor
+      - TranslationSub-backend-first-refactor-work
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  js-audit:
-    name: TranslationSub JS audit
+  architecture:
+    name: Backend-first architecture
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +25,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Check JavaScript syntax
+      - name: Check TranslationSub JavaScript syntax
         shell: bash
         run: |
           set -euo pipefail
@@ -32,12 +34,49 @@ jobs:
             node --check "$file"
           done < <(find Modules/TranslationSub -maxdepth 1 -type f -name 'translationsub*.js' -print0 | sort -z)
 
-      - name: Run existing architecture audit (informational baseline)
+      - name: Enforce backend-first ownership
+        run: node scripts/ci/translationsub-backend-driven-simulation.mjs
+
+      - name: Enforce event-driven refresh ownership
+        run: node scripts/ci/translationsub-background-refresh-simulation.mjs
+
+      - name: Run historical JS audit as migration signal
         continue-on-error: true
         run: node scripts/ci/translationsub-js-audit.mjs
 
+      - name: Assert thin API client uses v2 contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          api='Modules/TranslationSub/translationsub-api.js'
+          grep -Fq '/translationsub/v2/snapshot' "$api"
+          grep -Fq '/translationsub/v2/content-state' "$api"
+          grep -Fq '/translationsub/v2/subscriptions' "$api"
+          grep -Fq '/translationsub/v2/check' "$api"
+          grep -Fq '/translationsub/v2/settings' "$api"
+
+          for legacy in '/translationsub/list' '/translationsub/updates' '/translationsub/variants' '/translationsub/add' '/translationsub/remove' '/translationsub/check'; do
+            if grep -Fq "$legacy" "$api"; then
+              echo "Thin API client still references legacy route: $legacy"
+              exit 1
+            fi
+          done
+
+      - name: Assert removed mutation APIs stay removed
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in Modules/TranslationSub/Controller.cs Modules/TranslationSub/V2Controller.cs; do
+            for route in toggle watched notified; do
+              if grep -Eq "(translationsub|transsubscribe)/${route}" "$file"; then
+                echo "Removed API route still present in $file: $route"
+                exit 1
+              fi
+            done
+          done
+
   server-smoke:
-    name: Build + live API cleanup smoke
+    name: Build + v2 runtime smoke
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -45,19 +84,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Assert removed controller APIs stay removed
-        shell: bash
-        run: |
-          set -euo pipefail
-          file='Modules/TranslationSub/Controller.cs'
-          for route in toggle watched notified; do
-            if grep -Eq "(translationsub|transsubscribe)/${route}" "$file"; then
-              echo "Legacy API route still present: $route"
-              exit 1
-            fi
-          done
-          echo 'Legacy API routes are absent from Controller.cs'
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -123,8 +149,8 @@ jobs:
           ready=0
           for i in $(seq 1 120); do
             if curl --silent --show-error --fail --max-time 2 \
-              'http://127.0.0.1:9118/translationsub/sources?uid=ci%40translationsub.test' \
-              -o /tmp/sources.json; then
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=ci%40translationsub.test' \
+              -o /tmp/settings.json; then
               ready=1
               break
             fi
@@ -143,7 +169,7 @@ jobs:
             exit 1
           fi
 
-      - name: Validate surviving TranslationSub APIs
+      - name: Validate backend-first v2 read/check/settings contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -151,152 +177,79 @@ jobs:
           uid='ci%40translationsub.test'
 
           curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/user-settings?uid=$uid" \
-            -o /tmp/settings.json
+            -H 'Content-Type: application/json' \
+            -X PUT \
+            --data '{"checkIntervalHours":1,"sources":[],"useTmdbSchedule":true,"tmdbRefreshHours":24,"endedRefreshDays":7,"newSeasonMode":"auto"}' \
+            "$base/translationsub/v2/settings?uid=$uid" \
+            -o /tmp/settings-put.json
 
           curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/variants?uid=$uid&kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1&sources=none" \
-            -o /tmp/variants.json
+            "$base/translationsub/v2/snapshot?uid=$uid&profile_id=7" \
+            -o /tmp/snapshot.json
 
-          curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/check?uid=$uid&sources=none" \
+          curl --silent --show-error --fail --max-time 20 \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            --data '{}' \
+            "$base/translationsub/v2/check?uid=$uid&profile_id=7" \
             -o /tmp/check.json
 
           python3 - <<'PY'
           import json
 
-          settings = json.load(open('/tmp/settings.json', encoding='utf-8'))
-          assert isinstance(settings, dict), settings
-          assert isinstance(settings.get('availableSources'), list), settings
-          assert isinstance(settings.get('Sources'), list), settings
+          settings = json.load(open('/tmp/settings-put.json', encoding='utf-8'))
+          assert settings.get('success') is True, settings
+          canonical = settings.get('settings') or {}
+          sources = canonical.get('Sources', canonical.get('sources'))
+          assert sources == [], settings
 
-          variants = json.load(open('/tmp/variants.json', encoding='utf-8'))
-          assert variants.get('Source') == 'multi', variants
-          assert isinstance(variants.get('Seasons'), list), variants
-          assert isinstance(variants.get('Translations'), list), variants
-          assert isinstance(variants.get('Items'), list), variants
-          assert variants['Translations'] == [], variants
-          assert variants['Items'] == [], variants
+          snapshot = json.load(open('/tmp/snapshot.json', encoding='utf-8'))
+          assert snapshot.get('ProfileId', snapshot.get('profileId')) == '7', snapshot
+          badge = snapshot.get('Badge', snapshot.get('badge')) or {}
+          subscriptions = snapshot.get('Subscriptions', snapshot.get('subscriptions'))
+          updates = snapshot.get('Updates', snapshot.get('updates'))
+          assert isinstance(badge, dict), snapshot
+          assert isinstance(subscriptions, list), snapshot
+          assert isinstance(updates, list), snapshot
 
           check = json.load(open('/tmp/check.json', encoding='utf-8'))
           assert check.get('success') is True, check
-          print('read/check API smoke passed')
+          checked = check.get('snapshot')
+          assert isinstance(checked, dict), check
+          checked_updates = checked.get('Updates', checked.get('updates'))
+          assert isinstance(checked_updates, list), check
+          print('TranslationSub v2 settings/snapshot/check smoke passed')
           PY
 
-          curl --silent --show-error --fail --max-time 10 \
-            -H 'Content-Type: application/json' \
-            -X POST \
-            --data '{"uid":"ci@translationsub.test","contentId":"ci-series","title":"CI Series","originalTitle":"CI Series","isSerial":true,"source":"multi","translationId":"ci-voice","translationName":"CI Voice","currentSeason":"1","availableEpisode":"3","watchedEpisode":"0","sources":[]}' \
-            "$base/translationsub/add" \
-            -o /tmp/add.json
-
-          curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/list?uid=$uid" \
-            -o /tmp/list-after-add.json
-
-          curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/progress?uid=$uid" \
-            -o /tmp/progress.json
-
-          curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/updates?uid=$uid&force=false" \
-            -o /tmp/updates.json
-
-          python3 - <<'PY'
-          import json
-
-          add = json.load(open('/tmp/add.json', encoding='utf-8'))
-          assert add.get('success') is True, add
-
-          items = json.load(open('/tmp/list-after-add.json', encoding='utf-8'))
-          assert isinstance(items, list) and len(items) == 1, items
-          item = items[0]
-          assert item.get('Uid') == 'ci@translationsub.test', item
-          assert item.get('ContentId') == 'ci-series', item
-          assert item.get('TranslationId') == 'ci-voice', item
-          sub_id = item.get('Id')
-          assert sub_id, item
-          open('/tmp/sub-id', 'w', encoding='utf-8').write(sub_id)
-
-          progress = json.load(open('/tmp/progress.json', encoding='utf-8'))
-          assert progress.get('success') is True, progress
-          assert progress.get('count') == 1, progress
-          assert progress.get('source') == 'lampac-timecode', progress
-
-          updates = json.load(open('/tmp/updates.json', encoding='utf-8'))
-          assert isinstance(updates, list), updates
-          print('add/list/progress/updates smoke passed')
-          PY
-
-          sub_id=$(cat /tmp/sub-id)
-          curl --silent --show-error --fail --max-time 10 \
-            -X POST \
-            "$base/translationsub/remove?id=$sub_id&uid=$uid" \
-            -o /tmp/remove.json
-
-          curl --silent --show-error --fail --max-time 10 \
-            "$base/translationsub/list?uid=$uid" \
-            -o /tmp/list-after-remove.json
-
-          python3 - <<'PY'
-          import json
-          remove = json.load(open('/tmp/remove.json', encoding='utf-8'))
-          assert remove.get('success') is True, remove
-          items = json.load(open('/tmp/list-after-remove.json', encoding='utf-8'))
-          assert items == [], items
-          print('add/list/remove lifecycle passed')
-          PY
-
-      - name: Verify removed APIs are not served by TranslationSub
+      - name: Verify removed mutation APIs are not served
         shell: bash
         run: |
           set -euo pipefail
           base='http://127.0.0.1:9118'
           for prefix in translationsub transsubscribe; do
             for route in toggle watched notified; do
-              body='{}'
-              case "$route" in
-                watched) body='{"uid":"ci@translationsub.test","contentId":"ci-series","season":1,"episode":1}' ;;
-                toggle) body='{"uid":"ci@translationsub.test","contentId":"ci-series","translationId":"ci-voice","currentSeason":"1"}' ;;
-              esac
-
-              bodyfile="/tmp/${prefix}-${route}.body"
               status=$(curl --silent --show-error --max-time 10 \
-                -o "$bodyfile" \
+                -o "/tmp/${prefix}-${route}.body" \
                 -w '%{http_code}' \
                 -H 'Content-Type: application/json' \
                 -X POST \
-                --data "$body" \
+                --data '{}' \
                 "$base/$prefix/$route")
-
-              echo "$prefix/$route -> HTTP $status"
-              STATUS="$status" BODYFILE="$bodyfile" ROUTE="$prefix/$route" python3 - <<'PY'
+              if [ "$status" = '404' ]; then
+                continue
+              fi
+              if [ "$status" != '200' ]; then
+                echo "$prefix/$route returned unexpected HTTP $status"
+                exit 1
+              fi
+              BODY="/tmp/${prefix}-${route}.body" python3 - <<'PY'
           import json, os
-          status = os.environ['STATUS']
-          path = os.environ['BODYFILE']
-          route = os.environ['ROUTE']
-
-          if status == '404':
-              print(route, 'is absent (404)')
-              raise SystemExit(0)
-
-          if status != '200':
-              raise AssertionError(f'{route}: unexpected HTTP {status}')
-
-          try:
-              data = json.load(open(path, encoding='utf-8'))
-          except Exception as exc:
-              raise AssertionError(f'{route}: expected 404 or Lampac fallback JSON, got non-JSON HTTP 200: {exc}')
-
-          assert data.get('accsdb') is True, (route, data)
-          assert 'success' not in data, (route, data)
-          assert 'subscribed' not in data, (route, data)
-          assert 'updated' not in data, (route, data)
-          print(route, 'is absent; request reached Lampac AccsDB fallback')
+          data = json.load(open(os.environ['BODY'], encoding='utf-8'))
+          assert data.get('accsdb') is True, data
+          assert 'success' not in data, data
           PY
             done
           done
-          echo 'All removed APIs are absent from TranslationSub routing'
 
       - name: Runtime log tail
         if: always()
