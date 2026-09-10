@@ -7,80 +7,10 @@
     var state = {
         count: 0,
         updates: [],
+        snapshot: null,
         requestSeq: 0,
-        refreshTimer: null,
         drawerOpening: false
     };
-
-    function storageGet(name, fallback) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
-                return Lampa.Storage.get(name, fallback);
-        } catch (e) {}
-
-        try {
-            var value = localStorage.getItem(name);
-            return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
-    }
-
-    function storageSet(name, value) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
-                Lampa.Storage.set(name, value);
-                return;
-            }
-        } catch (e) {}
-        try { localStorage.setItem(name, value); } catch (e2) {}
-    }
-
-    function lampacUid() {
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
-                return String(window.TranslationSub.uid() || '');
-        } catch (e) {}
-
-        var uid = String(storageGet('lampac_unic_id', '') || '');
-        if (uid) return uid;
-
-        try {
-            if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
-                uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
-        } catch (e2) {}
-
-        if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
-        storageSet('lampac_unic_id', uid);
-        return uid;
-    }
-
-    function profileId() {
-        return String(storageGet('lampac_profile_id', '') || '');
-    }
-
-    function host() {
-        try {
-            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
-            return window.location.origin || '';
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function addQuery(parts, name, value) {
-        if (value === null || value === undefined || value === '') return;
-        parts.push(encodeURIComponent(name) + '=' + encodeURIComponent(String(value)));
-    }
-
-    function updatesUrl() {
-        var parts = [];
-        addQuery(parts, 'uid', lampacUid());
-        addQuery(parts, 'profile_id', profileId());
-        addQuery(parts, 'force', 'false');
-        addQuery(parts, '_ts', Date.now ? Date.now() : new Date().getTime());
-        return host() + '/translationsub/updates?' + parts.join('&');
-    }
 
     function injectStyles() {
         if (document.getElementById('translationsub-badge-state-style')) return;
@@ -139,72 +69,52 @@
         });
     }
 
+    function applySnapshot(snapshot) {
+        snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+        var updates = Array.isArray(snapshot.updates) ? snapshot.updates : [];
+        var badge = snapshot.badge && typeof snapshot.badge === 'object' ? snapshot.badge : {};
+        var count = Number(badge.count);
+
+        state.snapshot = snapshot;
+        state.updates = updates;
+        state.count = isNaN(count) ? updates.length : Math.max(0, count);
+        render();
+        return updates.slice();
+    }
+
     function refresh(done) {
         done = typeof done === 'function' ? done : function () {};
         var seq = ++state.requestSeq;
-        var url = updatesUrl();
+        var api = window.TranslationSubApi;
 
-        function apply(updates) {
+        if (!api || typeof api.snapshot !== 'function') {
+            render();
+            done(state.updates.slice());
+            return;
+        }
+
+        api.snapshot(function (snapshot) {
             if (seq !== state.requestSeq) {
                 done(state.updates.slice());
                 return;
             }
-            updates = Array.isArray(updates) ? updates : [];
-            state.updates = updates;
-            state.count = updates.length;
-            render();
-            done(updates);
-        }
-
-        function fail() {
+            done(applySnapshot(snapshot));
+        }, function () {
             if (seq !== state.requestSeq) {
                 done(state.updates.slice());
                 return;
             }
             render();
             done(state.updates.slice());
-        }
-
-        if (typeof fetch === 'function') {
-            fetch(url, { method: 'GET', cache: 'no-store' })
-                .then(function (response) {
-                    if (!response.ok) throw new Error('HTTP ' + response.status);
-                    return response.text();
-                })
-                .then(function (text) {
-                    var data = [];
-                    try { data = text ? JSON.parse(text) : []; } catch (e) {}
-                    apply(data);
-                })
-                .catch(fail);
-            return;
-        }
-
-        try {
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', url, true);
-            xhr.setRequestHeader('Cache-Control', 'no-cache');
-            xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    var data = [];
-                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : []; } catch (e) {}
-                    apply(data);
-                } else fail();
-            };
-            xhr.send(null);
-        } catch (e2) {
-            fail();
-        }
+        });
     }
 
     function openDrawerSynced() {
         if (state.drawerOpening) return;
         state.drawerOpening = true;
 
-        function openWithUpdates(updates) {
+        refresh(function (updates) {
             state.drawerOpening = false;
-            updates = Array.isArray(updates) ? updates : state.updates.slice();
 
             try {
                 if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
@@ -217,16 +127,7 @@
                 if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
                     window.TranslationSub.openSubscriptions();
             } catch (e2) {}
-        }
-
-        try {
-            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
-                window.TranslationSubWatch.sync(openWithUpdates);
-                return;
-            }
-        } catch (e3) {}
-
-        refresh(openWithUpdates);
+        });
     }
 
     function bindLampa() {
@@ -246,9 +147,6 @@
         bindLampa();
         refresh();
 
-        if (state.refreshTimer) clearInterval(state.refreshTimer);
-        state.refreshTimer = setInterval(refresh, 60 * 1000);
-
         try {
             document.addEventListener('visibilitychange', function () {
                 if (!document.hidden) refresh();
@@ -260,7 +158,8 @@
             render: render,
             open: openDrawerSynced,
             count: function () { return state.count; },
-            updates: function () { return state.updates.slice(); }
+            updates: function () { return state.updates.slice(); },
+            snapshot: function () { return state.snapshot; }
         };
     }
 
