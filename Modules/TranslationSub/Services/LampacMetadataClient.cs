@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Http;
 using Newtonsoft.Json.Linq;
 using Shared;
 using Shared.Models.Base;
 using Shared.Services;
+using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -51,19 +53,25 @@ internal static class LampacMetadataClient
         @"(?:season|сезон)\D{0,8}(?<n>\d{1,3})|(?<n2>\d{1,3})\D{0,8}(?:season|сезон)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    public static async Task<IReadOnlyList<LampacVoiceMetadata>> ReadAsync(TranslationMetadataQuery query)
+    public static async Task<IReadOnlyList<LampacVoiceMetadata>> ReadAsync(TranslationMetadataQuery query, HttpContext httpContext = null)
     {
         if (query == null || query.Sources == null || query.Sources.Count == 0)
             return Array.Empty<LampacVoiceMetadata>();
 
-        var discovered = await DiscoverSourcesAsync(query).ConfigureAwait(false);
-        discovered = discovered
+        var discoveredAll = await DiscoverSourcesAsync(query, httpContext).ConfigureAwait(false);
+        var discovered = discoveredAll
             .Where(x => query.Sources.Any(id =>
                 string.Equals(id, x.Id, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (discovered.Count == 0)
+        {
+            Serilog.Log.Warning(
+                "TranslationSub metadata discovery has no selected balancers. Selected={Selected}; Discovered={Discovered}",
+                string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)),
+                string.Join(",", discoveredAll.Select(x => x.Id).OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
             return Array.Empty<LampacVoiceMetadata>();
+        }
 
         // Match Lampac's per-balancer failure isolation: one broken source must not
         // turn a successful response from every other source into an empty result.
@@ -71,10 +79,11 @@ internal static class LampacMetadataClient
         {
             try
             {
-                return await ReadSourceAsync(source, query).ConfigureAwait(false);
+                return await ReadSourceAsync(source, query, httpContext).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                Serilog.Log.Error(ex, "TranslationSub metadata source failed. Source={Source}", source.Id);
                 return new List<LampacVoiceMetadata>();
             }
         })).ConfigureAwait(false);
@@ -88,7 +97,7 @@ internal static class LampacMetadataClient
             .ToList();
     }
 
-    static async Task<List<LampacSourceDescriptor>> DiscoverSourcesAsync(TranslationMetadataQuery query)
+    static async Task<List<LampacSourceDescriptor>> DiscoverSourcesAsync(TranslationMetadataQuery query, HttpContext httpContext)
     {
         string url = "/lite/events";
         url = AppendQuery(url, "serial", query.IsSerial ? "1" : "0");
@@ -110,17 +119,21 @@ internal static class LampacMetadataClient
         if (query.Year > 0)
             url = AppendQuery(url, "year", query.Year.ToString());
 
-        var response = await GetAsync(url, query.Uid).ConfigureAwait(false);
+        var response = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
         if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
+        {
+            Serilog.Log.Warning("TranslationSub metadata discovery returned no body");
             return new List<LampacSourceDescriptor>();
+        }
 
         JToken root;
         try
         {
             root = JToken.Parse(response.Body);
         }
-        catch
+        catch (Exception ex)
         {
+            Serilog.Log.Warning(ex, "TranslationSub metadata discovery returned non-JSON body. Length={Length}", response.Body.Length);
             return new List<LampacSourceDescriptor>();
         }
 
@@ -128,7 +141,10 @@ internal static class LampacMetadataClient
         if (array == null && root is JObject obj)
             array = obj["online"] as JArray ?? obj["items"] as JArray;
         if (array == null)
+        {
+            Serilog.Log.Warning("TranslationSub metadata discovery JSON has no online array. RootType={RootType}", root.Type);
             return new List<LampacSourceDescriptor>();
+        }
 
         var result = new Dictionary<string, LampacSourceDescriptor>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in array.OfType<JObject>())
@@ -182,7 +198,7 @@ internal static class LampacMetadataClient
         return NormalizeSourceId(path[(index + marker.Length)..].Trim('/'));
     }
 
-    static async Task<List<LampacVoiceMetadata>> ReadSourceAsync(LampacSourceDescriptor source, TranslationMetadataQuery query)
+    static async Task<List<LampacVoiceMetadata>> ReadSourceAsync(LampacSourceDescriptor source, TranslationMetadataQuery query, HttpContext httpContext)
     {
         var rows = new List<MetadataRow>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -196,7 +212,11 @@ internal static class LampacMetadataClient
             query.Season,
             0,
             visited,
-            rows).ConfigureAwait(false);
+            rows,
+            httpContext).ConfigureAwait(false);
+
+        if (rows.Count == 0)
+            Serilog.Log.Warning("TranslationSub metadata source produced no episode rows. Source={Source}; Season={Season}", source.Id, query.Season);
 
         return rows
             .Where(x => x.Episode > 0)
@@ -254,7 +274,8 @@ internal static class LampacMetadataClient
         int inheritedSeason,
         int depth,
         HashSet<string> visited,
-        List<MetadataRow> rows)
+        List<MetadataRow> rows,
+        HttpContext httpContext)
     {
         if (depth > MaxMetadataDepth || visited.Count >= MaxMetadataPages || string.IsNullOrWhiteSpace(url))
             return;
@@ -263,13 +284,23 @@ internal static class LampacMetadataClient
         if (!visited.Add(url.Trim()))
             return;
 
-        var response = await GetFollowingRedirectsAsync(url, query.Uid).ConfigureAwait(false);
+        var response = await GetFollowingRedirectsAsync(url, query.Uid, httpContext).ConfigureAwait(false);
         if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
+        {
+            Serilog.Log.Warning(
+                "TranslationSub metadata HTTP returned no body. Source={Source}; Depth={Depth}; Route={Route}",
+                source.Id, depth, SafeRoute(url));
             return;
+        }
 
         var nodes = ParseMetadataNodes(response.Body);
         if (nodes.Count == 0)
+        {
+            Serilog.Log.Warning(
+                "TranslationSub metadata parser found no nodes. Source={Source}; Depth={Depth}; Route={Route}; Length={Length}",
+                source.Id, depth, SafeRoute(url), response.Body.Length);
             return;
+        }
 
         var voices = nodes.Where(x => x.Kind == "voice" || x.Kind == "button").ToList();
         var activeVoice = voices.FirstOrDefault(x => x.Active);
@@ -389,7 +420,8 @@ internal static class LampacMetadataClient
                 next.Season,
                 depth + 1,
                 visited,
-                rows).ConfigureAwait(false);
+                rows,
+                httpContext).ConfigureAwait(false);
         }
     }
 
@@ -692,12 +724,12 @@ internal static class LampacMetadataClient
         return bool.TryParse(token.ToString(), out bool result) && result;
     }
 
-    static async Task<LampacMetadataResponse> GetFollowingRedirectsAsync(string pathOrUrl, string uid)
+    static async Task<LampacMetadataResponse> GetFollowingRedirectsAsync(string pathOrUrl, string uid, HttpContext httpContext)
     {
         string current = ForceMetadataJson(pathOrUrl);
         for (int i = 0; i < 4; i++)
         {
-            var response = await GetAsync(current, uid).ConfigureAwait(false);
+            var response = await GetAsync(current, uid, httpContext).ConfigureAwait(false);
             if (response == null)
                 return null;
             if (!response.IsRedirect)
@@ -707,17 +739,21 @@ internal static class LampacMetadataClient
         return null;
     }
 
-    static async Task<LampacMetadataResponse> GetAsync(string pathOrUrl, string uid = null)
+    static async Task<LampacMetadataResponse> GetAsync(string pathOrUrl, string uid, HttpContext httpContext)
     {
         if (string.IsNullOrWhiteSpace(pathOrUrl))
             return null;
 
         try
         {
-            if (!string.IsNullOrWhiteSpace(uid) && !HasQueryKey(pathOrUrl, "uid"))
+            // Interactive requests carry Lampac's native identity context.
+            // Background polls have no HttpContext and keep the stored uid fallback.
+            if (httpContext != null)
+                pathOrUrl = AccsDbInvk.Args(pathOrUrl, httpContext);
+            else if (!string.IsNullOrWhiteSpace(uid) && !HasQueryKey(pathOrUrl, "uid"))
                 pathOrUrl = AppendQuery(pathOrUrl, "uid", uid.Trim());
 
-            Uri uri = ResolveRequestUri(pathOrUrl, out bool localRoute);
+            Uri uri = ResolveRequestUri(pathOrUrl, httpContext, out bool localRoute);
             if (uri == null)
                 return null;
 
@@ -725,14 +761,13 @@ internal static class LampacMetadataClient
             if (localRoute)
             {
                 headers = HeadersModel.Init(
-                    ("xhost", LocalRequestHost()),
-                    ("xscheme", LocalRequestScheme()),
+                    ("xhost", LocalRequestHost(httpContext)),
+                    ("xscheme", LocalRequestScheme(httpContext)),
                     ("lcrqpasswd", CoreInit.rootPasswd)
                 );
             }
 
             // Use Lampac's shared HTTP stack just like OnlineApi.checkSearch().
-            // It applies the same client factory, redirects, decompression and HTTP hooks.
             string body = await Http.Get(
                 uri.ToString(),
                 timeoutSeconds: 30,
@@ -751,8 +786,9 @@ internal static class LampacMetadataClient
                 Location = null
             };
         }
-        catch
+        catch (Exception ex)
         {
+            Serilog.Log.Error(ex, "TranslationSub metadata HTTP failed. Route={Route}", SafeRoute(pathOrUrl));
             return null;
         }
     }
@@ -824,14 +860,14 @@ internal static class LampacMetadataClient
         return false;
     }
 
-    static Uri ResolveRequestUri(string pathOrUrl, out bool localRoute)
+    static Uri ResolveRequestUri(string pathOrUrl, HttpContext httpContext, out bool localRoute)
     {
         localRoute = true;
         string path = pathOrUrl?.Trim();
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        if (Uri.TryCreate(path, UriKind.Absolute, out var absolute) && !IsLocalAddress(absolute))
+        if (Uri.TryCreate(path, UriKind.Absolute, out var absolute) && !IsLocalAddress(absolute, httpContext))
         {
             localRoute = false;
             return absolute;
@@ -846,8 +882,7 @@ internal static class LampacMetadataClient
         if (listen == null || listen.port <= 0)
             return null;
 
-        // This intentionally mirrors OnlineApi.checkSearch(): internal online
-        // routes always go through listen.localhost:listen.port over HTTP.
+        // Lampac's own internal online requests always use listen.localhost:listen.port.
         string localHost = string.IsNullOrWhiteSpace(listen.localhost)
             ? "127.0.0.1"
             : listen.localhost.Trim();
@@ -858,8 +893,12 @@ internal static class LampacMetadataClient
         return new Uri(new Uri($"http://{localHost}:{listen.port}/"), path.TrimStart('/'));
     }
 
-    static string LocalRequestHost()
+    static string LocalRequestHost(HttpContext httpContext)
     {
+        // Native OnlineApi.checkSearch sends its current controller host in xhost.
+        if (httpContext != null)
+            return CoreInit.Host(httpContext);
+
         var listen = CoreInit.conf?.listen;
         if (listen == null)
             return null;
@@ -874,20 +913,28 @@ internal static class LampacMetadataClient
         if (localHost.Contains(':') && !localHost.StartsWith('['))
             localHost = $"[{localHost}]";
 
-        return listen.port > 0 ? $"{localHost}:{listen.port}" : localHost;
+        return listen.port > 0 ? $"http://{localHost}:{listen.port}" : $"http://{localHost}";
     }
 
-    static string LocalRequestScheme()
+    static string LocalRequestScheme(HttpContext httpContext)
     {
+        if (!string.IsNullOrWhiteSpace(httpContext?.Request?.Scheme))
+            return httpContext.Request.Scheme;
+
         string scheme = CoreInit.conf?.listen?.scheme;
         return string.IsNullOrWhiteSpace(scheme) ? "http" : scheme.Trim();
     }
 
-    static bool IsLocalAddress(Uri uri)
+    static bool IsLocalAddress(Uri uri, HttpContext httpContext)
     {
         if (uri == null)
             return false;
         if (uri.IsLoopback || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Links generated by SeasonTpl/VoiceTpl use the current Lampac host.
+        // Match the real request authority, not only listen.ip/listen.host heuristics.
+        if (MatchesRequestAuthority(uri, httpContext))
             return true;
 
         var listen = CoreInit.conf?.listen;
@@ -908,6 +955,24 @@ internal static class LampacMetadataClient
         return false;
     }
 
+    static bool MatchesRequestAuthority(Uri uri, HttpContext httpContext)
+    {
+        if (uri == null || httpContext?.Request == null)
+            return false;
+
+        var requestHost = httpContext.Request.Host;
+        if (string.IsNullOrWhiteSpace(requestHost.Host)
+            || !uri.Host.Equals(requestHost.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!requestHost.Port.HasValue)
+            return uri.IsDefaultPort;
+
+        return uri.Port == requestHost.Port.Value;
+    }
+
     static bool HostMatches(Uri uri, string configuredHost)
     {
         if (uri == null || string.IsNullOrWhiteSpace(configuredHost))
@@ -918,14 +983,34 @@ internal static class LampacMetadataClient
             value = "http://" + value.TrimStart('/');
 
         if (Uri.TryCreate(value, UriKind.Absolute, out var configured))
-            return uri.Host.Equals(configured.Host, StringComparison.OrdinalIgnoreCase);
+            return uri.Host.Equals(configured.Host, StringComparison.OrdinalIgnoreCase)
+                && (!configured.IsDefaultPort ? uri.Port == configured.Port : true);
 
         string host = configuredHost.Trim().Trim('[', ']');
         int colon = host.LastIndexOf(':');
+        int configuredPort = -1;
         if (colon > 0 && host.IndexOf(':') == colon)
+        {
+            int.TryParse(host[(colon + 1)..], out configuredPort);
             host = host[..colon];
+        }
 
-        return uri.Host.Equals(host.Trim('[', ']'), StringComparison.OrdinalIgnoreCase);
+        if (!uri.Host.Equals(host.Trim('[', ']'), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return configuredPort <= 0 || uri.Port == configuredPort;
+    }
+
+    static string SafeRoute(string pathOrUrl)
+    {
+        if (string.IsNullOrWhiteSpace(pathOrUrl))
+            return string.Empty;
+
+        if (Uri.TryCreate(pathOrUrl, UriKind.Absolute, out var absolute))
+            return absolute.AbsolutePath;
+
+        int query = pathOrUrl.IndexOf('?');
+        return query >= 0 ? pathOrUrl[..query] : pathOrUrl;
     }
 
     sealed class OnlineNode
