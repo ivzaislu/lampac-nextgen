@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8,7 +9,7 @@ namespace TranslationSub.Services;
 
 public static class LampacMetadataService
 {
-    public static async Task<TranslationVariantsResponse> GetVariants(TranslationMetadataQuery query)
+    public static async Task<TranslationVariantsResponse> GetVariants(TranslationMetadataQuery query, HttpContext httpContext = null)
     {
         if (ModInit.conf?.enable != true || query == null || query.Sources?.Count == 0)
             return new TranslationVariantsResponse();
@@ -16,10 +17,11 @@ public static class LampacMetadataService
         IReadOnlyList<LampacVoiceMetadata> metadata;
         try
         {
-            metadata = await LampacMetadataClient.ReadAsync(query).ConfigureAwait(false);
+            metadata = await LampacMetadataClient.ReadAsync(query, httpContext).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            Serilog.Log.Error(ex, "TranslationSub metadata variants failed");
             metadata = Array.Empty<LampacVoiceMetadata>();
         }
 
