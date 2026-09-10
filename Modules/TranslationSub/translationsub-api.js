@@ -112,6 +112,13 @@
         request('POST', '/translationsub/v2/content-state', {}, card || {}, success, error);
     }
 
+    function contentSummary(card, success, error) {
+        request('POST', '/translationsub/v2/content-state', {}, {
+            includeVoices: false,
+            payload: card || {}
+        }, success, error);
+    }
+
     function subscribe(card, voiceId, voiceName, success, error) {
         request('POST', '/translationsub/v2/subscriptions', {}, {
             card: card || {},
@@ -133,6 +140,7 @@
         request: request,
         snapshot: snapshot,
         contentState: contentState,
+        contentSummary: contentSummary,
         subscribe: subscribe,
         unsubscribe: unsubscribe,
         check: check,
