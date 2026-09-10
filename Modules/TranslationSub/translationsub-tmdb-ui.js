@@ -14,60 +14,16 @@
             .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
-    function number(item, a, b) {
-        return Number(item && (item[a] !== undefined ? item[a] : item[b]) || 0) || 0;
-    }
-
-    function value(item, a, b) {
-        return item ? (item[a] !== undefined ? item[a] : item[b]) : null;
-    }
-
-    function parseDate(value) {
-        if (!value) return null;
-        var date = new Date(value);
-        return isNaN(date.getTime()) ? null : date;
-    }
-
     function formatDate(value) {
-        var date = parseDate(value);
-        if (!date) return '';
+        if (!value) return '';
+        var date = new Date(value);
+        if (isNaN(date.getTime())) return '';
         try {
             return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
         } catch (e) {
             var month = date.getMonth() + 1;
             return date.getDate() + '.' + (month < 10 ? '0' : '') + month;
         }
-    }
-
-    function stateText(item) {
-        var state = String(value(item, 'ScheduleState', 'scheduleState') || '');
-        var season = number(item, 'CurrentSeason', 'currentSeason') || 1;
-        var available = number(item, 'LastEpisode', 'lastEpisode');
-        var aired = number(item, 'TmdbTargetSeasonEpisodes', 'tmdbTargetSeasonEpisodes');
-        var tmdbLastSeason = number(item, 'TmdbLastSeason', 'tmdbLastSeason');
-        var nextSeason = number(item, 'TmdbNextSeason', 'tmdbNextSeason');
-
-        if (value(item, 'TmdbNewSeasonAvailable', 'tmdbNewSeasonAvailable')) {
-            var ns = Math.max(tmdbLastSeason, nextSeason);
-            return { text: 'Новый сезон S' + ns + ' уже начался', type: 'new-season' };
-        }
-
-        if (state === 'active_dubbing') {
-            if (aired > available)
-                return { text: 'Ждём озвучку E' + (available + 1) + (aired > available + 1 ? '–E' + aired : ''), type: 'active' };
-            return { text: 'Ждём обновление озвучки', type: 'active' };
-        }
-        if (state === 'waiting_air') return { text: 'Балансеры спят до выхода следующей серии', type: 'sleep' };
-        if (state === 'ended') return { text: 'Сериал завершён · балансеры спят', type: 'sleep' };
-        if (state === 'new_season') return { text: 'Новый сезон уже начался', type: 'new-season' };
-        if (state === 'season_complete') return { text: 'Сезон завершён · ждём TMDB', type: 'sleep' };
-        if (state === 'waiting_tmdb') return { text: 'Озвучка догнала вышедшие серии', type: 'ok' };
-        if (state === 'tmdb_unavailable') return { text: 'TMDB временно недоступен · используется резервный интервал', type: 'warn' };
-        if (state === 'sources_disabled') return { text: 'Балансеры отключены', type: 'warn' };
-        if (state === 'interval_wait') return { text: 'Умное расписание TMDB отключено', type: 'plain' };
-
-        if (aired > 0 && season > 0) return { text: 'TMDB отслеживает сезон', type: 'plain' };
-        return null;
     }
 
     function decorateCard(card) {
@@ -80,33 +36,36 @@
 
         meta.find('.translationsub-tmdb-v2').remove();
 
-        var season = number(item, 'CurrentSeason', 'currentSeason') || 1;
-        var aired = number(item, 'TmdbTargetSeasonEpisodes', 'tmdbTargetSeasonEpisodes');
-        var nextSeason = number(item, 'TmdbNextSeason', 'tmdbNextSeason');
-        var nextEpisode = number(item, 'TmdbNextEpisode', 'tmdbNextEpisode');
-        var nextAirDate = value(item, 'TmdbNextAirDate', 'tmdbNextAirDate');
-        var tmdbStatus = String(value(item, 'TmdbStatus', 'tmdbStatus') || '');
-        var synced = value(item, 'TmdbLastSyncedAt', 'tmdbLastSyncedAt');
-        var status = stateText(item);
+        var tmdb = item.tmdb && typeof item.tmdb === 'object' ? item.tmdb : {};
+        var schedule = item.schedule && typeof item.schedule === 'object' ? item.schedule : null;
+        var season = Number(item.season || 1) || 1;
+        var aired = Number(tmdb.targetSeasonEpisodes || 0) || 0;
+        var nextSeason = Number(tmdb.nextSeason || 0) || 0;
+        var nextEpisode = Number(tmdb.nextEpisode || 0) || 0;
+        var nextDate = formatDate(tmdb.nextAirDate);
         var parts = [];
 
         if (aired > 0)
             parts.push('<span class="translationsub-tmdb-v2__air">TMDB · вышло S' + season + 'E' + aired + '</span>');
 
-        var nextDate = formatDate(nextAirDate);
-        if (nextDate && nextSeason > 0 && nextEpisode > 0) {
+        if (nextDate && nextSeason > 0 && nextEpisode > 0)
             parts.push('<span class="translationsub-tmdb-v2__next">Следующая S' + nextSeason + 'E' + nextEpisode + ' · ' + escapeHtml(nextDate) + '</span>');
-        }
 
-        if (!parts.length && tmdbStatus)
-            parts.push('<span class="translationsub-tmdb-v2__air">TMDB · ' + escapeHtml(tmdbStatus) + '</span>');
+        if (!parts.length && tmdb.status)
+            parts.push('<span class="translationsub-tmdb-v2__air">TMDB · ' + escapeHtml(tmdb.status) + '</span>');
 
-        if (!parts.length && !status) return;
+        if (!parts.length && !(schedule && schedule.text)) return;
 
         var row = $('<div class="translationsub-tmdb-v2"></div>');
-        if (parts.length) row.append('<div class="translationsub-tmdb-v2__facts">' + parts.join('<span class="translationsub-tmdb-v2__sep">•</span>') + '</div>');
-        if (status) row.append('<div class="translationsub-tmdb-v2__state translationsub-tmdb-v2__state--' + status.type + '">' + escapeHtml(status.text) + '</div>');
-        if (synced) row.attr('title', 'TMDB обновлён: ' + synced);
+        if (parts.length)
+            row.append('<div class="translationsub-tmdb-v2__facts">' + parts.join('<span class="translationsub-tmdb-v2__sep">•</span>') + '</div>');
+
+        if (schedule && schedule.text) {
+            var type = String(schedule.type || 'plain').replace(/[^a-z0-9-]/gi, '');
+            row.append('<div class="translationsub-tmdb-v2__state translationsub-tmdb-v2__state--' + type + '">' + escapeHtml(schedule.text) + '</div>');
+        }
+
+        if (tmdb.lastSyncedAt) row.attr('title', 'TMDB обновлён: ' + tmdb.lastSyncedAt);
         meta.append(row);
     }
 
@@ -126,7 +85,7 @@
                 list = Array.isArray(list) ? list : [];
                 var map = {};
                 list.forEach(function (item) {
-                    var id = String(value(item, 'Id', 'id') || '');
+                    var id = String(item && item.id || '');
                     if (id) map[id] = item;
                 });
                 root.find('.translationsub-card').each(function () {
