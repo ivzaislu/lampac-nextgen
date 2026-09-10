@@ -1,22 +1,105 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Shared;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
+using TranslationSub.Models;
 using TranslationSub.Services;
 
 namespace TranslationSub;
 
 /// <summary>
-/// Backend-first TranslationSub commands/read endpoints used by thin clients.
-/// Legacy routes remain in TranslationSubController only as a compatibility
-/// surface while the migration is completed.
+/// Canonical backend-first TranslationSub API consumed by thin Lampa clients.
+/// Content identity, progress, source selection, voice matching and mutations
+/// are resolved server-side; the browser sends intent and renders read models.
 /// </summary>
 public class TranslationSubV2Controller : BaseController
 {
+    [HttpGet]
+    [AllowAnonymous]
+    [Route("translationsub/v2/snapshot")]
+    public ActionResult Snapshot(string uid = null)
+    {
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+            return Error("uid_required");
+
+        string profileId = ResolveProfileId();
+
+        // Server-side safety reconciliation covers restarts or missed NWS
+        // invalidations. The client never owns watched-progress synchronization.
+        TimeCodeProgressService.SyncUser(uid, profileId);
+
+        return ContentTo(JsonConvert.SerializeObject(
+            TranslationSubSnapshotService.Build(uid, profileId)));
+    }
+
+    [HttpPost]
+    [AllowAnonymous]
+    [Route("translationsub/v2/content-state")]
+    async public Task<ActionResult> ContentState(string uid = null)
+    {
+        var body = await ReadBody();
+        if (body == null)
+            return ContentTo("{\"eligible\":false,\"reason\":\"empty_body\"}");
+
+        uid = ResolveUid(uid ?? body.Value<string>("uid"));
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"eligible\":false,\"reason\":\"uid_required\"}");
+
+        string profileId = ResolveProfileId();
+        TimeCodeProgressService.SyncUser(uid, profileId);
+
+        var state = await TranslationSubContentStateService.BuildAsync(
+            uid,
+            profileId,
+            body,
+            HttpContext);
+
+        return ContentTo(JsonConvert.SerializeObject(state));
+    }
+
+    [HttpPost]
+    [AllowAnonymous]
+    [Route("translationsub/v2/subscriptions")]
+    async public Task<ActionResult> Subscribe(string uid = null)
+    {
+        var body = await ReadBody();
+        if (body == null)
+        {
+            return ContentTo(JsonConvert.SerializeObject(new TranslationSubCommandResult
+            {
+                Success = false,
+                Error = "empty_body"
+            }));
+        }
+
+        uid = ResolveUid(uid ?? body.Value<string>("uid"));
+        var intent = body.ToObject<TranslationSubSubscribeIntent>();
+        var result = await TranslationSubCommandService.SubscribeAsync(uid, intent, HttpContext);
+
+        if (result.Success)
+            TimeCodeProgressService.SyncUser(uid, ResolveProfileId());
+
+        return ContentTo(JsonConvert.SerializeObject(result));
+    }
+
+    [HttpDelete]
+    [AllowAnonymous]
+    [Route("translationsub/v2/subscriptions/{id}")]
+    public ActionResult Unsubscribe(string id, string uid = null)
+    {
+        uid = ResolveUid(uid);
+        return ContentTo(JsonConvert.SerializeObject(
+            TranslationSubCommandService.Unsubscribe(uid, id)));
+    }
+
     [HttpPost]
     [AllowAnonymous]
     [Route("translationsub/v2/check")]
@@ -24,18 +107,9 @@ public class TranslationSubV2Controller : BaseController
     {
         uid = ResolveUid(uid);
         if (string.IsNullOrWhiteSpace(uid))
-        {
-            return ContentTo(JsonConvert.SerializeObject(new
-            {
-                success = false,
-                error = "uid_required"
-            }));
-        }
+            return Error("uid_required");
 
         string profileId = ResolveProfileId();
-
-        // Progress is reconciled server-side. This keeps the read model correct
-        // even if TranslationSub was disabled or restarted while TimeCode changed.
         TimeCodeProgressService.SyncUser(uid, profileId);
 
         var selectedSources = (TranslationSettingsStore.Get(uid).Sources ?? new List<string>())
@@ -45,9 +119,6 @@ public class TranslationSubV2Controller : BaseController
 
         await TranslationSubscriptionService.Tick(uid, selectedSources, force: true);
 
-        // Tick may change available episodes/schedule state. Return the canonical
-        // profile-aware read model so the client never has to reconstruct it or
-        // perform a second request after a manual check.
         TimeCodeProgressService.SyncUser(uid, profileId);
         var snapshot = TranslationSubSnapshotService.Build(uid, profileId);
 
@@ -57,6 +128,13 @@ public class TranslationSubV2Controller : BaseController
             snapshot
         }));
     }
+
+    ActionResult Error(string error)
+        => ContentTo(JsonConvert.SerializeObject(new
+        {
+            success = false,
+            error
+        }));
 
     string ResolveUid(string explicitUid = null)
     {
@@ -80,5 +158,22 @@ public class TranslationSubV2Controller : BaseController
             return ProfileProgressStore.NormalizeProfileId(profileQuery.ToString());
 
         return "0";
+    }
+
+    async Task<JObject> ReadBody()
+    {
+        using var reader = new StreamReader(Request.Body, Encoding.UTF8);
+        string raw = await reader.ReadToEndAsync();
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        try
+        {
+            return JsonConvert.DeserializeObject<JObject>(raw);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
