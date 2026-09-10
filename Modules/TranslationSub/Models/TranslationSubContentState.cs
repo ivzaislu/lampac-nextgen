@@ -1,4 +1,5 @@
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System.Collections.Generic;
 
 namespace TranslationSub.Models;
@@ -92,8 +93,8 @@ public class TranslationSubVoiceState
 
 public class TranslationSubSubscribeIntent
 {
-    [JsonProperty("content")]
-    public TranslationSubResolvedContent Content { get; set; }
+    [JsonProperty("card")]
+    public JObject Card { get; set; }
 
     [JsonProperty("voiceId")]
     public string VoiceId { get; set; }
