@@ -22,6 +22,7 @@ public class TranslationSubPluginController : BaseController
 
         string script = System.IO.File.ReadAllText(path);
 
+        AppendScript(ref script, "translationsub-api.js");
         AppendScript(ref script, "translationsub-page.js");
         AppendScript(ref script, "translationsub-watch.js");
         AppendScript(ref script, "translationsub-ui.js");
