@@ -41,7 +41,7 @@ jobs:
 
           test -f /tmp/lampac-runtime/Core.dll
           test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
-          test -f /tmp/lampac-runtime/module/TimeCode/manifest.json
+          test -f /tmp/lampac-runtime/module/Sync/TimeCode/manifest.json
 
           cat > /tmp/lampac-runtime/init.yaml <<'YAML'
           chromium:
