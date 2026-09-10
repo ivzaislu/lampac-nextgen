@@ -36,7 +36,7 @@ internal static class LampacSourceRegistry
 
             foreach (BaseSettings settings in FindSettings(module))
             {
-                if (settings == null || !settings.enable || settings.rip)
+                if (settings == null || !CanProduceOnlineSource(settings))
                     continue;
 
                 string id = TranslationSettingsStore.NormalizeSourceId(settings.plugin);
@@ -56,6 +56,23 @@ internal static class LampacSourceRegistry
                 };
             }
         }
+    }
+
+    static bool CanProduceOnlineSource(BaseSettings settings)
+    {
+        if (settings.enable && !settings.rip)
+            return true;
+
+        // Mirror OnlineApi.send(): a configured remote override can remain usable
+        // even when the local provider is disabled/rip, unless overridepasswd
+        // intentionally suppresses the override route.
+        if (!string.IsNullOrEmpty(settings.overridepasswd))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(settings.overridehost))
+            return true;
+
+        return settings.overridehosts?.Any(x => !string.IsNullOrWhiteSpace(x)) == true;
     }
 
     static IEnumerable<BaseSettings> FindSettings(object module)
