@@ -194,48 +194,6 @@ public class TranslationSubController : BaseController
 
     [HttpPost]
     [AllowAnonymous]
-    [Route("translationsub/toggle")]
-    [Route("transsubscribe/toggle")]
-    async public Task<ActionResult> Toggle()
-    {
-        var body = await ReadBody();
-        if (body == null)
-            return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
-
-        string uid = ResolveUid(body.Value<string>("uid"));
-        if (string.IsNullOrWhiteSpace(uid))
-            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
-
-        var sub = FromJson(body, uid);
-
-        bool subscribed = SubscriptionStore.MutateResult(list =>
-        {
-            var exists = list.FirstOrDefault(x =>
-                string.Equals(x.Uid, uid, StringComparison.Ordinal) &&
-                x.ContentId == sub.ContentId &&
-                x.TranslationId == sub.TranslationId &&
-                (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1));
-
-            if (exists != null)
-            {
-                list.Remove(exists);
-                return false;
-            }
-
-            sub.Id = Guid.NewGuid().ToString("N");
-            sub.CreatedAt = DateTime.Now;
-            list.Add(sub);
-            return true;
-        });
-
-        if (subscribed)
-            SyncTimeCodeProgress(uid);
-
-        return ContentTo(JsonConvert.SerializeObject(new { success = true, subscribed }));
-    }
-
-    [HttpPost]
-    [AllowAnonymous]
     [Route("translationsub/add")]
     [Route("transsubscribe/add")]
     async public Task<ActionResult> Add()
@@ -270,63 +228,6 @@ public class TranslationSubController : BaseController
 
     [HttpPost]
     [AllowAnonymous]
-    [Route("translationsub/watched")]
-    [Route("transsubscribe/watched")]
-    async public Task<ActionResult> Watched()
-    {
-        var body = await ReadBody();
-        if (body == null)
-            return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
-
-        string uid = ResolveUid(body.Value<string>("uid"));
-        if (string.IsNullOrWhiteSpace(uid))
-            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
-
-        string contentId = body.Value<string>("contentId");
-        int season = body.Value<int?>("season") ?? 0;
-        int episode = Math.Max(0, body.Value<int?>("episode") ?? 0);
-
-        if (string.IsNullOrWhiteSpace(contentId) || season <= 0)
-            return ContentTo("{\"success\":false,\"error\":\"invalid progress\"}");
-
-        int updated = 0;
-        int available = 0;
-
-        SubscriptionStore.Mutate(list =>
-        {
-            var matches = list.Where(x =>
-                x.IsSerial &&
-                string.Equals(x.Uid, uid, StringComparison.Ordinal) &&
-                x.ContentId == contentId &&
-                x.CurrentSeason.GetValueOrDefault(1) == season).ToList();
-
-            updated = matches.Count;
-            foreach (var item in matches)
-            {
-                item.CurrentSeason = season;
-                item.CurrentEpisode = episode;
-                int itemAvailable = item.LastEpisode.GetValueOrDefault(0);
-                available = Math.Max(available, itemAvailable);
-                item.Notified = itemAvailable <= episode;
-            }
-        });
-
-        return ContentTo(JsonConvert.SerializeObject(new
-        {
-            success = true,
-            updated,
-            season,
-            watchedEpisode = episode,
-            availableEpisode = available,
-            fromEpisode = available > episode ? episode + 1 : 0,
-            toEpisode = available,
-            newCount = Math.Max(0, available - episode),
-            source = "lampac-timecode"
-        }));
-    }
-
-    [HttpPost]
-    [AllowAnonymous]
     [Route("translationsub/remove")]
     [Route("transsubscribe/remove")]
     public ActionResult Remove(string id, string uid = null)
@@ -337,26 +238,6 @@ public class TranslationSubController : BaseController
 
         SubscriptionStore.Mutate(list => list.RemoveAll(x =>
             x.Id == id && string.Equals(x.Uid, uid, StringComparison.Ordinal)));
-        return ContentTo("{\"success\":true}");
-    }
-
-    [HttpPost]
-    [AllowAnonymous]
-    [Route("translationsub/notified")]
-    [Route("transsubscribe/notified")]
-    public ActionResult Notified(string id, string uid = null)
-    {
-        uid = ResolveUid(uid);
-        if (string.IsNullOrWhiteSpace(uid))
-            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
-
-        SubscriptionStore.Mutate(list =>
-        {
-            var item = list.FirstOrDefault(x =>
-                x.Id == id && string.Equals(x.Uid, uid, StringComparison.Ordinal));
-            if (item != null)
-                item.Notified = true;
-        });
         return ContentTo("{\"success\":true}");
     }
 
