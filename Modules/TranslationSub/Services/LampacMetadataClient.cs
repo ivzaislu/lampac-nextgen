@@ -95,8 +95,9 @@ internal static class LampacMetadataClient
         url = AppendQuery(url, "source", "tmdb");
         url = AppendQuery(url, "islite", "true");
 
-        if (!string.IsNullOrWhiteSpace(query.ContentId))
-            url = AppendQuery(url, "id", query.ContentId);
+        string sourceId = TmdbSourceId(query);
+        if (!string.IsNullOrWhiteSpace(sourceId))
+            url = AppendQuery(url, "id", sourceId);
         if (query.KpId > 0)
             url = AppendQuery(url, "kinopoisk_id", query.KpId.ToString());
         if (long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
@@ -165,6 +166,14 @@ internal static class LampacMetadataClient
 
     static string NormalizeSourceId(string value)
         => TranslationSettingsStore.NormalizeSourceId(value);
+
+    static string TmdbSourceId(TranslationMetadataQuery query)
+    {
+        if (query != null && long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
+            return tmdbId.ToString();
+
+        return query?.ContentId?.Trim();
+    }
 
     static string SourceIdFromUrl(string value)
     {
@@ -241,8 +250,9 @@ internal static class LampacMetadataClient
     {
         string url = ForceMetadataJson(sourceUrl);
 
-        if (!string.IsNullOrWhiteSpace(query.ContentId))
-            url = AppendQuery(url, "id", query.ContentId);
+        string sourceId = TmdbSourceId(query);
+        if (!string.IsNullOrWhiteSpace(sourceId))
+            url = AppendQuery(url, "id", sourceId);
         if (query.KpId > 0)
             url = AppendQuery(url, "kinopoisk_id", query.KpId.ToString());
         if (long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
