@@ -6,7 +6,6 @@ namespace TranslationSub.Models;
 public class TranslationSubscription
 {
     public string Id { get; set; }
-    public string UserKey { get; set; }
     public string Uid { get; set; }
     public string ContentId { get; set; }
     public string Title { get; set; }
