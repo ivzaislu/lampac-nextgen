@@ -49,24 +49,21 @@ internal static class LampacMetadataClient
         if (query == null || query.Sources == null || query.Sources.Count == 0)
             return Array.Empty<LampacVoiceMetadata>();
 
-        var discoveredAll = await DiscoverSourcesAsync(query, httpContext).ConfigureAwait(false);
-        var discovered = discoveredAll
-            .Where(x => query.Sources.Any(id =>
-                string.Equals(id, x.Id, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-
-        if (discovered.Count == 0)
+        // Do not call /lite/events here. TranslationSub resolves only the user's
+        // selected Lampac modules and then requests metadata from those routes.
+        // This avoids OnlineApi.checkSearch() fan-out across unrelated balancers.
+        var selected = LampacSourceRegistry.ResolveSelected(query.Sources);
+        if (selected.Count == 0)
         {
             Serilog.Log.Warning(
-                "TranslationSub metadata discovery has no selected balancers. Selected={Selected}; Discovered={Discovered}",
-                string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)),
-                string.Join(",", discoveredAll.Select(x => x.Id).OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
+                "TranslationSub metadata has no resolvable selected balancers. Selected={Selected}",
+                string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
             return Array.Empty<LampacVoiceMetadata>();
         }
 
         // Match Lampac's per-balancer failure isolation: one broken source must not
         // turn a successful response from every other source into an empty result.
-        var values = await Task.WhenAll(discovered.Select(async source =>
+        var values = await Task.WhenAll(selected.Select(async source =>
         {
             try
             {
@@ -88,119 +85,12 @@ internal static class LampacMetadataClient
             .ToList();
     }
 
-    static async Task<List<LampacSourceDescriptor>> DiscoverSourcesAsync(TranslationMetadataQuery query, HttpContext httpContext)
-    {
-        string url = "/lite/events";
-        url = AppendQuery(url, "serial", query.IsSerial ? "1" : "0");
-        url = AppendQuery(url, "source", "tmdb");
-        url = AppendQuery(url, "islite", "true");
-
-        string sourceId = TmdbSourceId(query);
-        if (!string.IsNullOrWhiteSpace(sourceId))
-            url = AppendQuery(url, "id", sourceId);
-        if (query.KpId > 0)
-            url = AppendQuery(url, "kinopoisk_id", query.KpId.ToString());
-        if (long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
-            url = AppendQuery(url, "tmdb_id", tmdbId.ToString());
-        if (!string.IsNullOrWhiteSpace(query.ImdbId))
-            url = AppendQuery(url, "imdb_id", query.ImdbId);
-        if (!string.IsNullOrWhiteSpace(query.Title))
-            url = AppendQuery(url, "title", query.Title);
-        if (!string.IsNullOrWhiteSpace(query.OriginalTitle))
-            url = AppendQuery(url, "original_title", query.OriginalTitle);
-        if (query.Year > 0)
-            url = AppendQuery(url, "year", query.Year.ToString());
-
-        string body = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(body))
-        {
-            Serilog.Log.Warning("TranslationSub metadata discovery returned no body");
-            return new List<LampacSourceDescriptor>();
-        }
-
-        JToken root;
-        try
-        {
-            root = JToken.Parse(body);
-        }
-        catch (Exception ex)
-        {
-            Serilog.Log.Warning(ex, "TranslationSub metadata discovery returned non-JSON body. Length={Length}", body.Length);
-            return new List<LampacSourceDescriptor>();
-        }
-
-        JArray array = root as JArray;
-        if (array == null && root is JObject obj)
-            array = obj["online"] as JArray ?? obj["items"] as JArray;
-        if (array == null)
-        {
-            Serilog.Log.Warning("TranslationSub metadata discovery JSON has no online array. RootType={RootType}", root.Type);
-            return new List<LampacSourceDescriptor>();
-        }
-
-        var result = new Dictionary<string, LampacSourceDescriptor>(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in array.OfType<JObject>())
-        {
-            string route = item.Value<string>("url")?.Trim();
-            string id = NormalizeSourceId(item.Value<string>("balanser")) ?? SourceIdFromUrl(route);
-            if (id == null || string.IsNullOrWhiteSpace(route))
-                continue;
-
-            string name = item.Value<string>("name");
-            if (string.IsNullOrWhiteSpace(name))
-                name = id;
-
-            result[id] = new LampacSourceDescriptor
-            {
-                Id = id,
-                Name = name.Trim(),
-                Url = route
-            };
-        }
-
-        return result.Values
-            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
-
-    static string NormalizeSourceId(string value)
-        => TranslationSettingsStore.NormalizeSourceId(value);
-
     static string TmdbSourceId(TranslationMetadataQuery query)
     {
         if (query != null && long.TryParse(query.TmdbId, out long tmdbId) && tmdbId > 0)
             return tmdbId.ToString();
 
         return query?.ContentId?.Trim();
-    }
-
-    static string SourceIdFromUrl(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        string path = value.Trim();
-        if (TryCreateHttpUri(path, out var absolute))
-            path = absolute.AbsolutePath;
-        else if (path.StartsWith("//", StringComparison.Ordinal)
-            && TryCreateHttpUri("http:" + path, out var schemeRelative))
-        {
-            path = schemeRelative.AbsolutePath;
-        }
-        else
-        {
-            int query = path.IndexOf('?');
-            if (query >= 0)
-                path = path[..query];
-        }
-
-        const string marker = "/lite/";
-        int index = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (index < 0)
-            return null;
-
-        return NormalizeSourceId(path[(index + marker.Length)..].Trim('/'));
     }
 
     static async Task<List<LampacVoiceMetadata>> ReadSourceAsync(LampacSourceDescriptor source, TranslationMetadataQuery query, HttpContext httpContext)
@@ -960,8 +850,8 @@ internal static class LampacMetadataClient
         if (uri.IsLoopback || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // SeasonTpl/VoiceTpl and /lite/events can render the effective Lampac host
-        // from listen.host or xhost, which may differ from the raw Request.Host.
+        // SeasonTpl/VoiceTpl can render the effective Lampac host from listen.host
+        // or xhost, which may differ from the raw Request.Host.
         if (httpContext != null && HostMatches(uri, CoreInit.Host(httpContext)))
             return true;
 
