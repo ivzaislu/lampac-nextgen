@@ -55,19 +55,20 @@
     }
 
     function lampacUid() {
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
+                return String(window.TranslationSub.uid() || '');
+        } catch (e) {}
+
         var uid = String(storageGet('lampac_unic_id', '') || '');
         if (uid) return uid;
         try {
             if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
                 uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
-        } catch (e) {}
+        } catch (e2) {}
         if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
         storageSet('lampac_unic_id', uid);
         return uid;
-    }
-
-    function userKey() {
-        return String(storageGet('client_uid', '') || lampacUid() || 'local');
     }
 
     function detectHost() {
@@ -364,14 +365,13 @@
     }
 
     function loadSubscriptions(success, error) {
-        request('GET', API.list, { userKey: userKey() }, null, function (list) {
+        request('GET', API.list, { uid: lampacUid() }, null, function (list) {
             success(Array.isArray(list) ? list : []);
         }, error);
     }
 
     function loadVariants(context, season, success, error) {
         request('GET', API.variants, {
-            userKey: userKey(),
             contentId: context.contentId,
             title: context.title,
             originalTitle: context.originalTitle,
@@ -454,7 +454,6 @@
             (bodySources.length ? bodySources[0].source : (variant.source || 'lampac'));
 
         request('POST', API.add, null, {
-            userKey: userKey(),
             uid: lampacUid(),
             contentId: context.contentId,
             title: context.title,
@@ -489,7 +488,7 @@
         if (!id) return notify('Не удалось определить подписку для удаления');
         busy = true;
 
-        request('POST', API.remove, { id: id }, null, function () {
+        request('POST', API.remove, { id: id, uid: lampacUid() }, null, function () {
             busy = false;
             notify('Вы отписались · ' + voiceName(variant) + ' · ' + Number(season || 1) + ' сезон');
             refreshState();
