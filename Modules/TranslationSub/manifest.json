@@ -18,6 +18,7 @@
     "Services/LampacMetadataClient.cs",
     "Services/LampacMetadataService.cs",
     "Services/TranslationSubscriptionService.cs",
+    "Services/TranslationSubRealtimeService.cs",
     "Services/VoiceNormalize.cs"
   ]
 }
