@@ -49,10 +49,9 @@
         return !!fallback;
     }
 
-    function intSetting(name, fallback, min, max) {
+    function intSetting(name, fallback) {
         var value = parseInt(storageGet(name, String(fallback)), 10);
-        if (isNaN(value)) value = fallback;
-        return Math.max(min, Math.min(max, value));
+        return isNaN(value) ? fallback : value;
     }
 
     function sourceList(value) {
@@ -70,70 +69,10 @@
             });
     }
 
-    function enabledSources() {
-        return sourceList(storageGet(SOURCES_KEY, selectedSources));
-    }
-
-    function uid() {
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
-                return String(window.TranslationSub.uid() || '');
-        } catch (e) {}
-        return String(storageGet('lampac_unic_id', '') || '');
-    }
-
-    function host() {
-        try {
-            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
-            return window.location.origin || '';
-        } catch (e) { return ''; }
-    }
-
     function notify(text) {
         try {
             if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') Lampa.Noty.show(text);
         } catch (e) {}
-    }
-
-    function request(method, path, body, success, error) {
-        success = success || function () {};
-        error = error || function () {};
-        var options = {
-            method: method,
-            headers: { 'Content-Type': 'application/json; charset=utf-8' },
-            cache: 'no-store'
-        };
-        if (body && method !== 'GET') options.body = JSON.stringify(body);
-
-        if (typeof fetch === 'function') {
-            fetch(host() + path, options)
-                .then(function (response) {
-                    if (!response.ok) throw new Error('HTTP ' + response.status);
-                    return response.text();
-                })
-                .then(function (text) {
-                    var data = {};
-                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
-                    success(data);
-                })
-                .catch(error);
-            return;
-        }
-
-        try {
-            var xhr = new XMLHttpRequest();
-            xhr.open(method, host() + path, true);
-            xhr.setRequestHeader('Content-Type', 'application/json; charset=utf-8');
-            xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    var data = {};
-                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) {}
-                    success(data);
-                } else error(new Error('HTTP ' + xhr.status));
-            };
-            xhr.send(body && method !== 'GET' ? JSON.stringify(body) : null);
-        } catch (e2) { error(e2); }
     }
 
     function pick(object, pascal, camel, fallback) {
@@ -162,11 +101,6 @@
         var hash = 0;
         for (var i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
         return 'translationsub_source_' + id.replace(/[^a-z0-9]+/gi, '_') + '_' + Math.abs(hash);
-    }
-
-    function newSeasonMode() {
-        var value = String(storageGet(KEYS.newSeasonMode, 'auto') || 'auto').toLowerCase();
-        return ['auto', 'notify', 'off'].indexOf(value) >= 0 ? value : 'auto';
     }
 
     function settingsBellSvg() {
@@ -203,25 +137,33 @@
         return sourceList(result);
     }
 
-    function syncServerSettings() {
-        selectedSources = availableItems.length ? currentSelectionFromTriggers() : enabledSources();
+    function canonicalSettings(data) {
+        if (data && data.settings && typeof data.settings === 'object') return data.settings;
+        return data || {};
+    }
+
+    function applyCanonicalSettings(data) {
+        data = data || {};
+        var settings = canonicalSettings(data);
+        selectedSources = sourceList(pick(settings, 'Sources', 'sources', []));
+        availableItems = normalizeItems(data.availableSourceItems || data.AvailableSourceItems || settings.availableSourceItems || settings.AvailableSourceItems || availableItems);
         storageSet(SOURCES_KEY, selectedSources);
 
-        request('POST', '/translationsub/user-settings', {
-            uid: uid(),
-            checkIntervalHours: intSetting(KEYS.interval, 1, 1, 24),
-            sources: selectedSources,
-            useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
-            tmdbRefreshHours: intSetting(KEYS.tmdbRefreshHours, 24, 6, 168),
-            endedRefreshDays: intSetting(KEYS.endedRefreshDays, 7, 1, 90),
-            newSeasonMode: newSeasonMode()
-        }, function (response) {
-            selectedSources = sourceList(pick(response && response.settings, 'Sources', 'sources', selectedSources));
-            storageSet(SOURCES_KEY, selectedSources);
-            try {
-                if (window.TranslationSub && typeof window.TranslationSub.refreshSources === 'function')
-                    window.TranslationSub.refreshSources();
-            } catch (e) {}
+        var interval = pick(settings, 'CheckIntervalHours', 'checkIntervalHours', null);
+        var smart = pick(settings, 'UseTmdbSchedule', 'useTmdbSchedule', null);
+        var tmdbHours = pick(settings, 'TmdbRefreshHours', 'tmdbRefreshHours', null);
+        var endedDays = pick(settings, 'EndedRefreshDays', 'endedRefreshDays', null);
+        var seasonMode = pick(settings, 'NewSeasonMode', 'newSeasonMode', null);
+        if (interval !== null) storageSet(KEYS.interval, String(interval));
+        if (smart !== null) storageSet(KEYS.smartTmdb, !!smart);
+        if (tmdbHours !== null) storageSet(KEYS.tmdbRefreshHours, String(tmdbHours));
+        if (endedDays !== null) storageSet(KEYS.endedRefreshDays, String(endedDays));
+        if (seasonMode) storageSet(KEYS.newSeasonMode, String(seasonMode));
+
+        availableItems.forEach(function (item) {
+            var key = sourceParamKeys[item.id] || sourceParamKey(item.id);
+            sourceParamKeys[item.id] = key;
+            storageSet(key, selectedSources.indexOf(item.id) >= 0);
         });
     }
 
@@ -229,6 +171,35 @@
         try {
             if (window.TranslationSub && typeof window.TranslationSub.refresh === 'function') window.TranslationSub.refresh();
         } catch (e) {}
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
+                window.TranslationSubBadgeState.refresh();
+        } catch (e2) {}
+    }
+
+    function syncServerSettings() {
+        var api = window.TranslationSubApi;
+        if (!api || typeof api.updateSettings !== 'function') return;
+
+        selectedSources = availableItems.length ? currentSelectionFromTriggers() : selectedSources.slice();
+
+        api.updateSettings({
+            checkIntervalHours: intSetting(KEYS.interval, 1),
+            sources: selectedSources,
+            useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
+            tmdbRefreshHours: intSetting(KEYS.tmdbRefreshHours, 24),
+            endedRefreshDays: intSetting(KEYS.endedRefreshDays, 7),
+            newSeasonMode: String(storageGet(KEYS.newSeasonMode, 'auto') || 'auto')
+        }, function (response) {
+            if (!response || response.success !== true) {
+                notify('Не удалось сохранить настройки TranslationSub');
+                return;
+            }
+            applyCanonicalSettings(response);
+            refreshPlugin();
+        }, function () {
+            notify('Не удалось сохранить настройки TranslationSub');
+        });
     }
 
     function openBalancersSettings() {
@@ -260,9 +231,7 @@
             },
             onChange: function () {
                 selectedSources = currentSelectionFromTriggers();
-                storageSet(SOURCES_KEY, selectedSources);
                 syncServerSettings();
-                refreshPlugin();
             }
         });
     }
@@ -355,73 +324,24 @@
         availableItems.forEach(addBalancer);
     }
 
-    function applyServerSettings(data) {
-        data = data || {};
-        selectedSources = sourceList(pick(data, 'Sources', 'sources', []));
-        availableItems = normalizeItems(data.availableSourceItems || data.AvailableSourceItems || []);
-        storageSet(SOURCES_KEY, selectedSources);
-
-        var interval = pick(data, 'CheckIntervalHours', 'checkIntervalHours', null);
-        var smart = pick(data, 'UseTmdbSchedule', 'useTmdbSchedule', null);
-        var tmdbHours = pick(data, 'TmdbRefreshHours', 'tmdbRefreshHours', null);
-        var endedDays = pick(data, 'EndedRefreshDays', 'endedRefreshDays', null);
-        var seasonMode = pick(data, 'NewSeasonMode', 'newSeasonMode', null);
-        if (interval !== null) storageSet(KEYS.interval, String(interval));
-        if (smart !== null) storageSet(KEYS.smartTmdb, !!smart);
-        if (tmdbHours !== null) storageSet(KEYS.tmdbRefreshHours, String(tmdbHours));
-        if (endedDays !== null) storageSet(KEYS.endedRefreshDays, String(endedDays));
-        if (seasonMode) storageSet(KEYS.newSeasonMode, String(seasonMode));
-
-        rebuildSettings();
-    }
-
     function loadServerSettings() {
-        var path = '/translationsub/user-settings?uid=' + encodeURIComponent(uid());
-        request('GET', path, null, applyServerSettings, function () {
-            selectedSources = enabledSources();
+        var api = window.TranslationSubApi;
+        if (!api || typeof api.settings !== 'function') return false;
+
+        api.settings(function (data) {
+            applyCanonicalSettings(data);
+            rebuildSettings();
+        }, function () {
             availableItems = [];
+            selectedSources = sourceList(storageGet(SOURCES_KEY, []));
             rebuildSettings();
         });
-    }
-
-    function manualCheck(done) {
-        done = typeof done === 'function' ? done : function () {};
-        var sources = enabledSources();
-        if (!sources.length) {
-            notify('Выберите хотя бы один балансер в настройках');
-            done([]);
-            return;
-        }
-
-        notify('Проверяю новые серии…');
-        request('GET', '/translationsub/check?uid=' + encodeURIComponent(uid()) + '&sources=' + encodeURIComponent(sources.join(',')), null, function () {
-            function finish(updates) {
-                updates = Array.isArray(updates) ? updates : [];
-                notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
-                done(updates);
-            }
-            try {
-                if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
-                    window.TranslationSubBadgeState.refresh(finish);
-                    return;
-                }
-            } catch (e) {}
-            request('GET', '/translationsub/updates?uid=' + encodeURIComponent(uid()) + '&force=false', null, finish, function () { done([]); });
-        }, function () {
-            notify('Не удалось проверить новые серии');
-            done([]);
-        });
-    }
-
-    function exposeManualCheck() {
-        try { if (window.TranslationSub) window.TranslationSub.forceCheckUpdatesUI = manualCheck; } catch (e) {}
+        return true;
     }
 
     function start() {
-        if (!window.Lampa || !Lampa.SettingsApi) return false;
-        loadServerSettings();
-        exposeManualCheck();
-        return true;
+        if (!window.Lampa || !Lampa.SettingsApi || !window.TranslationSubApi) return false;
+        return loadServerSettings();
     }
 
     if (!start()) {
