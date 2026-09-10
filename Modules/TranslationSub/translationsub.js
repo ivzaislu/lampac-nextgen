@@ -144,6 +144,15 @@
         done([]);
     }
 
+    function applySnapshot(snapshot) {
+        snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.applySnapshot === 'function')
+                return window.TranslationSubBadgeState.applySnapshot(snapshot);
+        } catch (e) {}
+        return Array.isArray(snapshot.updates) ? snapshot.updates.slice() : [];
+    }
+
     function forceCheckUpdatesUI(done) {
         done = typeof done === 'function' ? done : function () {};
         var api = window.TranslationSubApi;
@@ -155,15 +164,15 @@
 
         notify('Проверяю новые серии…');
         api.check(function (result) {
-            if (result && result.success === false) {
+            if (!result || result.success !== true || !result.snapshot) {
                 notify('Не удалось проверить новые серии');
                 done([]);
                 return;
             }
-            refreshUpdates(function (updates) {
-                notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
-                done(updates);
-            });
+
+            var updates = applySnapshot(result.snapshot);
+            notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
+            done(updates);
         }, function () {
             notify('Не удалось проверить новые серии');
             done([]);
