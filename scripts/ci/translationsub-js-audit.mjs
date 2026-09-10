@@ -166,6 +166,9 @@ if (!source.includes('hover:long.translationsubSource')) error('Subscriptions pa
 if (!source.includes('Lampa.Select.show')) error('Subscriptions page long-press menu must use Lampa.Select');
 if (!source.includes('function restoreContentController')) error('Subscriptions page must restore the Lampa content controller after Select interaction');
 if (source.includes('Lampa.Select.close')) error('Subscriptions page must not call Lampa.Select.close(); it can trigger Android TV WebView/history freezes');
+if (/function\s+tmdbId\s*\(/.test(source)) error('Subscriptions client must not resolve TMDB/content IDs itself');
+if (!source.includes('item.navigation')) error('Subscriptions client must consume the backend navigation target');
+if (/item\.isSerial\s*!==\s*false/.test(source)) error('Subscriptions client must not decide tv/movie navigation from isSerial');
 
 const cardFlow = read(path.join(moduleDir, 'translationsub-card-flow.js'));
 if (!cardFlow.includes('deliberately only a Lampa transport adapter')) error('Card flow must document its thin transport boundary');
