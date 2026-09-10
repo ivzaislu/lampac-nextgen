@@ -90,9 +90,11 @@ public class TranslationSubV2Controller : BaseController
         return ContentTo(JsonConvert.SerializeObject(result));
     }
 
-    [HttpDelete]
+    // Dynamic Lampac modules use GET/POST routing. Treat unsubscribe as a
+    // command endpoint so the thin client does not rely on an unsupported verb.
+    [HttpPost]
     [AllowAnonymous]
-    [Route("translationsub/v2/subscriptions/{id}")]
+    [Route("translationsub/v2/subscriptions/{id}/remove")]
     public ActionResult Unsubscribe(string id, string uid = null)
     {
         uid = ResolveUid(uid);
