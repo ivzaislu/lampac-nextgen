@@ -14,8 +14,10 @@ const events = read('Shared/Models/Events/EventListener.cs');
 const timeCode = read('Modules/Sync/TimeCode/Controller.cs');
 const modInit = read('Modules/TranslationSub/ModInit.cs');
 const controller = read('Modules/TranslationSub/Controller.cs');
+const v2Controller = read('Modules/TranslationSub/V2Controller.cs');
 const watch = read('Modules/TranslationSub/translationsub-watch.js');
 const badge = read('Modules/TranslationSub/translationsub-badge-state.js');
+const apiClient = read('Modules/TranslationSub/translationsub-api.js');
 const settingsStore = read('Modules/TranslationSub/Services/TranslationSettingsStore.cs');
 const realtimeService = read('Modules/TranslationSub/Services/TranslationSubRealtimeService.cs');
 const subscriptionStore = read('Modules/TranslationSub/Services/SubscriptionStore.cs');
@@ -107,6 +109,13 @@ assert.doesNotMatch(cardFlow, /function\s+latestAiredSeason\s*\(/);
 assert.doesNotMatch(cardFlow, /function\s+normalizeVoice\s*\(/);
 assert.doesNotMatch(cardFlow, /function\s+findExisting\s*\(/);
 
+// Manual refresh is also a backend-owned command and returns the canonical snapshot.
+assert.match(v2Controller, /Route\("translationsub\/v2\/check"\)/);
+assert.match(v2Controller, /TranslationSubscriptionService\.Tick\(uid, selectedSources, force: true\)/);
+assert.match(v2Controller, /TranslationSubSnapshotService\.Build\(uid, profileId\)/);
+assert.match(apiClient, /request\('POST', '\/translationsub\/v2\/check'/);
+assert.doesNotMatch(apiClient, /['"]\/translationsub\/check/);
+
 // User-level scheduling defaults are backend-owned and match intended policy.
 assert.match(settingsStore, /CheckIntervalHours \{ get; set; \} = 1/);
 assert.match(settingsStore, /TmdbRefreshHours \{ get; set; \} = 24/);
@@ -131,7 +140,7 @@ assert.doesNotMatch(watch, /event\.type\s*===\s*['"]ready['"]/);
 assert.match(watch, /Timeline\.listener\.follow\('update'/);
 assert.doesNotMatch(badge, /setInterval\(refresh,\s*60\s*\*\s*1000\)/);
 assert.match(badge, /visibilitychange/);
-assert.match(controller, /SyncTimeCodeProgress\(uid\)/);
+assert.match(controller, /SyncTimeCodeProgress\(uid,\s*profileId\)/);
 
 // Exercise the production realtime JS with a minimal fake Lampac/WebSocket.
 const storage = new Map([
