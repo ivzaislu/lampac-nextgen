@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 
 const root = process.cwd();
 const moduleDir = path.join(root, 'Modules', 'TranslationSub');
@@ -13,175 +14,269 @@ const watchSource = read('translationsub-watch.js');
 const badgeSource = read('translationsub-badge-state.js');
 const noticeSource = read('translationsub-notice.js');
 
-// Anchor the simulation to the current production control flow. If production
-// changes before the implementation phase, this test must be reviewed instead
-// of silently simulating an obsolete design.
-assert.match(watchSource, /function\s+finish\s*\(\)[\s\S]*refreshVisibleState\(\);[\s\S]*flushCallbacks\(\);/,
-  'Current Watch flow changed: expected refreshVisibleState() before callbacks');
-assert.match(badgeSource, /function\s+openDrawerSynced\s*\(\)[\s\S]*refresh\(function\s*\(\)[\s\S]*TranslationSubNotice\.open\(\)/,
-  'Current Badge flow changed: expected explicit refresh before Notice.open()');
-assert.match(noticeSource, /function\s+openDrawer\s*\(\)[\s\S]*loadUpdates\(function\s*\(updates\)/,
-  'Current Notice flow changed: expected unconditional loadUpdates()');
+// Bind the runtime test to the implemented production ownership model.
+assert.match(watchSource, /function\s+flushCallbacks\s*\(updates\)[\s\S]*callback\(updates\)/,
+  'Watch must pass refreshed updates to sync callbacks');
+assert.match(watchSource, /function\s+finish\s*\(\)[\s\S]*refreshVisibleState\(function\s*\(updates\)[\s\S]*complete\(updates,\s*350\)/,
+  'Watch success path must refresh Badge once before completing callbacks');
+assert.match(watchSource, /function\s+failProgress\s*\(\)[\s\S]*refreshVisibleState\(function\s*\(updates\)/,
+  'Watch progress-error path must still perform one Badge refresh');
+assert.match(badgeSource, /TranslationSubWatch\.sync\(openWithUpdates\)/,
+  'Badge must consume updates returned by Watch.sync');
+assert.match(badgeSource, /refresh\(openWithUpdates\)/,
+  'Badge no-Watch fallback must perform exactly one refresh');
+assert.match(badgeSource, /TranslationSubNotice\.open\(updates\)/,
+  'Badge must pass preloaded updates into Notice.open');
+assert.doesNotMatch(badgeSource, /refresh\(function\s*\(\)[\s\S]*TranslationSubNotice\.open\(\)/,
+  'Legacy Badge refresh-then-Notice-reload flow is still present');
+assert.match(noticeSource, /function\s+openDrawer\s*\(preloadedUpdates\)/,
+  'Notice.open must accept preloaded updates');
+assert.match(noticeSource, /if\s*\(Array\.isArray\(preloadedUpdates\)\)[\s\S]*renderDrawer\(preloadedUpdates\)/,
+  'Notice must render preloaded updates without a network reload');
+assert.match(noticeSource, /loadUpdates\(renderDrawer\)/,
+  'Standalone Notice fallback must retain its own loader');
+assert.match(noticeSource, /profile_id/,
+  'Standalone Notice fallback must remain profile-aware');
 assert.match(badgeSource, /addQuery\(parts,\s*['"]profile_id['"],\s*profileId\(\)\)/,
   'Badge updates request must remain profile-aware');
-assert.doesNotMatch(noticeSource, /profile_id/,
-  'Notice unexpectedly became profile-aware; update simulation assumptions');
 
-function makeNetwork({ failProgress = false, failUpdates = false, updates = [{ id: 'u1' }] } = {}) {
-  const calls = [];
-  return {
-    calls,
-    async progress(profileId) {
-      calls.push({ route: '/translationsub/progress', profileId });
-      if (failProgress) throw new Error('progress failed');
-      return { success: true };
+function jqueryStub(arg) {
+  const created = typeof arg === 'string' && arg.trim().startsWith('<');
+  const node = created ? {} : undefined;
+  const api = {
+    length: created ? 1 : 0,
+    0: node,
+    each(fn) {
+      if (this.length && typeof fn === 'function') fn.call(this[0], 0, this[0]);
+      return this;
     },
-    async updates(profileId) {
-      calls.push({ route: '/translationsub/updates', profileId });
-      if (failUpdates) throw new Error('updates failed');
-      return updates.slice();
+    children() { return jqueryStub(''); },
+    first() { return this; },
+    append() { return this; },
+    text() { return this; },
+    show() { return this; },
+    hide() { return this; },
+    find() { return created ? jqueryStub('<div></div>') : jqueryStub(''); },
+    attr(name, value) { return value === undefined ? '' : this; },
+    addClass() { return this; },
+    empty() { return this; },
+    remove() { return this; },
+    on() { return this; },
+    html() { return this; }
+  };
+  return api;
+}
+
+function createRuntime({ updates = [{ id: 'u1' }] } = {}) {
+  const storage = {
+    lampac_unic_id: 'ci-user',
+    lampac_profile_id: '7',
+    translationsub_card_source: 'tmdb'
+  };
+
+  const network = {
+    calls: [],
+    modals: [],
+    updates: updates.slice(),
+    failProgress: false,
+    failUpdates: false
+  };
+
+  function response(data) {
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify(data))
+    });
+  }
+
+  const sandbox = {
+    console,
+    Promise,
+    Date,
+    Math,
+    URL,
+    encodeURIComponent,
+    decodeURIComponent,
+    parseInt,
+    isNaN,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+    location: { origin: 'http://lampac.test' },
+    localStorage: {
+      getItem(name) {
+        return Object.prototype.hasOwnProperty.call(storage, name) ? String(storage[name]) : null;
+      },
+      setItem(name, value) {
+        storage[name] = value;
+      }
+    },
+    document: {
+      hidden: false,
+      head: { appendChild() {} },
+      documentElement: { appendChild() {} },
+      getElementById() { return null; },
+      createElement() { return {}; },
+      addEventListener() {}
+    },
+    $: jqueryStub,
+    fetch(url) {
+      const value = String(url);
+      network.calls.push(value);
+      if (value.includes('/translationsub/progress?')) {
+        if (network.failProgress) return Promise.reject(new Error('progress failed'));
+        return response({ success: true, count: 1, source: 'lampac-timecode' });
+      }
+      if (value.includes('/translationsub/updates?')) {
+        if (network.failUpdates) return Promise.reject(new Error('updates failed'));
+        return response(network.updates.slice());
+      }
+      return response({});
     }
   };
-}
 
-function count(net, route) {
-  return net.calls.filter((call) => call.route === route).length;
-}
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  sandbox.Lampa = {
+    Storage: {
+      get(name, fallback) {
+        return Object.prototype.hasOwnProperty.call(storage, name) ? storage[name] : fallback;
+      },
+      set(name, value) {
+        storage[name] = value;
+      }
+    },
+    Utils: { uid: () => 'ci-generated' },
+    Listener: { follow() {} },
+    Template: {
+      get() { throw new Error('template unavailable in CI stub'); },
+      string() { return '<svg></svg>'; }
+    },
+    Modal: {
+      open(config) { network.modals.push(config); },
+      close() {}
+    },
+    Controller: { toggle() {} },
+    Activity: { push() {} }
+  };
 
-// Model the production success path exactly at the ownership level:
-// Watch.finish() refreshes Badge, Badge.open() refreshes again, then Notice.open()
-// loads again. The first refresh can overlap the second, but it is still a request.
-async function simulateCurrentBellSuccess(profileId) {
-  const net = makeNetwork();
-  await net.progress(profileId);
-  await Promise.all([
-    net.updates(profileId), // Watch.finish() -> refreshVisibleState()
-    (async () => {
-      await net.updates(profileId); // Badge.open() -> refresh(...)
-      await net.updates(null);      // Notice.open() -> loadUpdates(), no profile_id today
-    })()
-  ]);
-  return net;
-}
+  const context = vm.createContext(sandbox);
+  vm.runInContext(watchSource, context, { filename: 'translationsub-watch.js' });
+  vm.runInContext(noticeSource, context, { filename: 'translationsub-notice.js' });
+  vm.runInContext(badgeSource, context, { filename: 'translationsub-badge-state.js' });
 
-// Target design primitives. These are CI-only models; production JS is not changed.
-async function targetBadgeRefresh(net, profileId, cachedUpdates) {
-  try {
-    return await net.updates(profileId);
-  } catch {
-    return cachedUpdates.slice();
+  async function settle() {
+    for (let i = 0; i < 8; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
   }
-}
 
-async function targetNoticeOpen(net, profileId, preloadedUpdates) {
-  if (Array.isArray(preloadedUpdates)) {
-    return { updates: preloadedUpdates.slice(), networkLoad: false };
+  async function ready() {
+    // Badge performs one startup refresh. Let it settle, then remove it from the
+    // measurement so each test counts only the user action under test.
+    await settle();
+    network.calls.length = 0;
+    network.modals.length = 0;
   }
 
-  try {
-    return { updates: await net.updates(profileId), networkLoad: true };
-  } catch {
-    return { updates: [], networkLoad: true };
+  function count(route) {
+    return network.calls.filter((url) => new URL(url).pathname === route).length;
   }
-}
 
-async function targetWatchSync(net, profileId, cachedUpdates) {
-  try {
-    await net.progress(profileId);
-  } catch {
-    // Progress reconciliation remains best effort. We still perform one Badge refresh
-    // so the drawer can open with the freshest server state available.
+  function routeCalls(route) {
+    return network.calls.filter((url) => new URL(url).pathname === route);
   }
-  return targetBadgeRefresh(net, profileId, cachedUpdates);
+
+  return { sandbox, network, ready, settle, count, routeCalls };
 }
 
-async function simulateTargetBell({ failProgress = false, failUpdates = false, cachedUpdates = [] } = {}) {
-  const profileId = '7';
-  const net = makeNetwork({ failProgress, failUpdates });
-  const updates = await targetWatchSync(net, profileId, cachedUpdates);
-  const notice = await targetNoticeOpen(net, profileId, updates);
-  return { net, notice, profileId };
-}
-
-// 1) Prove the problem exists in the current ownership model.
+// 1) Production success path: exactly one TimeCode reconciliation and one updates fetch.
 {
-  const net = await simulateCurrentBellSuccess('7');
-  assert.equal(count(net, '/translationsub/progress'), 1);
-  assert.equal(count(net, '/translationsub/updates'), 3);
-  const updateCalls = net.calls.filter((call) => call.route === '/translationsub/updates');
-  assert.equal(updateCalls.filter((call) => call.profileId === '7').length, 2);
-  assert.equal(updateCalls.filter((call) => call.profileId === null).length, 1);
-  console.log('CURRENT success flow: 1 progress + 3 updates (confirmed by simulation)');
+  const rt = createRuntime();
+  await rt.ready();
+  rt.sandbox.TranslationSubBadgeState.open();
+  await rt.settle();
+
+  assert.equal(rt.count('/translationsub/progress'), 1);
+  assert.equal(rt.count('/translationsub/updates'), 1);
+  assert.equal(rt.network.modals.length, 1);
+  const updateUrl = new URL(rt.routeCalls('/translationsub/updates')[0]);
+  assert.equal(updateUrl.searchParams.get('profile_id'), '7');
+  console.log('PRODUCTION success flow: 1 progress + 1 updates, profile preserved');
 }
 
-// 2) Target success path must be exactly 1 + 1, with no Notice network reload.
+// 2) Empty updates are valid preloaded data; Notice must not reload them.
 {
-  const { net, notice, profileId } = await simulateTargetBell();
-  assert.equal(count(net, '/translationsub/progress'), 1);
-  assert.equal(count(net, '/translationsub/updates'), 1);
-  assert.equal(notice.networkLoad, false);
-  assert.deepEqual(notice.updates, [{ id: 'u1' }]);
-  const updateCall = net.calls.find((call) => call.route === '/translationsub/updates');
-  assert.equal(updateCall.profileId, profileId);
-  console.log('TARGET success flow: 1 progress + 1 updates, profile preserved');
+  const rt = createRuntime({ updates: [] });
+  await rt.ready();
+  rt.sandbox.TranslationSubBadgeState.open();
+  await rt.settle();
+
+  assert.equal(rt.count('/translationsub/progress'), 1);
+  assert.equal(rt.count('/translationsub/updates'), 1);
+  assert.equal(rt.network.modals.length, 1);
+  console.log('PRODUCTION empty flow: 1 + 1, no duplicate fetch for []');
 }
 
-// 3) Empty preloaded data is valid data and must not trigger Notice fallback fetch.
+// 3) Progress failure remains best-effort and still performs only one updates fetch.
 {
-  const net = makeNetwork({ updates: [] });
-  const profileId = '7';
-  const updates = await targetWatchSync(net, profileId, []);
-  const notice = await targetNoticeOpen(net, profileId, updates);
-  assert.equal(count(net, '/translationsub/progress'), 1);
-  assert.equal(count(net, '/translationsub/updates'), 1);
-  assert.equal(notice.networkLoad, false);
-  assert.deepEqual(notice.updates, []);
-  console.log('TARGET empty flow: no duplicate fetch for []');
+  const rt = createRuntime();
+  await rt.ready();
+  rt.network.failProgress = true;
+  rt.sandbox.TranslationSubBadgeState.open();
+  await rt.settle();
+
+  assert.equal(rt.count('/translationsub/progress'), 1);
+  assert.equal(rt.count('/translationsub/updates'), 1);
+  assert.equal(rt.network.modals.length, 1);
+  console.log('PRODUCTION progress-error flow: still exactly one updates request');
 }
 
-// 4) /progress failure must not cause a second /updates retry.
+// 4) Updates failure uses Badge cache and Notice must not retry the network.
 {
-  const { net, notice } = await simulateTargetBell({ failProgress: true });
-  assert.equal(count(net, '/translationsub/progress'), 1);
-  assert.equal(count(net, '/translationsub/updates'), 1);
-  assert.equal(notice.networkLoad, false);
-  console.log('TARGET progress-error flow: still exactly one updates request');
+  const rt = createRuntime({ updates: [{ id: 'cached' }] });
+  await rt.ready();
+  rt.network.failUpdates = true;
+  rt.sandbox.TranslationSubBadgeState.open();
+  await rt.settle();
+
+  assert.equal(rt.count('/translationsub/progress'), 1);
+  assert.equal(rt.count('/translationsub/updates'), 1);
+  assert.equal(rt.network.modals.length, 1);
+  console.log('PRODUCTION updates-error flow: cached data, no Notice retry');
 }
 
-// 5) /updates failure must use Badge cache and must not make Notice retry the network.
+// 5) Badge without Watch falls back to one profile-aware updates request.
 {
-  const cached = [{ id: 'cached' }];
-  const { net, notice } = await simulateTargetBell({ failUpdates: true, cachedUpdates: cached });
-  assert.equal(count(net, '/translationsub/progress'), 1);
-  assert.equal(count(net, '/translationsub/updates'), 1);
-  assert.equal(notice.networkLoad, false);
-  assert.deepEqual(notice.updates, cached);
-  console.log('TARGET updates-error flow: cached data, no network retry');
+  const rt = createRuntime();
+  await rt.ready();
+  rt.sandbox.TranslationSubWatch = null;
+  rt.sandbox.TranslationSubBadgeState.open();
+  await rt.settle();
+
+  assert.equal(rt.count('/translationsub/progress'), 0);
+  assert.equal(rt.count('/translationsub/updates'), 1);
+  assert.equal(rt.network.modals.length, 1);
+  const updateUrl = new URL(rt.routeCalls('/translationsub/updates')[0]);
+  assert.equal(updateUrl.searchParams.get('profile_id'), '7');
+  console.log('PRODUCTION no-Watch fallback: exactly one profile-aware updates request');
 }
 
-// 6) Badge fallback without Watch: one updates request, then preloaded Notice render.
+// 6) Standalone Notice remains functional and loads once with profile_id.
 {
-  const net = makeNetwork();
-  const profileId = '7';
-  const updates = await targetBadgeRefresh(net, profileId, []);
-  const notice = await targetNoticeOpen(net, profileId, updates);
-  assert.equal(count(net, '/translationsub/progress'), 0);
-  assert.equal(count(net, '/translationsub/updates'), 1);
-  assert.equal(notice.networkLoad, false);
-  console.log('TARGET no-Watch fallback: exactly one updates request');
+  const rt = createRuntime();
+  await rt.ready();
+  rt.sandbox.TranslationSubNotice.open();
+  await rt.settle();
+
+  assert.equal(rt.count('/translationsub/progress'), 0);
+  assert.equal(rt.count('/translationsub/updates'), 1);
+  assert.equal(rt.network.modals.length, 1);
+  const updateUrl = new URL(rt.routeCalls('/translationsub/updates')[0]);
+  assert.equal(updateUrl.searchParams.get('profile_id'), '7');
+  console.log('PRODUCTION standalone Notice fallback: one profile-aware updates request');
 }
 
-// 7) Standalone Notice remains functional and its fallback becomes profile-aware.
-{
-  const net = makeNetwork();
-  const profileId = '7';
-  const notice = await targetNoticeOpen(net, profileId, undefined);
-  assert.equal(count(net, '/translationsub/progress'), 0);
-  assert.equal(count(net, '/translationsub/updates'), 1);
-  assert.equal(notice.networkLoad, true);
-  const updateCall = net.calls.find((call) => call.route === '/translationsub/updates');
-  assert.equal(updateCall.profileId, profileId);
-  console.log('TARGET standalone Notice fallback: one profile-aware updates request');
-}
-
-console.log('TranslationSub bell-flow design simulation passed.');
+console.log('TranslationSub production bell-flow runtime simulation passed.');
