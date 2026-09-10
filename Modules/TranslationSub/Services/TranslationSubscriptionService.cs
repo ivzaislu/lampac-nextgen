@@ -26,9 +26,9 @@ public static class TranslationSubscriptionService
         timer = null;
     }
 
-    public static async Task Tick(string userKey = null, HashSet<string> selectedSources = null, bool force = false)
+    public static async Task Tick(string uid = null, HashSet<string> selectedSources = null, bool force = false)
     {
-        force = force || !string.IsNullOrWhiteSpace(userKey);
+        force = force || !string.IsNullOrWhiteSpace(uid);
 
         bool entered = false;
         try
@@ -53,12 +53,15 @@ public static class TranslationSubscriptionService
 
             foreach (var sub in snapshot)
             {
-                if (!string.IsNullOrWhiteSpace(userKey) && sub.UserKey != userKey)
+                if (!string.IsNullOrWhiteSpace(uid) && !string.Equals(sub.Uid, uid, StringComparison.Ordinal))
                     continue;
 
                 try
                 {
-                    string settingsKey = string.IsNullOrWhiteSpace(sub.UserKey) ? "local" : sub.UserKey;
+                    string settingsKey = sub.Uid?.Trim();
+                    if (string.IsNullOrWhiteSpace(settingsKey))
+                        continue;
+
                     if (!settingsCache.TryGetValue(settingsKey, out var settings))
                     {
                         settings = TranslationSettingsStore.Get(settingsKey);
@@ -524,7 +527,7 @@ public static class TranslationSubscriptionService
         SubscriptionStore.MutateIfChanged(list =>
         {
             bool exists = list.Any(x =>
-                x.UserKey == sub.UserKey
+                string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal)
                 && x.ContentId == sub.ContentId
                 && x.CurrentSeason.GetValueOrDefault(1) == newSeason
                 && (
@@ -537,7 +540,6 @@ public static class TranslationSubscriptionService
             list.Add(new TranslationSubscription
             {
                 Id = Guid.NewGuid().ToString("N"),
-                UserKey = sub.UserKey,
                 Uid = sub.Uid,
                 ContentId = sub.ContentId,
                 Title = sub.Title,
