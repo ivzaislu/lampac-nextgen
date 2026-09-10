@@ -9,7 +9,7 @@ namespace TranslationSub.Services;
 
 public class TranslationUserSettings
 {
-    public string UserKey { get; set; }
+    public string Uid { get; set; }
     public int CheckIntervalHours { get; set; } = 1;
     public List<string> Sources { get; set; } = new();
     public bool UseTmdbSchedule { get; set; } = true;
@@ -53,10 +53,10 @@ public static class TranslationSettingsStore
         File.Move(temp, path, true);
     }
 
-    static TranslationUserSettings Normalize(TranslationUserSettings value, string userKey = null, bool touchUpdatedAt = false)
+    static TranslationUserSettings Normalize(TranslationUserSettings value, string uid = null, bool touchUpdatedAt = false)
     {
         value ??= new TranslationUserSettings();
-        value.UserKey = string.IsNullOrWhiteSpace(value.UserKey) ? (userKey ?? "local") : value.UserKey;
+        value.Uid = string.IsNullOrWhiteSpace(value.Uid) ? uid?.Trim() : value.Uid.Trim();
         value.CheckIntervalHours = Math.Max(1, Math.Min(24, value.CheckIntervalHours));
         value.TmdbRefreshHours = Math.Max(6, Math.Min(168, value.TmdbRefreshHours <= 0 ? 24 : value.TmdbRefreshHours));
         value.EndedRefreshDays = Math.Max(1, Math.Min(90, value.EndedRefreshDays <= 0 ? 7 : value.EndedRefreshDays));
@@ -92,7 +92,7 @@ public static class TranslationSettingsStore
     {
         return new TranslationUserSettings
         {
-            UserKey = value.UserKey,
+            Uid = value.Uid,
             CheckIntervalHours = value.CheckIntervalHours,
             Sources = value.Sources?.ToList() ?? new List<string>(),
             UseTmdbSchedule = value.UseTmdbSchedule,
@@ -103,22 +103,24 @@ public static class TranslationSettingsStore
         };
     }
 
-    public static TranslationUserSettings Get(string userKey)
+    public static TranslationUserSettings Get(string uid)
     {
-        userKey = string.IsNullOrWhiteSpace(userKey) ? "local" : userKey;
+        uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim();
 
         lock (locker)
         {
-            var current = LoadUnsafe().FirstOrDefault(x => x.UserKey == userKey);
+            var current = uid == null
+                ? null
+                : LoadUnsafe().FirstOrDefault(x => string.Equals(x.Uid, uid, StringComparison.Ordinal));
             if (current == null)
-                return Normalize(new TranslationUserSettings { UserKey = userKey }, userKey);
+                return Normalize(new TranslationUserSettings { Uid = uid }, uid);
 
-            return Normalize(Clone(current), userKey);
+            return Normalize(Clone(current), uid);
         }
     }
 
     public static TranslationUserSettings Set(
-        string userKey,
+        string uid,
         int checkIntervalHours,
         IEnumerable<string> sources,
         bool? useTmdbSchedule = null,
@@ -126,15 +128,17 @@ public static class TranslationSettingsStore
         int? endedRefreshDays = null,
         string newSeasonMode = null)
     {
-        userKey = string.IsNullOrWhiteSpace(userKey) ? "local" : userKey;
+        uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim();
+        if (uid == null)
+            throw new ArgumentException("uid is required", nameof(uid));
 
         lock (locker)
         {
             var list = LoadUnsafe();
-            var current = list.FirstOrDefault(x => x.UserKey == userKey);
+            var current = list.FirstOrDefault(x => string.Equals(x.Uid, uid, StringComparison.Ordinal));
             if (current == null)
             {
-                current = new TranslationUserSettings { UserKey = userKey };
+                current = new TranslationUserSettings { Uid = uid };
                 list.Add(current);
             }
 
@@ -145,7 +149,7 @@ public static class TranslationSettingsStore
             if (endedRefreshDays.HasValue) current.EndedRefreshDays = endedRefreshDays.Value;
             if (!string.IsNullOrWhiteSpace(newSeasonMode)) current.NewSeasonMode = newSeasonMode;
 
-            Normalize(current, userKey, true);
+            Normalize(current, uid, true);
             SaveUnsafe(list);
             return Clone(current);
         }
