@@ -33,7 +33,10 @@ public class TranslationSubSettingsController : BaseController
         return ContentTo(json.ToString(Formatting.None));
     }
 
-    [HttpPut]
+    // Dynamic Lampac module routing is built around GET/POST endpoints.
+    // Keep the v2 resource path canonical while using the runtime-supported
+    // mutation verb instead of exposing an endpoint that silently falls through.
+    [HttpPost]
     [AllowAnonymous]
     [Route("translationsub/v2/settings")]
     async public Task<ActionResult> SetSettings()
