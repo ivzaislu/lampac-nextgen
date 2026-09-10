@@ -7,17 +7,10 @@
     var META = {
         component: 'translationsub',
         name: 'Подписки на озвучки',
-        version: '3.0.0',
+        version: '4.0.0-backend-first',
         description: 'Подписки на озвучки и уведомления о новых сериях',
         type: 'other'
     };
-
-    var API = {
-        updates: '/translationsub/updates',
-        check: '/translationsub/check',
-        settings: '/translationsub/user-settings'
-    };
-    var SOURCES_KEY = 'translationsub_sources';
     var state = { started: false };
 
     function log() {
@@ -27,21 +20,6 @@
             console.log.apply(console, args);
         } catch (e) {}
     }
-
-    function detectHost() {
-        try {
-            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
-            var scripts = document.getElementsByTagName('script');
-            for (var i = scripts.length - 1; i >= 0; i--) {
-                var src = scripts[i].src || '';
-                if (src.indexOf('/translationsub.js') !== -1 && typeof URL === 'function')
-                    return new URL(src, window.location.href).origin;
-            }
-        } catch (e) {}
-        try { return window.location.origin || ''; } catch (e2) { return ''; }
-    }
-
-    var HOST = detectHost();
 
     function storageGet(name, fallback) {
         try {
@@ -61,27 +39,7 @@
                 return;
             }
         } catch (e) {}
-        try { localStorage.setItem(name, typeof value === 'string' ? value : JSON.stringify(value)); } catch (e2) {}
-    }
-
-    function sourceList(value) {
-        if (typeof value === 'string') {
-            try { value = JSON.parse(value); }
-            catch (e) { value = value ? value.split(',') : []; }
-        }
-        if (!Array.isArray(value)) return [];
-
-        var seen = {};
-        return value.map(function (item) { return String(item || '').trim().toLowerCase(); })
-            .filter(function (item) {
-                if (!item || seen[item]) return false;
-                seen[item] = true;
-                return true;
-            });
-    }
-
-    function enabledSources() {
-        return sourceList(storageGet(SOURCES_KEY, []));
+        try { localStorage.setItem(name, value); } catch (e2) {}
     }
 
     function lampacUid() {
@@ -94,62 +52,6 @@
         if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
         storageSet('lampac_unic_id', uid);
         return uid;
-    }
-
-    function query(params) {
-        var parts = [];
-        params = params || {};
-        Object.keys(params).forEach(function (key) {
-            var value = params[key];
-            if (value === null || value === undefined || value === '') return;
-            parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(value)));
-        });
-        return parts.join('&');
-    }
-
-    function parseJson(value, fallback) {
-        if (value === null || value === undefined || value === '') return fallback;
-        if (typeof value === 'object') return value;
-        try { return JSON.parse(value); } catch (e) { return fallback; }
-    }
-
-    function request(method, path, params, success, error) {
-        success = success || function () {};
-        error = error || function () {};
-        var qs = query(params);
-        var url = HOST + path + (qs ? (path.indexOf('?') === -1 ? '?' : '&') + qs : '');
-
-        if (typeof fetch === 'function') {
-            fetch(url, { method: method, cache: 'no-store' })
-                .then(function (response) {
-                    if (!response.ok) throw new Error('HTTP ' + response.status);
-                    return response.text();
-                })
-                .then(function (text) { success(parseJson(text, {})); })
-                .catch(error);
-            return;
-        }
-
-        try {
-            var xhr = new XMLHttpRequest();
-            xhr.open(method, url, true);
-            xhr.setRequestHeader('Cache-Control', 'no-cache');
-            xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) success(parseJson(xhr.responseText, {}));
-                else error(new Error('HTTP ' + xhr.status));
-            };
-            xhr.send(null);
-        } catch (e) { error(e); }
-    }
-
-    function refreshSourceSelection(done) {
-        done = typeof done === 'function' ? done : function () {};
-        request('GET', API.settings, { uid: lampacUid() }, function (settings) {
-            var sources = sourceList(settings && (settings.Sources || settings.sources));
-            storageSet(SOURCES_KEY, sources);
-            done(sources, settings || {});
-        }, function () { done(enabledSources(), {}); });
     }
 
     function notify(text) {
@@ -231,30 +133,40 @@
             }
         } catch (e) {}
 
-        request('GET', API.updates, { uid: lampacUid(), force: 'false' }, function (updates) {
-            done(Array.isArray(updates) ? updates : []);
-        }, function () { done([]); });
+        var api = window.TranslationSubApi;
+        if (api && typeof api.snapshot === 'function') {
+            api.snapshot(function (snapshot) {
+                done(snapshot && Array.isArray(snapshot.updates) ? snapshot.updates : []);
+            }, function () { done([]); });
+            return;
+        }
+
+        done([]);
     }
 
     function forceCheckUpdatesUI(done) {
         done = typeof done === 'function' ? done : function () {};
-        refreshSourceSelection(function (sources) {
-            if (!sources.length) {
-                notify('Выберите хотя бы один балансер в настройках');
+        var api = window.TranslationSubApi;
+        if (!api || typeof api.check !== 'function') {
+            notify('TranslationSub API недоступен');
+            done([]);
+            return;
+        }
+
+        notify('Проверяю новые серии…');
+        api.check(function (result) {
+            if (result && result.success === false) {
+                notify('Не удалось проверить новые серии');
                 done([]);
                 return;
             }
-
-            notify('Проверяю новые серии…');
-            request('GET', API.check, { uid: lampacUid(), sources: sources.join(',') }, function () {
-                refreshUpdates(function (updates) {
-                    notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
-                    done(updates);
-                });
-            }, function () {
-                notify('Не удалось проверить новые серии');
-                done([]);
+            refreshUpdates(function (updates) {
+                notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
+                done(updates);
             });
+        }, function () {
+            notify('Не удалось проверить новые серии');
+            done([]);
         });
     }
 
@@ -274,7 +186,10 @@
 
     function refresh() {
         injectHeadButton();
-        refreshUpdates();
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
+                window.TranslationSubBadgeState.render();
+        } catch (e) {}
         var flow = cardFlow();
         if (flow && typeof flow.refreshButton === 'function') flow.refreshButton();
     }
@@ -284,8 +199,6 @@
         Lampa.Listener.follow('app', function (event) {
             if (!event || event.type !== 'ready') return;
             injectHeadButton();
-            refreshSourceSelection();
-            refreshUpdates();
         });
     }
 
@@ -296,7 +209,6 @@
         injectStyles();
         injectHeadButton();
         bindLampa();
-        refreshSourceSelection();
 
         window.TranslationSub = {
             version: META.version,
@@ -306,11 +218,13 @@
             checkUpdates: refreshUpdates,
             forceCheckUpdatesUI: forceCheckUpdatesUI,
             refresh: refresh,
-            enabledSources: enabledSources,
-            refreshSources: refreshSourceSelection
+            // Compatibility hooks while the settings layer is migrated. Server
+            // settings are authoritative; these hooks no longer own source state.
+            enabledSources: function () { return []; },
+            refreshSources: function (done) { if (typeof done === 'function') done([]); }
         };
 
-        log('plugin core started', META.version, HOST);
+        log('plugin core started', META.version);
     }
 
     if (window.Lampa) start();
