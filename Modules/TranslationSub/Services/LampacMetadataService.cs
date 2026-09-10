@@ -27,7 +27,7 @@ public static class LampacMetadataService
 
         if (metadata == null || metadata.Count == 0)
         {
-            Serilog.Log.Error(
+            Serilog.Log.Warning(
                 "TranslationSub metadata returned zero voices. Sources={Sources}; Season={Season}; Serial={Serial}",
                 string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)),
                 query.Season,
@@ -62,7 +62,7 @@ public static class LampacMetadataService
 
         if (metadata.Count > 0 && raw.Count == 0)
         {
-            Serilog.Log.Error(
+            Serilog.Log.Warning(
                 "TranslationSub metadata voices were filtered to zero variants. Metadata={MetadataCount}; Season={Season}; Serial={Serial}",
                 metadata.Count,
                 query.Season,
