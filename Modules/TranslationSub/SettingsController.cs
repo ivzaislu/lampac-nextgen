@@ -18,6 +18,7 @@ public class TranslationSubSettingsController : BaseController
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/user-settings")]
+    [Route("translationsub/v2/settings")]
     async public Task<ActionResult> GetSettings(string uid = null)
     {
         uid = ResolveUid(uid);
@@ -44,7 +45,16 @@ public class TranslationSubSettingsController : BaseController
     [HttpPost]
     [AllowAnonymous]
     [Route("translationsub/user-settings")]
-    async public Task<ActionResult> SetSettings()
+    public Task<ActionResult> SetSettings()
+        => SetSettingsCore();
+
+    [HttpPut]
+    [AllowAnonymous]
+    [Route("translationsub/v2/settings")]
+    public Task<ActionResult> SetSettingsV2()
+        => SetSettingsCore();
+
+    async Task<ActionResult> SetSettingsCore()
     {
         using var reader = new StreamReader(Request.Body, Encoding.UTF8);
         string raw = await reader.ReadToEndAsync();
