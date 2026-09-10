@@ -26,12 +26,10 @@ public class TranslationSubController : BaseController
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("[]");
 
-        SyncTimeCodeProgress(uid);
+        string profileId = ResolveProfileId();
+        SyncTimeCodeProgress(uid, profileId);
 
-        var list = SubscriptionStore.Load()
-            .Where(x => string.Equals(x.Uid, uid, StringComparison.Ordinal))
-            .ToList();
-
+        var list = TranslationSubProjectionService.ForProfile(uid, profileId);
         return ContentTo(JsonConvert.SerializeObject(list));
     }
 
@@ -45,14 +43,13 @@ public class TranslationSubController : BaseController
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("[]");
 
-        SyncTimeCodeProgress(uid);
+        string profileId = ResolveProfileId();
+        SyncTimeCodeProgress(uid, profileId);
 
         if (force)
             await TranslationSubscriptionService.Tick(uid, ResolveSources(uid, sources), force: true);
 
-        var list = SubscriptionStore.Load()
-            .Where(x => string.Equals(x.Uid, uid, StringComparison.Ordinal))
-            .ToList();
+        var list = TranslationSubProjectionService.ForProfile(uid, profileId);
 
         var updates = list
             .Where(x => !x.Notified && x.LastEpisode.GetValueOrDefault(0) > x.CurrentEpisode.GetValueOrDefault(0))
@@ -112,7 +109,8 @@ public class TranslationSubController : BaseController
             }));
         }
 
-        int synced = SyncTimeCodeProgress(uid);
+        string profileId = ResolveProfileId();
+        int synced = SyncTimeCodeProgress(uid, profileId);
         int count = SubscriptionStore.Load()
             .Count(x => string.Equals(x.Uid, uid, StringComparison.Ordinal));
 
@@ -121,8 +119,35 @@ public class TranslationSubController : BaseController
             success = true,
             count,
             synced,
+            profileId,
             source = "lampac-timecode"
         }));
+    }
+
+    [HttpGet]
+    [AllowAnonymous]
+    [Route("translationsub/v2/snapshot")]
+    public ActionResult Snapshot(string uid = null)
+    {
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+        {
+            return ContentTo(JsonConvert.SerializeObject(new
+            {
+                success = false,
+                error = "uid required"
+            }));
+        }
+
+        string profileId = ResolveProfileId();
+
+        // Transitional compatibility: keep the new durable profile projection warm
+        // on reads until the TimeCode writer audit proves every write is observed by
+        // the server hook. The v2 client itself never owns progress reconciliation.
+        SyncTimeCodeProgress(uid, profileId);
+
+        return ContentTo(JsonConvert.SerializeObject(
+            TranslationSubSnapshotService.Build(uid, profileId)));
     }
 
     [HttpGet]
@@ -187,7 +212,8 @@ public class TranslationSubController : BaseController
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
 
-        SyncTimeCodeProgress(uid);
+        string profileId = ResolveProfileId();
+        SyncTimeCodeProgress(uid, profileId);
         await TranslationSubscriptionService.Tick(uid, ResolveSources(uid, sources), force: true);
         return ContentTo("{\"success\":true}");
     }
@@ -222,7 +248,7 @@ public class TranslationSubController : BaseController
             list.Add(sub);
         });
 
-        SyncTimeCodeProgress(uid);
+        SyncTimeCodeProgress(uid, ResolveProfileId());
         return ContentTo("{\"success\":true}");
     }
 
@@ -238,6 +264,7 @@ public class TranslationSubController : BaseController
 
         SubscriptionStore.Mutate(list => list.RemoveAll(x =>
             x.Id == id && string.Equals(x.Uid, uid, StringComparison.Ordinal)));
+        ProfileProgressStore.RemoveSubscription(uid, id);
         return ContentTo("{\"success\":true}");
     }
 
@@ -256,15 +283,20 @@ public class TranslationSubController : BaseController
         return null;
     }
 
-    int SyncTimeCodeProgress(string uid)
+    string ResolveProfileId()
+    {
+        if (Request.Query.TryGetValue("profile_id", out var profileQuery))
+            return ProfileProgressStore.NormalizeProfileId(profileQuery.ToString());
+
+        return "0";
+    }
+
+    int SyncTimeCodeProgress(string uid, string profileId = null)
     {
         if (string.IsNullOrWhiteSpace(uid))
             return 0;
 
-        string profileId = null;
-        if (Request.Query.TryGetValue("profile_id", out var profileQuery))
-            profileId = profileQuery.ToString();
-
+        profileId ??= ResolveProfileId();
         return TimeCodeProgressService.SyncUser(uid, profileId);
     }
 
