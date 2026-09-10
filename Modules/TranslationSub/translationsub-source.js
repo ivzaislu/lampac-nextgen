@@ -36,34 +36,28 @@
         } catch (e) {}
     }
 
-    function tmdbId(item) {
-        var id = String(item && item.tmdbId || '').trim();
-        if (!id) {
-            var fallback = String(item && item.contentId || '').trim();
-            if (/^\d+$/.test(fallback)) id = fallback;
-        }
-        return id;
-    }
-
     function openCard(item) {
         if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
 
-        var id = tmdbId(item);
+        var target = item && item.navigation && typeof item.navigation === 'object'
+            ? item.navigation
+            : {};
+        var id = String(target.id || '').trim();
         if (!id) {
-            notify('TMDB ID не найден. Пересоздайте подписку из карточки сериала.');
+            notify('Карточка недоступна. Пересоздайте подписку из карточки сериала.');
             return;
         }
 
         var source = selectedSource();
         var numericId = /^\d+$/.test(id) ? Number(id) : id;
-        var isSerial = !item || item.isSerial !== false;
+        var method = String(target.method || '').toLowerCase() === 'movie' ? 'movie' : 'tv';
 
         Lampa.Activity.push({
             url: '',
             component: 'full',
             source: source,
             id: numericId,
-            method: isSerial ? 'tv' : 'movie',
+            method: method,
             card: { id: numericId, source: source }
         });
     }
@@ -108,6 +102,7 @@
         var title = String(item.title || 'Подписка');
         var voice = String(item.translationName || 'Озвучка');
         var season = Number(item.season || 1) || 1;
+        var method = item.navigation && String(item.navigation.method || '').toLowerCase() === 'movie' ? 'movie' : 'tv';
         var actions = [];
 
         if (item.hasNewEpisodes) {
@@ -127,7 +122,7 @@
 
         actions.push({
             title: 'Отписаться от озвучки',
-            subtitle: voice + (item.isSerial !== false ? (' · ' + season + ' сезон') : ''),
+            subtitle: voice + (method === 'tv' ? (' · ' + season + ' сезон') : ''),
             onclick: function () {
                 if (!id) return;
                 var api = window.TranslationSubApi;
@@ -142,7 +137,7 @@
                         refreshState();
                         return;
                     }
-                    notify('Вы отписались · ' + voice + (item.isSerial !== false ? (' · ' + season + ' сезон') : ''));
+                    notify('Вы отписались · ' + voice + (method === 'tv' ? (' · ' + season + ' сезон') : ''));
                     refreshState();
                 }, function () {
                     notify('Не удалось отписаться · ' + voice);
