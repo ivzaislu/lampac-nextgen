@@ -150,6 +150,64 @@ public class TranslationSubController : BaseController
             TranslationSubSnapshotService.Build(uid, profileId)));
     }
 
+    [HttpPost]
+    [AllowAnonymous]
+    [Route("translationsub/v2/content-state")]
+    async public Task<ActionResult> ContentState(string uid = null)
+    {
+        var body = await ReadBody();
+        if (body == null)
+            return ContentTo("{\"eligible\":false,\"reason\":\"empty_body\"}");
+
+        uid = ResolveUid(uid ?? body.Value<string>("uid"));
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"eligible\":false,\"reason\":\"uid_required\"}");
+
+        string profileId = ResolveProfileId();
+        SyncTimeCodeProgress(uid, profileId);
+
+        var state = await TranslationSubContentStateService.BuildAsync(
+            uid,
+            profileId,
+            body,
+            HttpContext);
+
+        return ContentTo(JsonConvert.SerializeObject(state));
+    }
+
+    [HttpPost]
+    [AllowAnonymous]
+    [Route("translationsub/v2/subscriptions")]
+    async public Task<ActionResult> SubscribeV2(string uid = null)
+    {
+        var body = await ReadBody();
+        if (body == null)
+            return ContentTo(JsonConvert.SerializeObject(new TranslationSubCommandResult
+            {
+                Success = false,
+                Error = "empty_body"
+            }));
+
+        uid = ResolveUid(uid ?? body.Value<string>("uid"));
+        var intent = body.ToObject<TranslationSubSubscribeIntent>();
+        var result = await TranslationSubCommandService.SubscribeAsync(uid, intent, HttpContext);
+
+        if (result.Success)
+            SyncTimeCodeProgress(uid, ResolveProfileId());
+
+        return ContentTo(JsonConvert.SerializeObject(result));
+    }
+
+    [HttpDelete]
+    [AllowAnonymous]
+    [Route("translationsub/v2/subscriptions/{id}")]
+    public ActionResult UnsubscribeV2(string id, string uid = null)
+    {
+        uid = ResolveUid(uid);
+        return ContentTo(JsonConvert.SerializeObject(
+            TranslationSubCommandService.Unsubscribe(uid, id)));
+    }
+
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/variants")]
