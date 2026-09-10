@@ -129,7 +129,7 @@
 
     function unsubscribe(subscriptionId, success, error) {
         var id = encodeURIComponent(String(subscriptionId || ''));
-        request('DELETE', '/translationsub/v2/subscriptions/' + id, {}, null, success, error);
+        request('POST', '/translationsub/v2/subscriptions/' + id + '/remove', {}, {}, success, error);
     }
 
     function check(success, error) {
@@ -141,7 +141,7 @@
     }
 
     function updateSettings(values, success, error) {
-        request('PUT', '/translationsub/v2/settings', {}, values || {}, success, error);
+        request('POST', '/translationsub/v2/settings', {}, values || {}, success, error);
     }
 
     window.TranslationSubApi = {
