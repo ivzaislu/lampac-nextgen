@@ -60,6 +60,9 @@ public class TranslationSubSubscriptionSnapshot
     [JsonProperty("isSerial")]
     public bool IsSerial { get; set; }
 
+    [JsonProperty("navigation")]
+    public TranslationSubNavigationSnapshot Navigation { get; set; }
+
     [JsonProperty("season")]
     public int Season { get; set; }
 
@@ -104,6 +107,15 @@ public class TranslationSubSubscriptionSnapshot
 
     [JsonProperty("tmdb")]
     public TranslationSubTmdbSnapshot Tmdb { get; set; }
+}
+
+public class TranslationSubNavigationSnapshot
+{
+    [JsonProperty("id")]
+    public string Id { get; set; }
+
+    [JsonProperty("method")]
+    public string Method { get; set; }
 }
 
 public class TranslationSubSourceSnapshot
