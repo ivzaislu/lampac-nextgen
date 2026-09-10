@@ -155,6 +155,7 @@
 
         window.TranslationSubBadgeState = {
             refresh: refresh,
+            applySnapshot: applySnapshot,
             render: render,
             open: openDrawerSynced,
             count: function () { return state.count; },
