@@ -34,14 +34,39 @@ jobs:
             node --check "$file"
           done < <(find Modules/TranslationSub -maxdepth 1 -type f -name 'translationsub*.js' -print0 | sort -z)
 
+      - name: Verify dynamic module manifest is complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          module = Path('Modules/TranslationSub')
+          manifest = json.loads((module / 'manifest.json').read_text(encoding='utf-8'))
+          declared = set(manifest.get('tree') or [])
+          actual = {
+              path.relative_to(module).as_posix()
+              for path in module.rglob('*.cs')
+              if 'bin' not in path.parts and 'obj' not in path.parts
+          }
+          missing = sorted(actual - declared)
+          stale = sorted(path for path in declared if path.endswith('.cs') and not (module / path).is_file())
+          assert not missing, f'C# files missing from TranslationSub manifest.tree: {missing}'
+          assert not stale, f'Stale C# files in TranslationSub manifest.tree: {stale}'
+          print(f'TranslationSub manifest covers {len(actual)} C# files')
+          PY
+
+      - name: Audit repository-wide TimeCode writers
+        run: node scripts/ci/translationsub-timecode-writer-audit.mjs
+
       - name: Enforce backend-first ownership
         run: node scripts/ci/translationsub-backend-driven-simulation.mjs
 
       - name: Enforce event-driven refresh ownership
         run: node scripts/ci/translationsub-background-refresh-simulation.mjs
 
-      - name: Run historical JS audit as migration signal
-        continue-on-error: true
+      - name: Enforce thin-client JavaScript rules
         run: node scripts/ci/translationsub-js-audit.mjs
 
       - name: Assert thin API client uses v2 contracts
