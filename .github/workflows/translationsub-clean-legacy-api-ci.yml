@@ -1,0 +1,289 @@
+name: TranslationSub Legacy API Cleanup CI
+
+on:
+  push:
+    branches:
+      - TranslationSub-clean-legacy-api
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  js-audit:
+    name: TranslationSub JS audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            echo "node --check $file"
+            node --check "$file"
+          done < <(find Modules/TranslationSub -maxdepth 1 -type f -name 'translationsub*.js' -print0 | sort -z)
+
+      - name: Run architecture audit
+        run: node scripts/ci/translationsub-js-audit.mjs
+
+  server-smoke:
+    name: Build + live API cleanup smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Assert removed controller APIs stay removed
+        shell: bash
+        run: |
+          set -euo pipefail
+          file='Modules/TranslationSub/Controller.cs'
+          for route in toggle watched notified; do
+            if grep -Eq "(translationsub|transsubscribe)/${route}" "$file"; then
+              echo "Legacy API route still present: $route"
+              exit 1
+            fi
+          done
+          echo 'Legacy API routes are absent from Controller.cs'
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Restore
+        run: dotnet restore --verbosity minimal NextGen.slnx
+
+      - name: Build Release
+        run: dotnet build NextGen.slnx --configuration Release --no-restore --verbosity minimal
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-runtime
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-runtime \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-runtime/Core.dll
+          test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
+          test -d /tmp/lampac-runtime/runtimes/references
+
+          cat > /tmp/lampac-runtime/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: true
+            accounts:
+              ci@translationsub.test: '2099-01-01T00:00:00'
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+              - FlixCDN
+              - Phantom
+              - ZetflixDB
+              - VideoDB
+              - CDNvideohub
+          listen:
+            port: 9118
+          YAML
+
+      - name: Start Lampac and wait for TranslationSub
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-runtime
+            dotnet Core.dll > /tmp/lampac.log 2>&1
+          ) &
+          echo $! > /tmp/lampac.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/sources?uid=ci%40translationsub.test' \
+              -o /tmp/sources.json; then
+              ready=1
+              break
+            fi
+
+            if ! kill -0 "$(cat /tmp/lampac.pid)" 2>/dev/null; then
+              echo 'Lampac exited before TranslationSub became ready'
+              tail -n 400 /tmp/lampac.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready'
+            tail -n 400 /tmp/lampac.log || true
+            exit 1
+          fi
+
+      - name: Validate surviving TranslationSub APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='http://127.0.0.1:9118'
+          uid='ci%40translationsub.test'
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/user-settings?uid=$uid" \
+            -o /tmp/settings.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/variants?uid=$uid&kpId=464963&imdbId=tt0944947&title=Game%20of%20Thrones&originalTitle=Game%20of%20Thrones&year=2011&isSerial=true&season=1&sources=none" \
+            -o /tmp/variants.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            --data '{"uid":"ci@translationsub.test","contentId":"ci-series","title":"CI Series","originalTitle":"CI Series","tmdbId":"1399","isSerial":true,"source":"multi","translationId":"ci-voice","translationName":"CI Voice","currentSeason":"1","availableEpisode":"3","watchedEpisode":"0","sources":[]}' \
+            "$base/translationsub/add" \
+            -o /tmp/add.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/list?uid=$uid" \
+            -o /tmp/list-after-add.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/progress?uid=$uid" \
+            -o /tmp/progress.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/updates?uid=$uid&force=false" \
+            -o /tmp/updates.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/check?uid=$uid&sources=none" \
+            -o /tmp/check.json
+
+          python3 - <<'PY'
+          import json
+
+          settings = json.load(open('/tmp/settings.json', encoding='utf-8'))
+          assert isinstance(settings, dict), settings
+          assert isinstance(settings.get('availableSources'), list), settings
+          assert isinstance(settings.get('Sources'), list), settings
+
+          variants = json.load(open('/tmp/variants.json', encoding='utf-8'))
+          assert variants.get('Source') == 'multi', variants
+          assert isinstance(variants.get('Seasons'), list), variants
+          assert isinstance(variants.get('Translations'), list), variants
+          assert isinstance(variants.get('Items'), list), variants
+          assert variants['Translations'] == [], variants
+          assert variants['Items'] == [], variants
+
+          add = json.load(open('/tmp/add.json', encoding='utf-8'))
+          assert add.get('success') is True, add
+
+          items = json.load(open('/tmp/list-after-add.json', encoding='utf-8'))
+          assert isinstance(items, list) and len(items) == 1, items
+          item = items[0]
+          assert item.get('Uid') == 'ci@translationsub.test', item
+          assert item.get('ContentId') == 'ci-series', item
+          assert item.get('TranslationId') == 'ci-voice', item
+          sub_id = item.get('Id')
+          assert sub_id, item
+          open('/tmp/sub-id', 'w', encoding='utf-8').write(sub_id)
+
+          progress = json.load(open('/tmp/progress.json', encoding='utf-8'))
+          assert progress.get('success') is True, progress
+          assert progress.get('count') == 1, progress
+          assert progress.get('source') == 'lampac-timecode', progress
+
+          updates = json.load(open('/tmp/updates.json', encoding='utf-8'))
+          assert isinstance(updates, list), updates
+
+          check = json.load(open('/tmp/check.json', encoding='utf-8'))
+          assert check.get('success') is True, check
+
+          print('surviving API smoke passed')
+          PY
+
+          sub_id=$(cat /tmp/sub-id)
+          curl --silent --show-error --fail --max-time 10 \
+            -X POST \
+            "$base/translationsub/remove?id=$sub_id&uid=$uid" \
+            -o /tmp/remove.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            "$base/translationsub/list?uid=$uid" \
+            -o /tmp/list-after-remove.json
+
+          python3 - <<'PY'
+          import json
+          remove = json.load(open('/tmp/remove.json', encoding='utf-8'))
+          assert remove.get('success') is True, remove
+          items = json.load(open('/tmp/list-after-remove.json', encoding='utf-8'))
+          assert items == [], items
+          print('add/list/remove lifecycle passed')
+          PY
+
+      - name: Verify removed APIs are unreachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          base='http://127.0.0.1:9118'
+          for prefix in translationsub transsubscribe; do
+            for route in toggle watched notified; do
+              body='{}'
+              case "$route" in
+                watched) body='{"uid":"ci@translationsub.test","contentId":"ci-series","season":1,"episode":1}' ;;
+                toggle) body='{"uid":"ci@translationsub.test","contentId":"ci-series","translationId":"ci-voice","currentSeason":"1"}' ;;
+              esac
+
+              status=$(curl --silent --show-error --max-time 10 \
+                -o "/tmp/${prefix}-${route}.body" \
+                -w '%{http_code}' \
+                -H 'Content-Type: application/json' \
+                -X POST \
+                --data "$body" \
+                "$base/$prefix/$route")
+
+              echo "$prefix/$route -> HTTP $status"
+              if [ "$status" != '404' ]; then
+                echo "Expected removed API to return 404, got $status"
+                cat "/tmp/${prefix}-${route}.body" || true
+                exit 1
+              fi
+            done
+          done
+          echo 'All removed APIs are unreachable'
+
+      - name: Runtime log tail
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac.log tail ====='
+          tail -n 400 /tmp/lampac.log 2>/dev/null || true
+
+      - name: Stop Lampac
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac.pid ]; then
+            kill "$(cat /tmp/lampac.pid)" 2>/dev/null || true
+          fi
