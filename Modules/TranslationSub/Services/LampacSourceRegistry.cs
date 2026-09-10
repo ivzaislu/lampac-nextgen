@@ -12,13 +12,13 @@ internal static class LampacSourceRegistry
 {
     public static IReadOnlyList<LampacSourceOption> AvailableSources()
     {
-        var routes = CollectSources(null);
-        return routes.Values
-            .Select(x => new LampacSourceOption
-            {
-                id = x.Id,
-                name = x.Name
-            })
+        OnlineModuleEntry.EnsureCache();
+
+        var result = new Dictionary<string, LampacSourceOption>(StringComparer.OrdinalIgnoreCase);
+        AddAvailableModules(OnlineModuleEntry.Modules?.Cast<object>(), result);
+        AddAvailableModules(OnlineModuleEntry.ModulesAsync?.Cast<object>(), result);
+
+        return result.Values
             .OrderBy(x => x.name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.id, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -40,24 +40,55 @@ internal static class LampacSourceRegistry
         if (selected.Count == 0)
             return Array.Empty<LampacSourceDescriptor>();
 
-        var routes = CollectSources(selected);
+        var routes = CollectSelectedSources(selected);
         return routes.Values
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Id, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
-    static Dictionary<string, LampacSourceDescriptor> CollectSources(HashSet<string> selected)
+    static void AddAvailableModules(
+        IEnumerable<object> modules,
+        Dictionary<string, LampacSourceOption> result)
+    {
+        if (modules == null)
+            return;
+
+        foreach (object module in modules)
+        {
+            if (module == null)
+                continue;
+
+            foreach (BaseSettings settings in FindSettings(module))
+            {
+                if (settings == null || !CanProduceOnlineSource(settings))
+                    continue;
+
+                string id = TranslationSettingsStore.NormalizeSourceId(settings.plugin);
+                if (id == null)
+                    continue;
+
+                string name = SourceName(settings, id);
+                result[id] = new LampacSourceOption
+                {
+                    id = id,
+                    name = name
+                };
+            }
+        }
+    }
+
+    static Dictionary<string, LampacSourceDescriptor> CollectSelectedSources(HashSet<string> selected)
     {
         OnlineModuleEntry.EnsureCache();
 
         var result = new Dictionary<string, LampacSourceDescriptor>(StringComparer.OrdinalIgnoreCase);
-        AddModules(OnlineModuleEntry.Modules?.Cast<object>(), result, selected);
-        AddModules(OnlineModuleEntry.ModulesAsync?.Cast<object>(), result, selected);
+        AddSelectedModules(OnlineModuleEntry.Modules?.Cast<object>(), result, selected);
+        AddSelectedModules(OnlineModuleEntry.ModulesAsync?.Cast<object>(), result, selected);
         return result;
     }
 
-    static void AddModules(
+    static void AddSelectedModules(
         IEnumerable<object> modules,
         Dictionary<string, LampacSourceDescriptor> result,
         HashSet<string> selected)
@@ -76,27 +107,38 @@ internal static class LampacSourceRegistry
                     continue;
 
                 string id = TranslationSettingsStore.NormalizeSourceId(settings.plugin);
-                if (id == null || (selected != null && !selected.Contains(id)))
+                if (id == null || !selected.Contains(id))
                     continue;
 
                 string route = EffectiveRoute(settings, id);
                 if (string.IsNullOrWhiteSpace(route))
                     continue;
 
-                string name = settings.displayname;
-                if (string.IsNullOrWhiteSpace(name))
-                    name = settings.plugin;
-                if (string.IsNullOrWhiteSpace(name))
-                    name = id;
-
                 result[id] = new LampacSourceDescriptor
                 {
                     Id = id,
-                    Name = name.Trim(),
+                    Name = SourceName(settings, id),
                     Url = route
                 };
             }
         }
+    }
+
+    static bool CanProduceOnlineSource(BaseSettings settings)
+    {
+        if (settings.enable && !settings.rip)
+            return true;
+
+        // Mirror OnlineApi.send(): a configured remote override can remain usable
+        // even when the local provider is disabled/rip, unless overridepasswd
+        // intentionally suppresses the override route.
+        if (!string.IsNullOrEmpty(settings.overridepasswd))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(settings.overridehost))
+            return true;
+
+        return settings.overridehosts?.Any(x => !string.IsNullOrWhiteSpace(x)) == true;
     }
 
     static string EffectiveRoute(BaseSettings settings, string id)
@@ -121,6 +163,17 @@ internal static class LampacSourceRegistry
             return "/lite/" + id;
 
         return null;
+    }
+
+    static string SourceName(BaseSettings settings, string id)
+    {
+        string name = settings.displayname;
+        if (string.IsNullOrWhiteSpace(name))
+            name = settings.plugin;
+        if (string.IsNullOrWhiteSpace(name))
+            name = id;
+
+        return name.Trim();
     }
 
     static IEnumerable<BaseSettings> FindSettings(object module)
