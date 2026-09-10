@@ -12,8 +12,6 @@ public class TmdbScheduleSnapshot
     public string TmdbId { get; set; }
     public string ImdbId { get; set; }
     public string Status { get; set; }
-    public bool InProduction { get; set; }
-    public int NumberOfSeasons { get; set; }
     public int LastSeason { get; set; }
     public int LastEpisode { get; set; }
     public DateTime? LastAirDate { get; set; }
@@ -22,29 +20,6 @@ public class TmdbScheduleSnapshot
     public DateTime? NextAirDate { get; set; }
     public DateTime SyncedAt { get; set; } = DateTime.Now;
     public Dictionary<int, int> SeasonEpisodeCounts { get; set; } = new();
-
-    public bool IsEnded
-        => string.Equals(Status, "Ended", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(Status, "Canceled", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(Status, "Cancelled", StringComparison.OrdinalIgnoreCase);
-
-    public int ExpectedAiredEpisode(int season, DateTime now)
-    {
-        if (season <= 0)
-            return 0;
-
-        int dueNext = 0;
-        if (NextSeason == season && NextAirDate.HasValue && NextAirDate.Value.Date <= now.Date)
-            dueNext = Math.Max(1, NextEpisode);
-
-        if (LastSeason > season)
-            return SeasonEpisodeCounts.TryGetValue(season, out int count) ? Math.Max(0, count) : dueNext;
-
-        if (LastSeason == season)
-            return Math.Max(Math.Max(0, LastEpisode), dueNext);
-
-        return dueNext;
-    }
 }
 
 public static class TmdbScheduleService
@@ -109,8 +84,6 @@ public static class TmdbScheduleService
                 TmdbId = normalizedId,
                 ImdbId = root["external_ids"]?.Value<string>("imdb_id"),
                 Status = root.Value<string>("status") ?? string.Empty,
-                InProduction = root.Value<bool?>("in_production") ?? false,
-                NumberOfSeasons = root.Value<int?>("number_of_seasons") ?? 0,
                 SyncedAt = DateTime.Now
             };
 
