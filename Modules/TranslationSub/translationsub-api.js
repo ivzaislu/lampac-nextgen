@@ -133,7 +133,7 @@
     }
 
     function check(success, error) {
-        request('GET', '/translationsub/check', {}, null, success, error);
+        request('POST', '/translationsub/v2/check', {}, {}, success, error);
     }
 
     function settings(success, error) {
