@@ -28,6 +28,10 @@
         return String(storageGet('lampac_unic_id', '') || '');
     }
 
+    function profileId() {
+        return String(storageGet('lampac_profile_id', '') || '');
+    }
+
     function host() {
         try {
             if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
@@ -156,7 +160,11 @@
 
     function loadUpdates(done) {
         done = typeof done === 'function' ? done : function () {};
-        request('/translationsub/updates?uid=' + encodeURIComponent(uid()) + '&force=false', function (updates) {
+        var path = '/translationsub/updates?uid=' + encodeURIComponent(uid()) + '&force=false';
+        var profile = profileId();
+        if (profile) path += '&profile_id=' + encodeURIComponent(profile);
+
+        request(path, function (updates) {
             lastUpdates = updates;
             done(updates);
         }, function () {
@@ -254,43 +262,53 @@
         try { Lampa.Controller.toggle('head'); } catch (e2) {}
     }
 
-    function openDrawer() {
+    function renderDrawer(updates) {
+        updates = Array.isArray(updates) ? updates : [];
+        lastUpdates = updates.slice();
+
+        var html = $('<div class="translationsub-notice"></div>');
+        if (updates.length) {
+            updates.forEach(function (item, index) { html.append(noticeCard(item, index)); });
+        } else {
+            html.append(emptyCard());
+        }
+
+        var first = html.find('.selector').first()[0];
+        Lampa.Modal.open({
+            title: 'Уведомления озвучек',
+            size: 'medium',
+            html: html,
+            select: first,
+            scroll_to_center: true,
+            buttons: [{
+                name: 'Все подписки на озвучки',
+                onSelect: openSubscriptionsPage
+            }],
+            buttons_position: 'inside',
+            onSelect: function (selected) {
+                var node = $(selected);
+                var index = parseInt(node.attr('data-translationsub-update'), 10);
+                if (isNaN(index) || !updates[index]) return;
+
+                try { Lampa.Modal.close(); } catch (e) {}
+                openUpdate(updates[index]);
+            },
+            onBack: closeModal
+        });
+    }
+
+    function openDrawer(preloadedUpdates) {
         if (!window.Lampa || !Lampa.Modal || typeof Lampa.Modal.open !== 'function') {
             openSubscriptionsPage();
             return;
         }
 
-        loadUpdates(function (updates) {
-            var html = $('<div class="translationsub-notice"></div>');
-            if (updates.length) {
-                updates.forEach(function (item, index) { html.append(noticeCard(item, index)); });
-            } else {
-                html.append(emptyCard());
-            }
+        if (Array.isArray(preloadedUpdates)) {
+            renderDrawer(preloadedUpdates);
+            return;
+        }
 
-            var first = html.find('.selector').first()[0];
-            Lampa.Modal.open({
-                title: 'Уведомления озвучек',
-                size: 'medium',
-                html: html,
-                select: first,
-                scroll_to_center: true,
-                buttons: [{
-                    name: 'Все подписки на озвучки',
-                    onSelect: openSubscriptionsPage
-                }],
-                buttons_position: 'inside',
-                onSelect: function (selected) {
-                    var node = $(selected);
-                    var index = parseInt(node.attr('data-translationsub-update'), 10);
-                    if (isNaN(index) || !updates[index]) return;
-
-                    try { Lampa.Modal.close(); } catch (e) {}
-                    openUpdate(updates[index]);
-                },
-                onBack: closeModal
-            });
-        });
+        loadUpdates(renderDrawer);
     }
 
     function refresh(done) {
