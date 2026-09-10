@@ -1,0 +1,119 @@
+name: TranslationSub Realtime Live Smoke
+
+on:
+  push:
+    branches:
+      - TranslationSub-clean-legacy-api
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  realtime-live:
+    name: Live NWS + TimeCode realtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-runtime
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-runtime \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-runtime/Core.dll
+          test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-runtime/module/TimeCode/manifest.json
+
+          cat > /tmp/lampac-runtime/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: true
+            accounts:
+              ci@translationsub.test: '2099-01-01T00:00:00'
+          BaseModule:
+            nws: true
+            LoadModules:
+              - TranslationSub
+              - TimeCode
+          listen:
+            port: 9118
+          YAML
+
+      - name: Start Lampac and wait for TranslationSub
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-runtime
+            dotnet Core.dll > /tmp/lampac-realtime.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-realtime.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/user-settings?uid=ci%40translationsub.test' \
+              -o /tmp/realtime-settings.json; then
+              ready=1
+              break
+            fi
+
+            if ! kill -0 "$(cat /tmp/lampac-realtime.pid)" 2>/dev/null; then
+              echo 'Lampac exited before TranslationSub became ready'
+              tail -n 400 /tmp/lampac-realtime.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready'
+            tail -n 400 /tmp/lampac-realtime.log || true
+            exit 1
+          fi
+
+      - name: Run live realtime smoke
+        env:
+          LAMPAC_BASE: http://127.0.0.1:9118
+        run: node scripts/ci/translationsub-realtime-live.mjs
+
+      - name: Runtime log tail
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac realtime log tail ====='
+          tail -n 400 /tmp/lampac-realtime.log 2>/dev/null || true
+
+      - name: Stop Lampac
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac-realtime.pid ]; then
+            kill "$(cat /tmp/lampac-realtime.pid)" 2>/dev/null || true
+          fi
