@@ -145,7 +145,10 @@
         var url = updatesUrl();
 
         function apply(updates) {
-            if (seq !== state.requestSeq) return;
+            if (seq !== state.requestSeq) {
+                done(state.updates.slice());
+                return;
+            }
             updates = Array.isArray(updates) ? updates : [];
             state.updates = updates;
             state.count = updates.length;
@@ -154,7 +157,10 @@
         }
 
         function fail() {
-            if (seq !== state.requestSeq) return;
+            if (seq !== state.requestSeq) {
+                done(state.updates.slice());
+                return;
+            }
             render();
             done(state.updates.slice());
         }
@@ -196,31 +202,31 @@
         if (state.drawerOpening) return;
         state.drawerOpening = true;
 
-        function openAfterRefresh() {
-            refresh(function () {
-                state.drawerOpening = false;
-                try {
-                    if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
-                        window.TranslationSubNotice.open();
-                        return;
-                    }
-                } catch (e) {}
+        function openWithUpdates(updates) {
+            state.drawerOpening = false;
+            updates = Array.isArray(updates) ? updates : state.updates.slice();
 
-                try {
-                    if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
-                        window.TranslationSub.openSubscriptions();
-                } catch (e2) {}
-            });
+            try {
+                if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
+                    window.TranslationSubNotice.open(updates);
+                    return;
+                }
+            } catch (e) {}
+
+            try {
+                if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
+                    window.TranslationSub.openSubscriptions();
+            } catch (e2) {}
         }
 
         try {
             if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
-                window.TranslationSubWatch.sync(openAfterRefresh);
+                window.TranslationSubWatch.sync(openWithUpdates);
                 return;
             }
         } catch (e3) {}
 
-        openAfterRefresh();
+        refresh(openWithUpdates);
     }
 
     function bindLampa() {
