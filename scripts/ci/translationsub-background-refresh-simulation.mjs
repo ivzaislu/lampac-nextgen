@@ -10,32 +10,44 @@ function read(name) {
   return fs.readFileSync(path.join(moduleDir, name), 'utf8');
 }
 
-const coreSource = read('translationsub.js');
 const watchSource = read('translationsub-watch.js');
 const badgeSource = read('translationsub-badge-state.js');
-const controllerSource = read('Controller.cs');
+const modInitSource = read('ModInit.cs');
 
-// Bind the simulation to the current production ownership that we intend to simplify.
-assert.match(coreSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]*refreshUpdates\(\)/,
-  'Current core app-ready refresh must exist for the baseline simulation');
-assert.match(badgeSource, /function\s+start\s*\(\)[\s\S]*refresh\(\)[\s\S]*setInterval\(refresh,\s*60\s*\*\s*1000\)/,
-  'Badge must own startup refresh and one-minute polling');
+// Production ownership after backend-first migration:
+// - server observes successful /timecode/add and publishes invalidation;
+// - BadgeState owns snapshot reads on startup/app-ready/foreground/realtime;
+// - Watch is event-driven compatibility only and must not poll in background.
+assert.match(modInitSource, /"\/timecode\/add"/,
+  'Backend must observe the authoritative TimeCode write path');
+assert.match(modInitSource, /Response\.OnCompleted/,
+  'TimeCode reconciliation must happen after the request completed');
+assert.match(modInitSource, /PublishProfile\(uid, profileId, "timecode"\)/,
+  'Backend must publish profile-scoped invalidation after progress changes');
+
+assert.match(badgeSource, /function\s+start\s*\(\)[\s\S]*refresh\(\)/,
+  'BadgeState should perform the initial snapshot read');
 assert.match(badgeSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]*render\(\)[\s\S]*refresh\(\)/,
-  'Current Badge app-ready network refresh must exist for the baseline simulation');
+  'BadgeState should refresh once on app-ready');
 assert.match(badgeSource, /visibilitychange[\s\S]*if\s*\(!document\.hidden\)\s*refresh\(\)/,
-  'Badge foreground refresh must remain available');
-assert.match(badgeSource, /profile_id/,
-  'Badge polling must remain profile-aware');
-assert.match(watchSource, /FALLBACK_SYNC_INTERVAL\s*=\s*5\s*\*\s*60\s*\*\s*1000/,
-  'Current five-minute Watch fallback must exist for the baseline simulation');
-assert.match(watchSource, /scheduleSync\(3000,\s*false\)/,
-  'Current Watch startup sync must exist for the baseline simulation');
-assert.match(watchSource, /event\.type\s*===\s*['"]ready['"]\)\s*scheduleSync\(2200,\s*false\)/,
-  'Current Watch app-ready sync must exist for the baseline simulation');
-assert.match(watchSource, /setInterval\(syncAll,\s*FALLBACK_SYNC_INTERVAL\)/,
-  'Current Watch five-minute polling must exist for the baseline simulation');
-assert.match(controllerSource, /Updates\([\s\S]*?SyncTimeCodeProgress\(uid\)/,
-  'Server /updates must reconcile TimeCode; otherwise removing periodic /progress would be unsafe');
+  'Foreground refresh must remain available');
+assert.doesNotMatch(badgeSource, /setInterval\(refresh,\s*60\s*\*\s*1000\)/,
+  'BadgeState must not poll every minute');
+
+assert.match(watchSource, /Timeline\.listener\.follow\('update'/,
+  'Compatibility Timeline reconciliation should remain until writer audit is complete');
+assert.match(watchSource, /scheduleSync\(1400,\s*true\)/,
+  'Timeline update should retain the delayed reconciliation race guard');
+assert.match(watchSource, /setTimeout\(function\s*\(\)[\s\S]*syncAll\(\)[\s\S]*4200/,
+  'Timeline compatibility path should retain one delayed retry');
+assert.doesNotMatch(watchSource, /FALLBACK_SYNC_INTERVAL/,
+  'Watch must not own passive polling');
+assert.doesNotMatch(watchSource, /setInterval\(syncAll/,
+  'Watch must not own passive polling');
+assert.doesNotMatch(watchSource, /scheduleSync\(3000/,
+  'Watch must not perform startup reconciliation');
+assert.doesNotMatch(watchSource, /event\.type\s*===\s*['"]ready['"]/,
+  'Watch must not duplicate app-ready network work');
 
 function jqueryStub() {
   const api = {
@@ -108,20 +120,18 @@ function createTimers() {
     setInterval: (fn, delay) => add(fn, delay, true),
     clearInterval: clear,
     advance,
-    settle,
-    now: () => now
+    settle
   };
 }
 
-function createCurrentRuntime() {
+function createRuntime() {
   const timers = createTimers();
   const appListeners = [];
   const timelineListeners = [];
   const documentListeners = new Map();
   const storage = {
     lampac_unic_id: 'ci-user',
-    lampac_profile_id: '7',
-    translationsub_sources: []
+    lampac_profile_id: '7'
   };
   const network = { calls: [] };
 
@@ -170,9 +180,10 @@ function createCurrentRuntime() {
     fetch(url) {
       const value = String(url);
       network.calls.push(value);
-      if (value.includes('/translationsub/updates?')) return response([]);
-      if (value.includes('/translationsub/progress?')) return response({ success: true, synced: 0 });
-      if (value.includes('/translationsub/user-settings?')) return response({ Sources: [], sources: [] });
+      if (value.includes('/translationsub/v2/snapshot?'))
+        return response({ badge: { count: 0 }, subscriptions: [], updates: [] });
+      if (value.includes('/translationsub/progress?'))
+        return response({ success: true, synced: 0 });
       return response({});
     }
   };
@@ -180,7 +191,6 @@ function createCurrentRuntime() {
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.Lampa = {
-    Manifest: {},
     Storage: {
       get(name, fallback) {
         return Object.prototype.hasOwnProperty.call(storage, name) ? storage[name] : fallback;
@@ -201,10 +211,14 @@ function createCurrentRuntime() {
       }
     }
   };
+  sandbox.TranslationSubApi = {
+    snapshot(success) {
+      sandbox.fetch('http://lampac.test/translationsub/v2/snapshot?uid=ci-user&profile_id=7')
+        .then((r) => r.text()).then((t) => success(JSON.parse(t)));
+    }
+  };
 
   const context = vm.createContext(sandbox);
-  // Match PluginController order for the three owners involved in background refreshes.
-  vm.runInContext(coreSource, context, { filename: 'translationsub.js' });
   vm.runInContext(watchSource, context, { filename: 'translationsub-watch.js' });
   vm.runInContext(badgeSource, context, { filename: 'translationsub-badge-state.js' });
 
@@ -229,129 +243,61 @@ function createCurrentRuntime() {
     network.calls.length = 0;
   }
 
-  return { timers, network, count, emitAppReady, emitTimelineUpdate, emitVisible, resetNetwork };
+  return { timers, count, emitAppReady, emitTimelineUpdate, emitVisible, resetNetwork };
 }
 
-// Baseline: execute the current production files and prove the duplication actually exists.
+// Startup: Badge owns exactly one initial snapshot. Watch stays idle.
 {
-  const rt = createCurrentRuntime();
+  const rt = createRuntime();
   await rt.timers.settle();
-
-  assert.equal(rt.count('/translationsub/updates'), 1,
-    'Badge startup should perform exactly one immediate /updates before app-ready');
+  assert.equal(rt.count('/translationsub/v2/snapshot'), 1);
   assert.equal(rt.count('/translationsub/progress'), 0);
 
   rt.emitAppReady();
   await rt.timers.settle();
-  assert.equal(rt.count('/translationsub/updates'), 3,
-    'Current app-ready should add two duplicate /updates requests (core + Badge)');
+  assert.equal(rt.count('/translationsub/v2/snapshot'), 2,
+    'app-ready should add one Badge snapshot');
+  assert.equal(rt.count('/translationsub/progress'), 0,
+    'Watch must not reconcile on app-ready');
+}
 
-  await rt.timers.advance(2200);
-  assert.equal(rt.count('/translationsub/progress'), 1,
-    'Current Watch app-ready schedule should add one /progress');
-  assert.equal(rt.count('/translationsub/updates'), 4,
-    'Current Watch app-ready sync should add a fourth startup /updates');
-
-  console.log('CURRENT startup: 1 progress + 4 updates after app-ready/watch startup');
-
+// Idle five-minute window: no passive frontend network work.
+{
+  const rt = createRuntime();
+  await rt.timers.settle();
   rt.resetNetwork();
-  await rt.timers.advance(300000 - rt.timers.now());
-
-  assert.equal(rt.count('/translationsub/progress'), 1,
-    'Current five-minute Watch fallback should issue one /progress');
-  assert.equal(rt.count('/translationsub/updates'), 6,
-    'Current five-minute window should contain five Badge polls plus one Watch-triggered /updates');
-
-  console.log('CURRENT five-minute window: 1 progress + 6 updates (5 Badge polls + 1 Watch duplicate)');
+  await rt.timers.advance(300000);
+  assert.equal(rt.count('/translationsub/v2/snapshot'), 0);
+  assert.equal(rt.count('/translationsub/progress'), 0);
+  console.log('TARGET idle five-minute window: 0 frontend polling requests');
 }
 
-function createTargetModel() {
-  const timers = createTimers();
-  const network = { progress: 0, updates: 0 };
-  let debounceTimer = null;
-  let retryTimer = null;
-
-  function badgeRefresh() {
-    network.updates++;
-  }
-
-  function watchSync() {
-    network.progress++;
-    // /progress reconciliation is followed by one visible-state refresh.
-    badgeRefresh();
-  }
-
-  function scheduleTimelineSync() {
-    timers.clearTimeout(debounceTimer);
-    debounceTimer = timers.setTimeout(watchSync, 1400);
-    timers.clearTimeout(retryTimer);
-    retryTimer = timers.setTimeout(watchSync, 4200);
-  }
-
-  // Target ownership: Badge alone owns passive/background polling.
-  badgeRefresh();
-  timers.setInterval(badgeRefresh, 60 * 1000);
-
-  return {
-    timers,
-    network,
-    appReady() {
-      // Core injects UI/settings; Badge only renders; Watch does not schedule network work.
-    },
-    visible() { badgeRefresh(); },
-    timelineUpdate: scheduleTimelineSync,
-    reset() { network.progress = 0; network.updates = 0; }
-  };
-}
-
-// Target startup: one passive /updates and no startup /progress.
+// Foreground return: one snapshot only.
 {
-  const target = createTargetModel();
-  target.appReady();
-  await target.timers.advance(2200);
-
-  assert.equal(target.network.progress, 0);
-  assert.equal(target.network.updates, 1);
-  console.log('TARGET startup: 0 progress + 1 updates');
+  const rt = createRuntime();
+  await rt.timers.settle();
+  rt.resetNetwork();
+  rt.emitVisible();
+  await rt.timers.settle();
+  assert.equal(rt.count('/translationsub/v2/snapshot'), 1);
+  assert.equal(rt.count('/translationsub/progress'), 0);
+  console.log('TARGET visibility return: exactly 1 snapshot request');
 }
 
-// Target idle polling: only Badge owns the five one-minute polls in five minutes.
+// Timeline fallback: one reconciliation + snapshot, then one delayed retry + snapshot.
 {
-  const target = createTargetModel();
-  target.reset();
-  await target.timers.advance(300000);
+  const rt = createRuntime();
+  await rt.timers.settle();
+  rt.resetNetwork();
+  rt.emitTimelineUpdate();
+  await rt.timers.advance(1400);
+  assert.equal(rt.count('/translationsub/progress'), 1);
+  assert.equal(rt.count('/translationsub/v2/snapshot'), 1);
 
-  assert.equal(target.network.progress, 0);
-  assert.equal(target.network.updates, 5);
-  console.log('TARGET five-minute window: 0 progress + 5 updates, no Watch polling duplicate');
-}
-
-// Foreground refresh remains one immediate Badge request.
-{
-  const target = createTargetModel();
-  target.reset();
-  target.visible();
-
-  assert.equal(target.network.progress, 0);
-  assert.equal(target.network.updates, 1);
-  console.log('TARGET visibility return: exactly 1 updates request');
-}
-
-// Timeline-driven reconciliation remains intact, including the delayed retry that protects
-// against TimeCode SQLite commit races. This is event-driven behavior, not background polling.
-{
-  const target = createTargetModel();
-  target.reset();
-  target.timelineUpdate();
-  await target.timers.advance(1400);
-
-  assert.equal(target.network.progress, 1);
-  assert.equal(target.network.updates, 1);
-
-  await target.timers.advance(2800);
-  assert.equal(target.network.progress, 2);
-  assert.equal(target.network.updates, 2);
-  console.log('TARGET Timeline update: progress+updates preserved, including delayed retry');
+  await rt.timers.advance(2800);
+  assert.equal(rt.count('/translationsub/progress'), 2);
+  assert.equal(rt.count('/translationsub/v2/snapshot'), 2);
+  console.log('TARGET Timeline compatibility path: progress + snapshot with delayed retry');
 }
 
 console.log('TranslationSub background-refresh ownership simulation passed.');
