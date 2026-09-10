@@ -111,29 +111,44 @@
         }
     }
 
-    function flushCallbacks() {
+    function flushCallbacks(updates) {
         var pending = callbacks.splice(0, callbacks.length);
         pending.forEach(function (callback) {
-            try { callback(); } catch (e) {}
+            try { callback(updates); } catch (e) {}
         });
     }
 
-    function refreshVisibleState() {
+    function refreshVisibleState(done) {
+        done = typeof done === 'function' ? done : function () {};
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
-                window.TranslationSubBadgeState.refresh();
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+                window.TranslationSubBadgeState.refresh(done);
+                return;
+            }
         } catch (e) {}
+        done([]);
     }
 
-    function finish() {
+    function complete(updates, queuedDelay) {
         syncing = false;
-        refreshVisibleState();
-        flushCallbacks();
+        flushCallbacks(Array.isArray(updates) ? updates : []);
 
         if (queued) {
             queued = false;
-            scheduleSync(350, false);
+            scheduleSync(queuedDelay, false);
         }
+    }
+
+    function finish() {
+        refreshVisibleState(function (updates) {
+            complete(updates, 350);
+        });
+    }
+
+    function failProgress() {
+        refreshVisibleState(function (updates) {
+            complete(updates, 700);
+        });
     }
 
     function syncAll(done) {
@@ -145,14 +160,7 @@
         }
 
         syncing = true;
-        request('/translationsub/progress?' + identityQuery(), finish, function () {
-            syncing = false;
-            flushCallbacks();
-            if (queued) {
-                queued = false;
-                scheduleSync(700, false);
-            }
-        });
+        request('/translationsub/progress?' + identityQuery(), finish, failProgress);
     }
 
     function scheduleSync(delay, withRetry) {
