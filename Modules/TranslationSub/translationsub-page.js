@@ -19,8 +19,12 @@
         }
     }
 
-    function userKey() {
-        return String(storageGet('client_uid', '') || storageGet('lampac_unic_id', '') || 'local');
+    function uid() {
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
+                return String(window.TranslationSub.uid() || '');
+        } catch (e) {}
+        return String(storageGet('lampac_unic_id', '') || '');
     }
 
     function host() {
@@ -285,7 +289,7 @@
             var version = ++requestVersion;
             try { self.activity.loader(true); } catch (e) {}
 
-            request('GET', '/translationsub/list?userKey=' + encodeURIComponent(userKey()), function (list) {
+            request('GET', '/translationsub/list?uid=' + encodeURIComponent(uid()), function (list) {
                 if (destroyed || version !== requestVersion) return;
                 try { self.activity.loader(false); } catch (e) {}
                 render(Array.isArray(list) ? list : []);
