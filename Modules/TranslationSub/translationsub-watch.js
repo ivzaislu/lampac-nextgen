@@ -50,18 +50,6 @@
         return uid;
     }
 
-    function userKey() {
-        return String(storageGet('client_uid', '') || lampacUid() || 'local');
-    }
-
-    function accountEmail() {
-        var account = storageGet('account', {});
-        if (typeof account === 'string') {
-            try { account = JSON.parse(account || '{}'); } catch (e) { account = {}; }
-        }
-        return String(account && account.email || '');
-    }
-
     function profileId() {
         return String(storageGet('lampac_profile_id', '') || '');
     }
@@ -82,9 +70,7 @@
 
     function identityQuery() {
         var parts = [];
-        addParam(parts, 'userKey', userKey());
         addParam(parts, 'uid', lampacUid());
-        addParam(parts, 'account_email', accountEmail());
         addParam(parts, 'profile_id', profileId());
         addParam(parts, '_ts', Date.now ? Date.now() : new Date().getTime());
         return parts.join('&');
