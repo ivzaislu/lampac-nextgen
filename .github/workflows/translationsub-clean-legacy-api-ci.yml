@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: translationsub-backend-first-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   architecture:
     name: Backend-first architecture
@@ -69,36 +73,40 @@ jobs:
       - name: Enforce thin-client JavaScript rules
         run: node scripts/ci/translationsub-js-audit.mjs
 
-      - name: Assert thin API client uses v2 contracts
+      - name: Assert canonical v2 client contract
         shell: bash
         run: |
           set -euo pipefail
           api='Modules/TranslationSub/translationsub-api.js'
-          grep -Fq '/translationsub/v2/snapshot' "$api"
-          grep -Fq '/translationsub/v2/content-state' "$api"
-          grep -Fq '/translationsub/v2/subscriptions' "$api"
-          grep -Fq '/translationsub/v2/check' "$api"
-          grep -Fq '/translationsub/v2/settings' "$api"
-
-          for legacy in '/translationsub/list' '/translationsub/updates' '/translationsub/variants' '/translationsub/add' '/translationsub/remove' '/translationsub/check'; do
-            if grep -Fq "$legacy" "$api"; then
-              echo "Thin API client still references legacy route: $legacy"
-              exit 1
-            fi
+          for route in \
+            '/translationsub/v2/snapshot' \
+            '/translationsub/v2/content-state' \
+            '/translationsub/v2/subscriptions' \
+            '/translationsub/v2/check' \
+            '/translationsub/v2/settings'; do
+            grep -Fq "$route" "$api"
           done
 
-      - name: Assert removed mutation APIs stay removed
+      - name: Assert legacy HTTP surface stays removed
         shell: bash
         run: |
           set -euo pipefail
-          for file in Modules/TranslationSub/Controller.cs Modules/TranslationSub/V2Controller.cs; do
-            for route in toggle watched notified; do
-              if grep -Eq "(translationsub|transsubscribe)/${route}" "$file"; then
-                echo "Removed API route still present in $file: $route"
-                exit 1
-              fi
-            done
-          done
+          test ! -e Modules/TranslationSub/Controller.cs
+          test ! -e Modules/TranslationSub/translationsub-watch.js
+
+          if grep -RniE --include='*.cs' \
+            '\[Route\("(transsubscribe/|translationsub/(list|updates|progress|variants|check|add|remove|user-settings|sources|toggle|watched|notified)("|/))' \
+            Modules/TranslationSub; then
+            echo 'Legacy TranslationSub route returned'
+            exit 1
+          fi
+
+          if grep -RniE --include='translationsub*.js' \
+            '/(transsubscribe|translationsub/(list|updates|progress|variants|check|add|remove|user-settings|sources))' \
+            Modules/TranslationSub; then
+            echo 'Frontend references a legacy TranslationSub route'
+            exit 1
+          fi
 
   server-smoke:
     name: Build + v2 runtime smoke
@@ -194,7 +202,7 @@ jobs:
             exit 1
           fi
 
-      - name: Validate backend-first v2 read/check/settings contracts
+      - name: Validate backend-first v2 contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -214,10 +222,23 @@ jobs:
 
           curl --silent --show-error --fail --max-time 20 \
             -H 'Content-Type: application/json' \
-            -X POST \
-            --data '{}' \
+            -X POST --data '{}' \
             "$base/translationsub/v2/check?uid=$uid&profile_id=7" \
             -o /tmp/check.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            --data '{"card":{"id":123,"source":"tmdb","media_type":"movie","title":"CI Movie"}}' \
+            "$base/translationsub/v2/content-state?uid=$uid&profile_id=7" \
+            -o /tmp/content-state.json
+
+          curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            --data '{"card":{"id":123,"source":"tmdb","media_type":"movie","title":"CI Movie"},"voiceId":"ci"}' \
+            "$base/translationsub/v2/subscriptions?uid=$uid&profile_id=7" \
+            -o /tmp/subscribe.json
 
           python3 - <<'PY'
           import json
@@ -225,54 +246,68 @@ jobs:
           settings = json.load(open('/tmp/settings-put.json', encoding='utf-8'))
           assert settings.get('success') is True, settings
           canonical = settings.get('settings') or {}
-          sources = canonical.get('Sources', canonical.get('sources'))
-          assert sources == [], settings
+          assert canonical.get('Sources', canonical.get('sources')) == [], settings
 
           snapshot = json.load(open('/tmp/snapshot.json', encoding='utf-8'))
           assert snapshot.get('ProfileId', snapshot.get('profileId')) == '7', snapshot
-          badge = snapshot.get('Badge', snapshot.get('badge')) or {}
-          subscriptions = snapshot.get('Subscriptions', snapshot.get('subscriptions'))
-          updates = snapshot.get('Updates', snapshot.get('updates'))
-          assert isinstance(badge, dict), snapshot
-          assert isinstance(subscriptions, list), snapshot
-          assert isinstance(updates, list), snapshot
+          assert isinstance(snapshot.get('Badge', snapshot.get('badge')), dict), snapshot
+          assert isinstance(snapshot.get('Subscriptions', snapshot.get('subscriptions')), list), snapshot
+          assert isinstance(snapshot.get('Updates', snapshot.get('updates')), list), snapshot
 
           check = json.load(open('/tmp/check.json', encoding='utf-8'))
-          assert check.get('success') is True, check
-          checked = check.get('snapshot')
-          assert isinstance(checked, dict), check
-          checked_updates = checked.get('Updates', checked.get('updates'))
-          assert isinstance(checked_updates, list), check
-          print('TranslationSub v2 settings/snapshot/check smoke passed')
+          assert check.get('success') is True and isinstance(check.get('snapshot'), dict), check
+
+          content = json.load(open('/tmp/content-state.json', encoding='utf-8'))
+          assert content.get('eligible') is False and content.get('reason') == 'not_serial', content
+
+          subscribe = json.load(open('/tmp/subscribe.json', encoding='utf-8'))
+          assert subscribe.get('success') is False and subscribe.get('error') == 'not_serial', subscribe
+          print('TranslationSub canonical v2 runtime smoke passed')
           PY
 
-      - name: Verify removed mutation APIs are not served
+      - name: Verify legacy APIs are not served
         shell: bash
         run: |
           set -euo pipefail
           base='http://127.0.0.1:9118'
-          for prefix in translationsub transsubscribe; do
-            for route in toggle watched notified; do
-              status=$(curl --silent --show-error --max-time 10 \
-                -o "/tmp/${prefix}-${route}.body" \
-                -w '%{http_code}' \
-                -H 'Content-Type: application/json' \
-                -X POST \
-                --data '{}' \
-                "$base/$prefix/$route")
-              if [ "$status" = '404' ]; then
-                continue
-              fi
-              if [ "$status" != '200' ]; then
-                echo "$prefix/$route returned unexpected HTTP $status"
-                exit 1
-              fi
-              BODY="/tmp/${prefix}-${route}.body" python3 - <<'PY'
+
+          check_removed() {
+            local method="$1"
+            local path="$2"
+            local key
+            key=$(echo "$path" | tr '/?' '__')
+            local body="/tmp/legacy-${key}.body"
+            local status
+            status=$(curl --silent --show-error --max-time 10 \
+              -o "$body" -w '%{http_code}' \
+              -H 'Content-Type: application/json' \
+              -X "$method" \
+              ${method:+--data '{}'} \
+              "$base$path")
+
+            if [ "$status" = '404' ]; then return 0; fi
+            if [ "$status" != '200' ]; then
+              echo "$method $path returned unexpected HTTP $status"
+              return 1
+            fi
+
+            BODY="$body" PATH_UNDER_TEST="$path" python3 - <<'PY'
           import json, os
-          data = json.load(open(os.environ['BODY'], encoding='utf-8'))
-          assert data.get('accsdb') is True, data
-          assert 'success' not in data, data
+          path = os.environ['PATH_UNDER_TEST']
+          try:
+              data = json.load(open(os.environ['BODY'], encoding='utf-8'))
+          except Exception as exc:
+              raise AssertionError(f'{path} returned HTTP 200 non-JSON body: {exc}')
+          assert isinstance(data, dict) and data.get('accsdb') is True and 'success' not in data, (path, data)
           PY
+          }
+
+          for prefix in translationsub transsubscribe; do
+            for route in list updates progress variants check user-settings sources; do
+              check_removed GET "/$prefix/$route"
+            done
+            for route in add remove toggle watched notified; do
+              check_removed POST "/$prefix/$route"
             done
           done
 
