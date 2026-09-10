@@ -12,10 +12,12 @@ function read(name) {
 
 const badgeSource = read('translationsub-badge-state.js');
 const realtimeSource = read('translationsub-realtime.js');
-const controllerSource = read('Controller.cs');
+const v2ControllerSource = read('V2Controller.cs');
 const modInitSource = read('ModInit.cs');
 const pluginControllerSource = read('PluginController.cs');
 
+assert.ok(!fs.existsSync(path.join(moduleDir, 'Controller.cs')),
+  'Legacy TranslationSub controller must stay removed');
 assert.ok(!fs.existsSync(path.join(moduleDir, 'translationsub-watch.js')),
   'Client progress watcher must stay removed');
 assert.doesNotMatch(pluginControllerSource, /translationsub-watch\.js/,
@@ -26,8 +28,8 @@ assert.doesNotMatch(pluginControllerSource, /translationsub-watch\.js/,
 assert.match(modInitSource, /"\/timecode\/add"/);
 assert.match(modInitSource, /Response\.OnCompleted/);
 assert.match(modInitSource, /PublishProfile\(uid, profileId, "timecode"\)/);
-assert.match(controllerSource,
-  /Route\("translationsub\/v2\/snapshot"\)[\s\S]*?SyncTimeCodeProgress\(uid, profileId\)/);
+assert.match(v2ControllerSource,
+  /Route\("translationsub\/v2\/snapshot"\)[\s\S]*?TimeCodeProgressService\.SyncUser\(uid, profileId\)/);
 
 // The client has no timer-based polling owner. Badge reads happen only at useful
 // UI lifecycle boundaries, while realtime invalidation triggers the same read.
