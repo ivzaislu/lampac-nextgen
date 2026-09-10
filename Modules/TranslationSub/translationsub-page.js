@@ -6,36 +6,6 @@
 
     if (!window.Lampa || !Lampa.Component || typeof Lampa.Component.add !== 'function') return;
 
-    function storageGet(name, fallback) {
-        try {
-            if (Lampa.Storage && typeof Lampa.Storage.get === 'function') return Lampa.Storage.get(name, fallback);
-        } catch (e) {}
-
-        try {
-            var value = localStorage.getItem(name);
-            return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
-    }
-
-    function uid() {
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
-                return String(window.TranslationSub.uid() || '');
-        } catch (e) {}
-        return String(storageGet('lampac_unic_id', '') || '');
-    }
-
-    function host() {
-        try {
-            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
-            return window.location.origin || '';
-        } catch (e) {
-            return '';
-        }
-    }
-
     function escapeHtml(value) {
         try {
             if (Lampa.Utils && typeof Lampa.Utils.escape === 'function') return Lampa.Utils.escape(String(value || ''));
@@ -55,50 +25,6 @@
         } catch (e) {}
     }
 
-    function request(method, path, success, error) {
-        success = success || function () {};
-        error = error || function () {};
-        var url = host() + path;
-
-        if (typeof fetch === 'function') {
-            fetch(url, { method: method, cache: 'no-store' })
-                .then(function (response) {
-                    if (!response.ok) throw new Error('HTTP ' + response.status);
-                    return response.text();
-                })
-                .then(function (text) {
-                    var data = {};
-                    try { data = text ? JSON.parse(text) : {}; } catch (e) {}
-                    success(data);
-                })
-                .catch(error);
-            return;
-        }
-
-        try {
-            var xhr = new XMLHttpRequest();
-            xhr.open(method, url, true);
-            xhr.setRequestHeader('Cache-Control', 'no-cache');
-            xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    var data = {};
-                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (e) {}
-                    success(data);
-                } else error(new Error('HTTP ' + xhr.status));
-            };
-            xhr.send(null);
-        } catch (e2) {
-            error(e2);
-        }
-    }
-
-    function sourceName(value) {
-        value = String(value || '').trim();
-        if (!value) return 'Источник';
-        return value.toLowerCase() === 'multi' ? 'Несколько источников' : value;
-    }
-
     function posterUrl(path) {
         path = String(path || '');
         if (!path) return '';
@@ -111,15 +37,80 @@
         return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
     }
 
-    function syncWatched(done) {
-        done = typeof done === 'function' ? done : function () {};
+    function sourceLabels(item) {
+        var names = [];
+        var sources = item && Array.isArray(item.sources) ? item.sources : [];
+        sources.forEach(function (source) {
+            var name = String(source && source.source || '').trim();
+            if (name && names.indexOf(name) === -1) names.push(name);
+        });
+        if (!names.length && item && item.source)
+            names.push(String(item.source));
+        return names;
+    }
+
+    function metaHtml(item) {
+        item = item || {};
+        var season = Number(item.season || 1) || 1;
+        var watched = Number(item.watchedEpisode || 0) || 0;
+        var available = Number(item.availableEpisode || 0) || 0;
+        var progress = Math.max(0, Math.min(100, Number(item.progressPercent || 0) || 0));
+        var names = sourceLabels(item);
+        var body = '<div class="translationsub-meta-v2">' +
+            '<div class="translationsub-meta-v2__row">' +
+                '<span class="translationsub-meta-v2__season">S' + season + '</span>' +
+                '<span class="translationsub-meta-v2__pill">Просмотрено <b>E' + watched + '</b></span>' +
+                '<span class="translationsub-meta-v2__pill">В озвучке <b>E' + available + '</b></span>' +
+            '</div>' +
+            '<div class="translationsub-progress-v2"><i style="width:' + progress + '%"></i></div>';
+
+        if (item.hasNewEpisodes) {
+            var from = Number(item.fromEpisode || 0) || 0;
+            var to = Number(item.toEpisode || 0) || 0;
+            body += '<div class="translationsub-meta-v2__next">Можно смотреть E' + from + (to > from ? '–E' + to : '') + '</div>';
+        } else {
+            body += '<div class="translationsub-meta-v2__ok">Новых серий пока нет</div>';
+        }
+
+        if (names.length)
+            body += '<div class="translationsub-meta-v2__source">' + escapeHtml(names.join(', ')) + '</div>';
+
+        if (item.schedule && item.schedule.text) {
+            var type = String(item.schedule.type || 'plain').replace(/[^a-z0-9-]/gi, '');
+            body += '<div class="translationsub-tmdb-v2">' +
+                '<div class="translationsub-tmdb-v2__state translationsub-tmdb-v2__state--' + type + '">' +
+                    escapeHtml(item.schedule.text) +
+                '</div>' +
+            '</div>';
+        }
+
+        return body + '</div>';
+    }
+
+    function loadSnapshot(success, error) {
+        success = typeof success === 'function' ? success : function () {};
+        error = typeof error === 'function' ? error : function () {};
+
         try {
-            if (window.TranslationSubWatch && typeof window.TranslationSubWatch.sync === 'function') {
-                window.TranslationSubWatch.sync(done);
+            if (window.TranslationSubBadgeState
+                && typeof window.TranslationSubBadgeState.refresh === 'function'
+                && typeof window.TranslationSubBadgeState.snapshot === 'function') {
+                window.TranslationSubBadgeState.refresh(function () {
+                    var snapshot = window.TranslationSubBadgeState.snapshot();
+                    if (snapshot && typeof snapshot === 'object') success(snapshot);
+                    else error();
+                });
                 return;
             }
         } catch (e) {}
-        done();
+
+        var api = window.TranslationSubApi;
+        if (api && typeof api.snapshot === 'function') {
+            api.snapshot(success, error);
+            return;
+        }
+
+        error();
     }
 
     function SubscriptionPage() {
@@ -194,24 +185,43 @@
             }, 40);
         }
 
-        function render(list) {
+        function render(snapshot) {
             if (destroyed) return;
-            list = Array.isArray(list) ? list : [];
+            snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+            var list = Array.isArray(snapshot.subscriptions) ? snapshot.subscriptions : [];
+            var updateCount = snapshot.badge ? Number(snapshot.badge.count || 0) || 0 : 0;
 
             var focusedId = String(html.find('.translationsub-card.focus').attr('data-subscription-id') || '');
             html.empty();
             html.append('<div class="translationsub-page__title">Подписки на озвучки</div>');
-            html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampac TimeCode · подписок: ' + list.length + '</div>');
+            html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampac TimeCode</div>');
+
+            var summary = $('<div class="translationsub-summary-v2"></div>');
+            summary.append('<div class="translationsub-summary-v2__item"><span class="translationsub-summary-v2__dot"></span><span>Подписок <b>' + list.length + '</b></span></div>');
+            summary.append('<div class="translationsub-summary-v2__item translationsub-summary-v2__item--new"><span class="translationsub-summary-v2__dot"></span><span>С новыми сериями <b>' + updateCount + '</b></span></div>');
+            html.append(summary);
 
             var toolbar = $('<div class="translationsub-toolbar"></div>');
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
             check.on('hover:enter', function () {
-                syncWatched(function () {
-                    if (window.TranslationSub && typeof window.TranslationSub.forceCheckUpdatesUI === 'function') {
-                        window.TranslationSub.forceCheckUpdatesUI(function () { load(); });
-                    } else {
-                        load();
+                var api = window.TranslationSubApi;
+                if (!api || typeof api.check !== 'function') {
+                    notify('TranslationSub API недоступен');
+                    return;
+                }
+
+                notify('Проверяю новые серии…');
+                api.check(function (result) {
+                    if (result && result.success === false) {
+                        notify('Не удалось проверить новые серии');
+                        return;
                     }
+                    load(function (next) {
+                        var count = next && next.badge ? Number(next.badge.count || 0) || 0 : 0;
+                        notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
+                    });
+                }, function () {
+                    notify('Не удалось проверить новые серии');
                 });
             });
             toolbar.append(check);
@@ -223,41 +233,22 @@
             }
 
             list.forEach(function (item) {
-                var id = String(item.Id || item.id || '');
-                var title = item.Title || item.title || 'Без названия';
-                var voice = item.TranslationName || item.translationName || 'Озвучка';
-                var season = Number(item.CurrentSeason || item.currentSeason || 1) || 1;
-                var watched = Number(item.CurrentEpisode || item.currentEpisode || 0) || 0;
-                var available = Number(item.LastEpisode || item.lastEpisode || 0) || 0;
-                var newCount = Math.max(0, available - watched);
-                var poster = posterUrl(item.Poster || item.poster || '');
-                var sources = item.Sources || item.sources || [];
-                var names = [];
-
-                if (Array.isArray(sources)) {
-                    sources.forEach(function (source) {
-                        var name = sourceName(source.Source || source.source);
-                        if (name && names.indexOf(name) === -1) names.push(name);
-                    });
-                }
-                if (!names.length) names.push(sourceName(item.Source || item.source));
-
-                var progressText = 'S' + season + ' · просмотрено E' + watched + ' · озвучка до E' + available;
-                if (newCount > 0) {
-                    progressText += ' · доступны E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '');
-                }
-                if (names.length) progressText += ' · ' + names.join(', ');
-
+                item = item || {};
+                var id = String(item.id || '');
+                var title = String(item.title || 'Без названия');
+                var voice = String(item.translationName || 'Озвучка');
+                var newCount = Number(item.newCount || 0) || 0;
+                var poster = posterUrl(item.poster || '');
                 var posterHtml = poster
                     ? '<img src="' + escapeHtml(poster) + '" alt="">'
                     : '<div class="translationsub-card__poster-empty"></div>';
 
-                var card = $('<div class="translationsub-card selector" data-subscription-id="' + escapeHtml(id) + '">' +
+                var card = $('<div class="translationsub-card selector' + (item.hasNewEpisodes ? ' translationsub-card--has-new' : '') + '" data-subscription-id="' + escapeHtml(id) + '" data-translationsub-new-count="' + newCount + '">' +
                     '<div class="translationsub-card__poster">' + posterHtml + '</div>' +
                     '<div class="translationsub-card__body">' +
                         '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
                         '<div class="translationsub-card__voice">' + escapeHtml(voice) + '</div>' +
-                        '<div class="translationsub-card__meta">' + escapeHtml(progressText) + '</div>' +
+                        '<div class="translationsub-card__meta">' + metaHtml(item) + '</div>' +
                     '</div>' +
                     (newCount > 0 ? '<div class="translationsub-card__new">' + newCount + ' НОВЫХ</div>' : '') +
                 '</div>');
@@ -284,20 +275,22 @@
             focusAfterRender(focusedId);
         }
 
-        function load() {
+        function load(done) {
+            done = typeof done === 'function' ? done : function () {};
             if (destroyed) return;
             var version = ++requestVersion;
             try { self.activity.loader(true); } catch (e) {}
 
-            request('GET', '/translationsub/list?uid=' + encodeURIComponent(uid()), function (list) {
+            loadSnapshot(function (snapshot) {
                 if (destroyed || version !== requestVersion) return;
                 try { self.activity.loader(false); } catch (e) {}
-                render(Array.isArray(list) ? list : []);
+                render(snapshot);
                 try { self.activity.toggle(); } catch (e2) {}
+                done(snapshot);
             }, function () {
                 if (destroyed || version !== requestVersion) return;
                 try { self.activity.loader(false); } catch (e) {}
-                render([]);
+                render({ subscriptions: [], badge: { count: 0 } });
                 try { self.activity.toggle(); } catch (e2) {}
                 notify('Не удалось загрузить подписки');
             });
@@ -307,7 +300,7 @@
         window.TranslationSubPageRefresh = reloadRef;
 
         this.initialize = function () {
-            syncWatched(load);
+            load();
         };
     }
 
