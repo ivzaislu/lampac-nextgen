@@ -21,15 +21,6 @@ internal sealed class LampacSourceDescriptor
     public string Url { get; init; }
 }
 
-internal sealed class LampacMetadataResponse
-{
-    public int StatusCode { get; init; }
-    public string Body { get; init; }
-    public string Location { get; init; }
-    public bool IsSuccess => StatusCode >= 200 && StatusCode < 300;
-    public bool IsRedirect => StatusCode >= 300 && StatusCode < 400 && !string.IsNullOrWhiteSpace(Location);
-}
-
 internal static class LampacMetadataClient
 {
     const int MaxMetadataDepth = 4;
@@ -66,7 +57,7 @@ internal static class LampacMetadataClient
 
         if (discovered.Count == 0)
         {
-            Serilog.Log.Error(
+            Serilog.Log.Warning(
                 "TranslationSub metadata discovery has no selected balancers. Selected={Selected}; Discovered={Discovered}",
                 string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)),
                 string.Join(",", discoveredAll.Select(x => x.Id).OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
@@ -119,21 +110,21 @@ internal static class LampacMetadataClient
         if (query.Year > 0)
             url = AppendQuery(url, "year", query.Year.ToString());
 
-        var response = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
-        if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
+        string body = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(body))
         {
-            Serilog.Log.Error("TranslationSub metadata discovery returned no body");
+            Serilog.Log.Warning("TranslationSub metadata discovery returned no body");
             return new List<LampacSourceDescriptor>();
         }
 
         JToken root;
         try
         {
-            root = JToken.Parse(response.Body);
+            root = JToken.Parse(body);
         }
         catch (Exception ex)
         {
-            Serilog.Log.Error(ex, "TranslationSub metadata discovery returned non-JSON body. Length={Length}", response.Body.Length);
+            Serilog.Log.Warning(ex, "TranslationSub metadata discovery returned non-JSON body. Length={Length}", body.Length);
             return new List<LampacSourceDescriptor>();
         }
 
@@ -142,7 +133,7 @@ internal static class LampacMetadataClient
             array = obj["online"] as JArray ?? obj["items"] as JArray;
         if (array == null)
         {
-            Serilog.Log.Error("TranslationSub metadata discovery JSON has no online array. RootType={RootType}", root.Type);
+            Serilog.Log.Warning("TranslationSub metadata discovery JSON has no online array. RootType={RootType}", root.Type);
             return new List<LampacSourceDescriptor>();
         }
 
@@ -181,8 +172,13 @@ internal static class LampacMetadataClient
             return null;
 
         string path = value.Trim();
-        if (Uri.TryCreate(path, UriKind.Absolute, out var absolute))
+        if (TryCreateHttpUri(path, out var absolute))
             path = absolute.AbsolutePath;
+        else if (path.StartsWith("//", StringComparison.Ordinal)
+            && TryCreateHttpUri("http:" + path, out var schemeRelative))
+        {
+            path = schemeRelative.AbsolutePath;
+        }
         else
         {
             int query = path.IndexOf('?');
@@ -216,7 +212,7 @@ internal static class LampacMetadataClient
             httpContext).ConfigureAwait(false);
 
         if (rows.Count == 0)
-            Serilog.Log.Error("TranslationSub metadata source produced no episode rows. Source={Source}; Season={Season}", source.Id, query.Season);
+            Serilog.Log.Warning("TranslationSub metadata source produced no episode rows. Source={Source}; Season={Season}", source.Id, query.Season);
 
         return rows
             .Where(x => x.Episode > 0)
@@ -284,21 +280,21 @@ internal static class LampacMetadataClient
         if (!visited.Add(url.Trim()))
             return;
 
-        var response = await GetFollowingRedirectsAsync(url, query.Uid, httpContext).ConfigureAwait(false);
-        if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
+        string body = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(body))
         {
-            Serilog.Log.Error(
+            Serilog.Log.Warning(
                 "TranslationSub metadata HTTP returned no body. Source={Source}; Depth={Depth}; Route={Route}",
                 source.Id, depth, SafeRoute(url));
             return;
         }
 
-        var nodes = ParseMetadataNodes(response.Body);
+        var nodes = ParseMetadataNodes(body);
         if (nodes.Count == 0)
         {
-            Serilog.Log.Error(
+            Serilog.Log.Warning(
                 "TranslationSub metadata parser found no nodes. Source={Source}; Depth={Depth}; Route={Route}; Length={Length}",
-                source.Id, depth, SafeRoute(url), response.Body.Length);
+                source.Id, depth, SafeRoute(url), body.Length);
             return;
         }
 
@@ -332,9 +328,9 @@ internal static class LampacMetadataClient
                 if (string.IsNullOrWhiteSpace(voiceId))
                     voiceId = StableMetadataVoiceId(voiceName, source.Id);
 
-                // The active voice's episodes are already present in EpisodeTpl.data.
-                // Follow only the other voice links to avoid a redundant request.
-                if (!string.IsNullOrWhiteSpace(node.Url) && !node.Active)
+                // EpisodeTpl.data already describes the current voice. When Lampac
+                // marks no voice active, the first voice is the page voice fallback.
+                if (!string.IsNullOrWhiteSpace(node.Url) && !ReferenceEquals(node, activeVoice))
                 {
                     follow.Add(new FollowNode
                     {
@@ -631,15 +627,25 @@ internal static class LampacMetadataClient
             return null;
 
         nextUrl = WebUtility.HtmlDecode(nextUrl.Trim());
-        if (Uri.TryCreate(nextUrl, UriKind.Absolute, out _))
-            return ForceMetadataJson(nextUrl);
+
+        if (TryCreateHttpUri(nextUrl, out var absoluteNext))
+            return ForceMetadataJson(absoluteNext.ToString());
+
+        if (nextUrl.StartsWith("//", StringComparison.Ordinal))
+        {
+            string scheme = TryCreateHttpUri(currentUrl, out var currentAbsolute)
+                ? currentAbsolute.Scheme
+                : Uri.UriSchemeHttp;
+            return ForceMetadataJson(scheme + ":" + nextUrl);
+        }
+
         if (nextUrl.StartsWith('/'))
             return ForceMetadataJson(nextUrl);
 
         try
         {
-            Uri current = Uri.TryCreate(currentUrl, UriKind.Absolute, out var absolute)
-                ? absolute
+            Uri current = TryCreateHttpUri(currentUrl, out var absoluteCurrent)
+                ? absoluteCurrent
                 : new Uri(new Uri("http://lampac.local/"), currentUrl.TrimStart('/'));
             Uri resolved = new Uri(current, nextUrl);
             string value = resolved.Host.Equals("lampac.local", StringComparison.OrdinalIgnoreCase)
@@ -724,22 +730,7 @@ internal static class LampacMetadataClient
         return bool.TryParse(token.ToString(), out bool result) && result;
     }
 
-    static async Task<LampacMetadataResponse> GetFollowingRedirectsAsync(string pathOrUrl, string uid, HttpContext httpContext)
-    {
-        string current = ForceMetadataJson(pathOrUrl);
-        for (int i = 0; i < 4; i++)
-        {
-            var response = await GetAsync(current, uid, httpContext).ConfigureAwait(false);
-            if (response == null)
-                return null;
-            if (!response.IsRedirect)
-                return response;
-            current = ResolveMetadataLink(current, response.Location);
-        }
-        return null;
-    }
-
-    static async Task<LampacMetadataResponse> GetAsync(string pathOrUrl, string uid, HttpContext httpContext)
+    static async Task<string> GetAsync(string pathOrUrl, string uid, HttpContext httpContext)
     {
         if (string.IsNullOrWhiteSpace(pathOrUrl))
             return null;
@@ -767,24 +758,14 @@ internal static class LampacMetadataClient
                 );
             }
 
-            // Use Lampac's shared HTTP stack just like OnlineApi.checkSearch().
-            string body = await Http.Get(
+            // Shared.Http follows redirects itself, matching OnlineApi.checkSearch().
+            return await Http.Get(
                 uri.ToString(),
                 timeoutSeconds: 30,
                 headers: headers,
                 statusCodeOK: true,
                 weblog: false
             ).ConfigureAwait(false);
-
-            if (body == null)
-                return null;
-
-            return new LampacMetadataResponse
-            {
-                StatusCode = 200,
-                Body = body,
-                Location = null
-            };
         }
         catch (Exception ex)
         {
@@ -798,8 +779,14 @@ internal static class LampacMetadataClient
         if (string.IsNullOrWhiteSpace(pathOrUrl) || string.IsNullOrWhiteSpace(key) || HasQueryKey(pathOrUrl, key))
             return pathOrUrl;
 
-        string separator = pathOrUrl.Contains('?') ? "&" : "?";
-        return pathOrUrl + separator + Uri.EscapeDataString(key) + "=" + Uri.EscapeDataString(value ?? string.Empty);
+        int fragmentIndex = pathOrUrl.IndexOf('#');
+        string fragment = fragmentIndex >= 0 ? pathOrUrl[fragmentIndex..] : string.Empty;
+        string route = fragmentIndex >= 0 ? pathOrUrl[..fragmentIndex] : pathOrUrl;
+        string separator = route.Contains('?') ? "&" : "?";
+
+        return route + separator
+            + Uri.EscapeDataString(key) + "=" + Uri.EscapeDataString(value ?? string.Empty)
+            + fragment;
     }
 
     static string ForceMetadataJson(string pathOrUrl)
@@ -860,6 +847,20 @@ internal static class LampacMetadataClient
         return false;
     }
 
+    static bool TryCreateHttpUri(string value, out Uri uri)
+    {
+        uri = null;
+        if (string.IsNullOrWhiteSpace(value)
+            || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var parsed)
+            || (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+        {
+            return false;
+        }
+
+        uri = parsed;
+        return true;
+    }
+
     static Uri ResolveRequestUri(string pathOrUrl, HttpContext httpContext, out bool localRoute)
     {
         localRoute = true;
@@ -867,10 +868,21 @@ internal static class LampacMetadataClient
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        bool absoluteHttp = Uri.TryCreate(path, UriKind.Absolute, out var absolute)
-            && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps);
+        if (path.StartsWith("//", StringComparison.Ordinal))
+        {
+            string scheme = LocalRequestScheme(httpContext);
+            if (TryCreateHttpUri(scheme + ":" + path, out var schemeRelative))
+            {
+                if (!IsLocalAddress(schemeRelative, httpContext))
+                {
+                    localRoute = false;
+                    return schemeRelative;
+                }
 
-        if (absoluteHttp)
+                path = schemeRelative.PathAndQuery;
+            }
+        }
+        else if (TryCreateHttpUri(path, out var absolute))
         {
             if (!IsLocalAddress(absolute, httpContext))
             {
@@ -1012,8 +1024,14 @@ internal static class LampacMetadataClient
         if (string.IsNullOrWhiteSpace(pathOrUrl))
             return string.Empty;
 
-        if (Uri.TryCreate(pathOrUrl, UriKind.Absolute, out var absolute))
+        if (TryCreateHttpUri(pathOrUrl, out var absolute))
             return absolute.AbsolutePath;
+
+        if (pathOrUrl.StartsWith("//", StringComparison.Ordinal)
+            && TryCreateHttpUri("http:" + pathOrUrl, out var schemeRelative))
+        {
+            return schemeRelative.AbsolutePath;
+        }
 
         int query = pathOrUrl.IndexOf('?');
         return query >= 0 ? pathOrUrl[..query] : pathOrUrl;
