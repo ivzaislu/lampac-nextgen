@@ -18,10 +18,11 @@ public class TranslationSubSettingsController : BaseController
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/user-settings")]
-    async public Task<ActionResult> GetSettings(string userKey = null)
+    async public Task<ActionResult> GetSettings(string uid = null)
     {
-        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveRequestUid()).ConfigureAwait(false);
-        var json = JObject.FromObject(TranslationSettingsStore.Get(userKey));
+        uid = ResolveUid(uid);
+        var options = await LampacMetadataService.AvailableSourcesAsync(uid).ConfigureAwait(false);
+        var json = JObject.FromObject(TranslationSettingsStore.Get(uid));
         json["availableSources"] = JArray.FromObject(options.Select(x => x.id));
         json["availableSourceItems"] = JArray.FromObject(options);
         return ContentTo(json.ToString(Formatting.None));
@@ -30,9 +31,9 @@ public class TranslationSubSettingsController : BaseController
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/sources")]
-    async public Task<ActionResult> GetSources()
+    async public Task<ActionResult> GetSources(string uid = null)
     {
-        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveRequestUid()).ConfigureAwait(false);
+        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveUid(uid)).ConfigureAwait(false);
         return ContentTo(JsonConvert.SerializeObject(new
         {
             sources = options.Select(x => x.id).ToList(),
@@ -60,7 +61,10 @@ public class TranslationSubSettingsController : BaseController
             return ContentTo("{\"success\":false,\"error\":\"invalid json\"}");
         }
 
-        string userKey = body?.Value<string>("userKey") ?? "local";
+        string uid = ResolveUid(body?.Value<string>("uid"));
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
         int interval = body?.Value<int?>("checkIntervalHours") ?? 1;
         bool? useTmdbSchedule = body?["useTmdbSchedule"]?.Type == JTokenType.Null
             ? null
@@ -92,7 +96,7 @@ public class TranslationSubSettingsController : BaseController
         }
 
         var settings = TranslationSettingsStore.Set(
-            userKey,
+            uid,
             interval,
             sources,
             useTmdbSchedule,
@@ -100,7 +104,7 @@ public class TranslationSubSettingsController : BaseController
             endedRefreshDays,
             newSeasonMode);
 
-        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveRequestUid()).ConfigureAwait(false);
+        var options = await LampacMetadataService.AvailableSourcesAsync(uid).ConfigureAwait(false);
         return ContentTo(JsonConvert.SerializeObject(new
         {
             success = true,
@@ -110,17 +114,17 @@ public class TranslationSubSettingsController : BaseController
         }));
     }
 
-    string ResolveRequestUid()
+    string ResolveUid(string explicitUid = null)
     {
         string requestUid = requestInfo?.user_uid;
         if (!string.IsNullOrWhiteSpace(requestUid))
             return requestUid.Trim();
 
+        if (!string.IsNullOrWhiteSpace(explicitUid))
+            return explicitUid.Trim();
+
         if (Request.Query.TryGetValue("uid", out var uidQuery) && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
             return uidQuery.ToString().Trim();
-
-        if (Request.Query.TryGetValue("account_email", out var accountQuery) && !string.IsNullOrWhiteSpace(accountQuery.ToString()))
-            return accountQuery.ToString().Trim();
 
         return null;
     }
