@@ -34,6 +34,7 @@ public class TranslationSubPluginController : BaseController
         AppendScript(ref script, "translationsub-card-flow.js");
         AppendScript(ref script, "translationsub-layout-v3.js");
         AppendScript(ref script, "translationsub-badge-state.js");
+        AppendScript(ref script, "translationsub-realtime.js");
         AppendScript(ref script, "translationsub-navigation.js");
         AppendScript(ref script, "translationsub-bell-theme.js");
 
