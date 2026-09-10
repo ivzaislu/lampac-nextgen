@@ -20,14 +20,17 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/list")]
     [Route("transsubscribe/list")]
-    public ActionResult List(string userKey = null)
+    public ActionResult List(string uid = null)
     {
-        CaptureUserUid(userKey);
-        SyncTimeCodeProgress(userKey);
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("[]");
 
-        var list = SubscriptionStore.Load();
-        if (!string.IsNullOrWhiteSpace(userKey))
-            list = list.Where(x => x.UserKey == userKey).ToList();
+        SyncTimeCodeProgress(uid);
+
+        var list = SubscriptionStore.Load()
+            .Where(x => string.Equals(x.Uid, uid, StringComparison.Ordinal))
+            .ToList();
 
         return ContentTo(JsonConvert.SerializeObject(list));
     }
@@ -36,17 +39,20 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/updates")]
     [Route("transsubscribe/updates")]
-    async public Task<ActionResult> Updates(string userKey = null, bool force = false, string sources = null)
+    async public Task<ActionResult> Updates(string uid = null, bool force = false, string sources = null)
     {
-        CaptureUserUid(userKey);
-        SyncTimeCodeProgress(userKey);
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("[]");
+
+        SyncTimeCodeProgress(uid);
 
         if (force)
-            await TranslationSubscriptionService.Tick(userKey, ResolveSources(userKey, sources), force: true);
+            await TranslationSubscriptionService.Tick(uid, ResolveSources(uid, sources), force: true);
 
-        var list = SubscriptionStore.Load();
-        if (!string.IsNullOrWhiteSpace(userKey))
-            list = list.Where(x => x.UserKey == userKey).ToList();
+        var list = SubscriptionStore.Load()
+            .Where(x => string.Equals(x.Uid, uid, StringComparison.Ordinal))
+            .ToList();
 
         var updates = list
             .Where(x => !x.Notified && x.LastEpisode.GetValueOrDefault(0) > x.CurrentEpisode.GetValueOrDefault(0))
@@ -58,7 +64,7 @@ public class TranslationSubController : BaseController
                 return new
                 {
                     id = x.Id,
-                    userKey = x.UserKey,
+                    uid = x.Uid,
                     contentId = x.ContentId,
                     title = x.Title,
                     originalTitle = x.OriginalTitle,
@@ -91,19 +97,29 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/progress")]
     [Route("transsubscribe/progress")]
-    public ActionResult Progress(string userKey = null)
+    public ActionResult Progress(string uid = null)
     {
-        CaptureUserUid(userKey);
-        int synced = SyncTimeCodeProgress(userKey);
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+        {
+            return ContentTo(JsonConvert.SerializeObject(new
+            {
+                success = false,
+                error = "uid required",
+                count = 0,
+                synced = 0,
+                source = "lampac-timecode"
+            }));
+        }
 
-        var list = SubscriptionStore.Load();
-        if (!string.IsNullOrWhiteSpace(userKey))
-            list = list.Where(x => x.UserKey == userKey).ToList();
+        int synced = SyncTimeCodeProgress(uid);
+        int count = SubscriptionStore.Load()
+            .Count(x => string.Equals(x.Uid, uid, StringComparison.Ordinal));
 
         return ContentTo(JsonConvert.SerializeObject(new
         {
             success = true,
-            count = list.Count,
+            count,
             synced,
             source = "lampac-timecode"
         }));
@@ -114,7 +130,7 @@ public class TranslationSubController : BaseController
     [Route("translationsub/variants")]
     [Route("transsubscribe/variants")]
     async public Task<ActionResult> Variants(
-        string userKey,
+        string uid,
         string contentId,
         string title,
         string originalTitle,
@@ -123,12 +139,13 @@ public class TranslationSubController : BaseController
         string tmdbId,
         string year,
         string isSerial,
-        string uid,
         string sources,
         int? season,
         long kinopoisk_id = 0,
         bool serial = true)
     {
+        uid = ResolveUid(uid);
+
         long kp = kinopoisk_id;
         if (kp <= 0)
             long.TryParse(kpId, out kp);
@@ -144,7 +161,7 @@ public class TranslationSubController : BaseController
 
         var response = await LampacMetadataService.GetVariants(new TranslationMetadataQuery
         {
-            Uid = ResolveRequestUid(uid),
+            Uid = uid,
             ContentId = contentId,
             TmdbId = tmdbId,
             ImdbId = imdbId,
@@ -154,7 +171,7 @@ public class TranslationSubController : BaseController
             Year = contentYear,
             IsSerial = isTv,
             Season = targetSeason,
-            Sources = ResolveSources(userKey, sources)
+            Sources = ResolveSources(uid, sources)
         }, HttpContext);
 
         return ContentTo(JsonConvert.SerializeObject(response));
@@ -164,11 +181,14 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/check")]
     [Route("transsubscribe/check")]
-    async public Task<ActionResult> Check(string userKey = null, string sources = null)
+    async public Task<ActionResult> Check(string uid = null, string sources = null)
     {
-        CaptureUserUid(userKey);
-        SyncTimeCodeProgress(userKey);
-        await TranslationSubscriptionService.Tick(userKey, ResolveSources(userKey, sources), force: true);
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
+        SyncTimeCodeProgress(uid);
+        await TranslationSubscriptionService.Tick(uid, ResolveSources(uid, sources), force: true);
         return ContentTo("{\"success\":true}");
     }
 
@@ -182,14 +202,16 @@ public class TranslationSubController : BaseController
         if (body == null)
             return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
 
-        var sub = FromJson(body);
-        if (string.IsNullOrWhiteSpace(sub.UserKey))
-            sub.UserKey = "local";
+        string uid = ResolveUid(body.Value<string>("uid"));
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
+        var sub = FromJson(body, uid);
 
         bool subscribed = SubscriptionStore.MutateResult(list =>
         {
             var exists = list.FirstOrDefault(x =>
-                x.UserKey == sub.UserKey &&
+                string.Equals(x.Uid, uid, StringComparison.Ordinal) &&
                 x.ContentId == sub.ContentId &&
                 x.TranslationId == sub.TranslationId &&
                 (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1));
@@ -207,7 +229,7 @@ public class TranslationSubController : BaseController
         });
 
         if (subscribed)
-            SyncTimeCodeProgress(sub.UserKey);
+            SyncTimeCodeProgress(uid);
 
         return ContentTo(JsonConvert.SerializeObject(new { success = true, subscribed }));
     }
@@ -222,13 +244,19 @@ public class TranslationSubController : BaseController
         if (body == null)
             return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
 
-        var sub = FromJson(body);
-        if (string.IsNullOrWhiteSpace(sub.UserKey))
-            sub.UserKey = "local";
+        string uid = ResolveUid(body.Value<string>("uid"));
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
+        var sub = FromJson(body, uid);
 
         SubscriptionStore.Mutate(list =>
         {
-            if (list.Any(x => x.UserKey == sub.UserKey && x.ContentId == sub.ContentId && x.TranslationId == sub.TranslationId && (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1)))
+            if (list.Any(x =>
+                string.Equals(x.Uid, uid, StringComparison.Ordinal) &&
+                x.ContentId == sub.ContentId &&
+                x.TranslationId == sub.TranslationId &&
+                (x.CurrentSeason ?? 1) == (sub.CurrentSeason ?? 1)))
                 return;
 
             sub.Id = Guid.NewGuid().ToString("N");
@@ -236,7 +264,7 @@ public class TranslationSubController : BaseController
             list.Add(sub);
         });
 
-        SyncTimeCodeProgress(sub.UserKey);
+        SyncTimeCodeProgress(uid);
         return ContentTo("{\"success\":true}");
     }
 
@@ -250,7 +278,10 @@ public class TranslationSubController : BaseController
         if (body == null)
             return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
 
-        string userKey = body.Value<string>("userKey") ?? "local";
+        string uid = ResolveUid(body.Value<string>("uid"));
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
         string contentId = body.Value<string>("contentId");
         int season = body.Value<int?>("season") ?? 0;
         int episode = Math.Max(0, body.Value<int?>("episode") ?? 0);
@@ -265,7 +296,7 @@ public class TranslationSubController : BaseController
         {
             var matches = list.Where(x =>
                 x.IsSerial &&
-                x.UserKey == userKey &&
+                string.Equals(x.Uid, uid, StringComparison.Ordinal) &&
                 x.ContentId == contentId &&
                 x.CurrentSeason.GetValueOrDefault(1) == season).ToList();
 
@@ -298,9 +329,14 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/remove")]
     [Route("transsubscribe/remove")]
-    public ActionResult Remove(string id)
+    public ActionResult Remove(string id, string uid = null)
     {
-        SubscriptionStore.Mutate(list => list.RemoveAll(x => x.Id == id));
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
+        SubscriptionStore.Mutate(list => list.RemoveAll(x =>
+            x.Id == id && string.Equals(x.Uid, uid, StringComparison.Ordinal)));
         return ContentTo("{\"success\":true}");
     }
 
@@ -308,70 +344,47 @@ public class TranslationSubController : BaseController
     [AllowAnonymous]
     [Route("translationsub/notified")]
     [Route("transsubscribe/notified")]
-    public ActionResult Notified(string id)
+    public ActionResult Notified(string id, string uid = null)
     {
+        uid = ResolveUid(uid);
+        if (string.IsNullOrWhiteSpace(uid))
+            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+
         SubscriptionStore.Mutate(list =>
         {
-            var item = list.FirstOrDefault(x => x.Id == id);
+            var item = list.FirstOrDefault(x =>
+                x.Id == id && string.Equals(x.Uid, uid, StringComparison.Ordinal));
             if (item != null)
                 item.Notified = true;
         });
         return ContentTo("{\"success\":true}");
     }
 
-    string ResolveRequestUid(string explicitUid = null)
+    string ResolveUid(string explicitUid = null)
     {
-        if (!string.IsNullOrWhiteSpace(explicitUid))
-            return explicitUid.Trim();
-
         string requestUid = requestInfo?.user_uid;
         if (!string.IsNullOrWhiteSpace(requestUid))
             return requestUid.Trim();
 
+        if (!string.IsNullOrWhiteSpace(explicitUid))
+            return explicitUid.Trim();
+
         if (Request.Query.TryGetValue("uid", out var uidQuery) && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
             return uidQuery.ToString().Trim();
-
-        if (Request.Query.TryGetValue("account_email", out var accountQuery) && !string.IsNullOrWhiteSpace(accountQuery.ToString()))
-            return accountQuery.ToString().Trim();
 
         return null;
     }
 
-    void CaptureUserUid(string userKey)
+    int SyncTimeCodeProgress(string uid)
     {
-        if (string.IsNullOrWhiteSpace(userKey))
-            return;
-
-        string uid = ResolveRequestUid();
         if (string.IsNullOrWhiteSpace(uid))
-            return;
-
-        SubscriptionStore.MutateIfChanged(list =>
-        {
-            bool changed = false;
-            foreach (var item in list.Where(x => x.UserKey == userKey))
-            {
-                if (string.Equals(item.Uid, uid, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                item.Uid = uid;
-                changed = true;
-            }
-            return changed;
-        });
-    }
-
-    int SyncTimeCodeProgress(string userKey)
-    {
-        if (string.IsNullOrWhiteSpace(userKey))
             return 0;
 
-        string requestUserUid = ResolveRequestUid();
         string profileId = null;
         if (Request.Query.TryGetValue("profile_id", out var profileQuery))
             profileId = profileQuery.ToString();
 
-        return TimeCodeProgressService.SyncUser(userKey, requestUserUid, profileId);
+        return TimeCodeProgressService.SyncUser(uid, profileId);
     }
 
     async Task<JObject> ReadBody()
@@ -383,7 +396,7 @@ public class TranslationSubController : BaseController
         return JsonConvert.DeserializeObject<JObject>(raw);
     }
 
-    TranslationSubscription FromJson(JObject j)
+    TranslationSubscription FromJson(JObject j, string uid)
     {
         int.TryParse(j.Value<string>("currentSeason"), out int currentSeason);
         int.TryParse(j.Value<string>("currentEpisode"), out int legacyAvailableEpisode);
@@ -397,8 +410,7 @@ public class TranslationSubController : BaseController
 
         var sub = new TranslationSubscription
         {
-            UserKey = j.Value<string>("userKey") ?? "local",
-            Uid = j.Value<string>("uid") ?? j.Value<string>("account_email") ?? ResolveRequestUid(),
+            Uid = uid,
             ContentId = j.Value<string>("contentId"),
             Title = j.Value<string>("title"),
             OriginalTitle = j.Value<string>("originalTitle"),
@@ -438,13 +450,13 @@ public class TranslationSubController : BaseController
         return sub;
     }
 
-    static HashSet<string> ResolveSources(string userKey, string sources)
+    static HashSet<string> ResolveSources(string uid, string sources)
     {
         var explicitSources = ParseSources(sources);
         if (explicitSources != null)
             return explicitSources;
 
-        return (TranslationSettingsStore.Get(userKey).Sources ?? new List<string>())
+        return (TranslationSettingsStore.Get(uid).Sources ?? new List<string>())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
