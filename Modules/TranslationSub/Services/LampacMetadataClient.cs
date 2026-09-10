@@ -867,14 +867,20 @@ internal static class LampacMetadataClient
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        if (Uri.TryCreate(path, UriKind.Absolute, out var absolute) && !IsLocalAddress(absolute, httpContext))
+        bool absoluteHttp = Uri.TryCreate(path, UriKind.Absolute, out var absolute)
+            && (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps);
+
+        if (absoluteHttp)
         {
-            localRoute = false;
-            return absolute;
+            if (!IsLocalAddress(absolute, httpContext))
+            {
+                localRoute = false;
+                return absolute;
+            }
+
+            path = absolute.PathAndQuery;
         }
 
-        if (Uri.TryCreate(path, UriKind.Absolute, out absolute))
-            path = absolute.PathAndQuery;
         if (!path.StartsWith('/'))
             path = "/" + path;
 
