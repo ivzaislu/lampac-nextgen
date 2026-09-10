@@ -155,7 +155,7 @@ public class TranslationSubController : BaseController
             IsSerial = isTv,
             Season = targetSeason,
             Sources = ResolveSources(userKey, sources)
-        });
+        }, HttpContext);
 
         return ContentTo(JsonConvert.SerializeObject(response));
     }
