@@ -79,98 +79,17 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function parseNumber(text, expression) {
-        var match = String(text || '').match(expression);
-        return match ? Number(match[1] || 0) : 0;
-    }
-
-    function sourceFromMeta(text) {
-        var parts = String(text || '').split(/\s+·\s+/);
-        for (var i = parts.length - 1; i >= 0; i--) {
-            var part = String(parts[i] || '').trim();
-            if (!part || /^S\d+$/i.test(part) || /^просмотрено\s+E\d+/i.test(part) || /^озвучка\s+до\s+E\d+/i.test(part) || /^доступны\s+E\d+/i.test(part)) continue;
-            return part;
-        }
-        return '';
-    }
-
-    function enhanceCard(card) {
-        var node = $(card);
-        if (node.attr('data-translationsub-ui-v2') === '1') return;
-        var meta = node.find('.translationsub-card__meta').first();
-        if (!meta.length) return;
-
-        var text = meta.text();
-        var season = parseNumber(text, /S(\d+)/i) || 1;
-        var watched = parseNumber(text, /просмотрено\s+E(\d+)/i);
-        var available = parseNumber(text, /озвучка\s+до\s+E(\d+)/i);
-        var source = sourceFromMeta(text);
-        var newCount = Math.max(0, available - watched);
-        var ratio = available > 0 ? Math.max(0, Math.min(100, Math.round((watched / available) * 100))) : 0;
-
-        var body = '<div class="translationsub-meta-v2">' +
-            '<div class="translationsub-meta-v2__row">' +
-                '<span class="translationsub-meta-v2__season">S' + season + '</span>' +
-                '<span class="translationsub-meta-v2__pill">Просмотрено <b>E' + watched + '</b></span>' +
-                '<span class="translationsub-meta-v2__pill">В озвучке <b>E' + available + '</b></span>' +
-            '</div>' +
-            '<div class="translationsub-progress-v2"><i style="width:' + ratio + '%"></i></div>';
-
-        if (newCount > 0) {
-            body += '<div class="translationsub-meta-v2__next">Можно смотреть E' + (watched + 1) + (available > watched + 1 ? '–E' + available : '') + '</div>';
-            node.addClass('translationsub-card--has-new');
-        } else {
-            body += '<div class="translationsub-meta-v2__ok">Новых серий пока нет</div>';
-            node.removeClass('translationsub-card--has-new');
-        }
-
-        if (source) body += '<div class="translationsub-meta-v2__source">' + $('<div>').text(source).html() + '</div>';
-        body += '</div>';
-        meta.html(body);
-        node.attr('data-translationsub-new-count', String(newCount));
-        node.attr('data-translationsub-ui-v2', '1');
-    }
-
-    function enhancePage(page) {
+    function applyLayout(page) {
+        if (typeof $ !== 'function') return;
         var root = $(page);
         var mode = layoutMode();
         root.removeClass('translationsub-layout--tv translationsub-layout--mobile translationsub-layout--desktop');
         root.addClass('translationsub-layout--' + mode);
-
-        var cards = root.find('.translationsub-card');
-        cards.each(function () { enhanceCard(this); });
-
-        var total = cards.length;
-        var withNew = 0;
-        cards.each(function () {
-            if (Number($(this).attr('data-translationsub-new-count') || 0) > 0) withNew++;
-        });
-
-        var subtitle = root.find('.translationsub-page__subtitle').first();
-        if (subtitle.length) subtitle.text('Прогресс просмотра синхронизируется с Lampac TimeCode');
-
-        var summary = root.find('.translationsub-summary-v2').first();
-        if (total > 0 && !summary.length) {
-            summary = $('<div class="translationsub-summary-v2"></div>');
-            summary.append('<div class="translationsub-summary-v2__item"><span class="translationsub-summary-v2__dot"></span><span>Подписок <b class="translationsub-summary-v2__total">' + total + '</b></span></div>');
-            summary.append('<div class="translationsub-summary-v2__item translationsub-summary-v2__item--new"><span class="translationsub-summary-v2__dot"></span><span>С новыми сериями <b class="translationsub-summary-v2__new">' + withNew + '</b></span></div>');
-            subtitle.after(summary);
-        } else if (summary.length) {
-            summary.find('.translationsub-summary-v2__total').text(total);
-            summary.find('.translationsub-summary-v2__new').text(withNew);
-        }
-
-        var list = root.find('.translationsub-list').first();
-        if (list.length && cards.length > 1) {
-            cards.get().sort(function (a, b) {
-                return Number($(b).attr('data-translationsub-new-count') || 0) - Number($(a).attr('data-translationsub-new-count') || 0);
-            }).forEach(function (card) { list.append(card); });
-        }
     }
 
     function refresh() {
         if (typeof $ !== 'function') return;
-        $('.translationsub-page').each(function () { enhancePage(this); });
+        $('.translationsub-page').each(function () { applyLayout(this); });
     }
 
     function start() {
