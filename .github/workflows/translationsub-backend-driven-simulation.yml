@@ -1,0 +1,25 @@
+name: TranslationSub Backend Driven Simulation
+
+on:
+  push:
+    branches:
+      - TranslationSub-clean-legacy-api
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulate-backend-driven-updates:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate backend-driven architecture model
+        run: node scripts/ci/translationsub-backend-driven-simulation.mjs
