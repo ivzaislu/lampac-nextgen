@@ -7,7 +7,8 @@ namespace TranslationSub.Services;
 
 /// <summary>
 /// Builds the canonical profile-aware TranslationSub read model consumed by
-/// thin clients. All progress/update/schedule decisions belong here, not in JS.
+/// thin clients. All progress/update/schedule/navigation decisions belong here,
+/// not in JavaScript.
 /// </summary>
 public static class TranslationSubSnapshotService
 {
@@ -57,6 +58,7 @@ public static class TranslationSubSnapshotService
             Poster = sub.Poster,
             Year = sub.Year,
             IsSerial = sub.IsSerial,
+            Navigation = BuildNavigation(sub),
             Season = season,
             WatchedEpisode = watched,
             AvailableEpisode = available,
@@ -94,6 +96,29 @@ public static class TranslationSubSnapshotService
                 LastSyncedAt = sub.TmdbLastSyncedAt,
                 NewSeasonAvailable = sub.TmdbNewSeasonAvailable
             }
+        };
+    }
+
+    static TranslationSubNavigationSnapshot BuildNavigation(TranslationSubscription sub)
+    {
+        if (sub == null)
+            return null;
+
+        string id = (sub.TmdbId ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            string fallback = (sub.ContentId ?? string.Empty).Trim();
+            if (!string.IsNullOrWhiteSpace(fallback) && fallback.All(char.IsDigit))
+                id = fallback;
+        }
+
+        if (string.IsNullOrWhiteSpace(id))
+            return null;
+
+        return new TranslationSubNavigationSnapshot
+        {
+            Id = id,
+            Method = sub.IsSerial ? "tv" : "movie"
         };
     }
 
