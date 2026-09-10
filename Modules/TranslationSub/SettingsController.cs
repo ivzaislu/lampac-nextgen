@@ -13,11 +13,15 @@ using TranslationSub.Services;
 
 namespace TranslationSub;
 
+/// <summary>
+/// Canonical server-owned TranslationSub settings API. The Lampa client may
+/// mirror values into its Settings UI, but policy and selected balancers are
+/// persisted and normalized only on the backend.
+/// </summary>
 public class TranslationSubSettingsController : BaseController
 {
     [HttpGet]
     [AllowAnonymous]
-    [Route("translationsub/user-settings")]
     [Route("translationsub/v2/settings")]
     async public Task<ActionResult> GetSettings(string uid = null)
     {
@@ -29,37 +33,15 @@ public class TranslationSubSettingsController : BaseController
         return ContentTo(json.ToString(Formatting.None));
     }
 
-    [HttpGet]
-    [AllowAnonymous]
-    [Route("translationsub/sources")]
-    async public Task<ActionResult> GetSources(string uid = null)
-    {
-        var options = await LampacMetadataService.AvailableSourcesAsync(ResolveUid(uid)).ConfigureAwait(false);
-        return ContentTo(JsonConvert.SerializeObject(new
-        {
-            sources = options.Select(x => x.id).ToList(),
-            items = options
-        }));
-    }
-
-    [HttpPost]
-    [AllowAnonymous]
-    [Route("translationsub/user-settings")]
-    public Task<ActionResult> SetSettings()
-        => SetSettingsCore();
-
     [HttpPut]
     [AllowAnonymous]
     [Route("translationsub/v2/settings")]
-    public Task<ActionResult> SetSettingsV2()
-        => SetSettingsCore();
-
-    async Task<ActionResult> SetSettingsCore()
+    async public Task<ActionResult> SetSettings()
     {
         using var reader = new StreamReader(Request.Body, Encoding.UTF8);
         string raw = await reader.ReadToEndAsync();
         if (string.IsNullOrWhiteSpace(raw))
-            return ContentTo("{\"success\":false,\"error\":\"empty body\"}");
+            return ContentTo("{\"success\":false,\"error\":\"empty_body\"}");
 
         JObject body;
         try
@@ -68,12 +50,12 @@ public class TranslationSubSettingsController : BaseController
         }
         catch
         {
-            return ContentTo("{\"success\":false,\"error\":\"invalid json\"}");
+            return ContentTo("{\"success\":false,\"error\":\"invalid_json\"}");
         }
 
         string uid = ResolveUid(body?.Value<string>("uid"));
         if (string.IsNullOrWhiteSpace(uid))
-            return ContentTo("{\"success\":false,\"error\":\"uid required\"}");
+            return ContentTo("{\"success\":false,\"error\":\"uid_required\"}");
 
         int interval = body?.Value<int?>("checkIntervalHours") ?? 1;
         bool? useTmdbSchedule = body?["useTmdbSchedule"]?.Type == JTokenType.Null
@@ -91,17 +73,6 @@ public class TranslationSubSettingsController : BaseController
                 string value = TranslationSettingsStore.NormalizeSourceId(item?.ToString());
                 if (value != null)
                     sources.Add(value);
-            }
-        }
-        else
-        {
-            string rawSources = body?.Value<string>("sources");
-            if (!string.IsNullOrWhiteSpace(rawSources))
-            {
-                sources.AddRange(rawSources
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(TranslationSettingsStore.NormalizeSourceId)
-                    .Where(x => x != null));
             }
         }
 
@@ -133,7 +104,8 @@ public class TranslationSubSettingsController : BaseController
         if (!string.IsNullOrWhiteSpace(explicitUid))
             return explicitUid.Trim();
 
-        if (Request.Query.TryGetValue("uid", out var uidQuery) && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
+        if (Request.Query.TryGetValue("uid", out var uidQuery)
+            && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
             return uidQuery.ToString().Trim();
 
         return null;
