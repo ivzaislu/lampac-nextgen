@@ -96,10 +96,6 @@
         return uid;
     }
 
-    function userKey() {
-        return String(storageGet('client_uid', '') || lampacUid() || 'local');
-    }
-
     function query(params) {
         var parts = [];
         params = params || {};
@@ -149,7 +145,7 @@
 
     function refreshSourceSelection(done) {
         done = typeof done === 'function' ? done : function () {};
-        request('GET', API.settings, { userKey: userKey(), uid: lampacUid() }, function (settings) {
+        request('GET', API.settings, { uid: lampacUid() }, function (settings) {
             var sources = sourceList(settings && (settings.Sources || settings.sources));
             storageSet(SOURCES_KEY, sources);
             done(sources, settings || {});
@@ -235,7 +231,7 @@
             }
         } catch (e) {}
 
-        request('GET', API.updates, { userKey: userKey(), force: 'false' }, function (updates) {
+        request('GET', API.updates, { uid: lampacUid(), force: 'false' }, function (updates) {
             done(Array.isArray(updates) ? updates : []);
         }, function () { done([]); });
     }
@@ -250,7 +246,7 @@
             }
 
             notify('Проверяю новые серии…');
-            request('GET', API.check, { userKey: userKey(), sources: sources.join(',') }, function () {
+            request('GET', API.check, { uid: lampacUid(), sources: sources.join(',') }, function () {
                 refreshUpdates(function (updates) {
                     notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
                     done(updates);
@@ -304,6 +300,7 @@
 
         window.TranslationSub = {
             version: META.version,
+            uid: lampacUid,
             openForItem: openForItem,
             openSubscriptions: openSubscriptionsPage,
             checkUpdates: refreshUpdates,
