@@ -1,6 +1,6 @@
 using Newtonsoft.Json.Linq;
 using Shared;
-using Shared.Models;
+using Shared.Models.Base;
 using Shared.Services;
 using System;
 using System.Collections.Generic;
