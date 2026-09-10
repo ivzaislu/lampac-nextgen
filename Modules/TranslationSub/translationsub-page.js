@@ -113,6 +113,14 @@
         error();
     }
 
+    function applySnapshot(snapshot) {
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.applySnapshot === 'function')
+                window.TranslationSubBadgeState.applySnapshot(snapshot);
+        } catch (e) {}
+        return snapshot;
+    }
+
     function SubscriptionPage() {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="translationsub-page"></div>');
@@ -212,14 +220,15 @@
 
                 notify('Проверяю новые серии…');
                 api.check(function (result) {
-                    if (result && result.success === false) {
+                    if (!result || result.success !== true || !result.snapshot) {
                         notify('Не удалось проверить новые серии');
                         return;
                     }
-                    load(function (next) {
-                        var count = next && next.badge ? Number(next.badge.count || 0) || 0 : 0;
-                        notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
-                    });
+
+                    var next = applySnapshot(result.snapshot);
+                    render(next);
+                    var count = next && next.badge ? Number(next.badge.count || 0) || 0 : 0;
+                    notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
                 }, function () {
                     notify('Не удалось проверить новые серии');
                 });
