@@ -25,6 +25,16 @@ public static class LampacMetadataService
             metadata = Array.Empty<LampacVoiceMetadata>();
         }
 
+        if (metadata == null || metadata.Count == 0)
+        {
+            Serilog.Log.Error(
+                "TranslationSub metadata returned zero voices. Sources={Sources}; Season={Season}; Serial={Serial}",
+                string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)),
+                query.Season,
+                query.IsSerial);
+            metadata = Array.Empty<LampacVoiceMetadata>();
+        }
+
         var raw = metadata
             .Where(x => x != null && !string.IsNullOrWhiteSpace(x.VoiceName))
             .Where(x => !query.IsSerial || query.Season <= 0 || x.Season == query.Season)
@@ -49,6 +59,15 @@ public static class LampacMetadataService
                 };
             })
             .ToList();
+
+        if (metadata.Count > 0 && raw.Count == 0)
+        {
+            Serilog.Log.Error(
+                "TranslationSub metadata voices were filtered to zero variants. Metadata={MetadataCount}; Season={Season}; Serial={Serial}",
+                metadata.Count,
+                query.Season,
+                query.IsSerial);
+        }
 
         var sourceNames = metadata
             .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Source))
