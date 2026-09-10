@@ -74,12 +74,12 @@
         return sourceList(storageGet(SOURCES_KEY, selectedSources));
     }
 
-    function userKey() {
-        return String(storageGet('client_uid', '') || storageGet('lampac_unic_id', '') || 'local');
-    }
-
     function uid() {
-        return String(storageGet('lampac_unic_id', '') || storageGet('client_uid', '') || '');
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
+                return String(window.TranslationSub.uid() || '');
+        } catch (e) {}
+        return String(storageGet('lampac_unic_id', '') || '');
     }
 
     function host() {
@@ -208,7 +208,7 @@
         storageSet(SOURCES_KEY, selectedSources);
 
         request('POST', '/translationsub/user-settings', {
-            userKey: userKey(),
+            uid: uid(),
             checkIntervalHours: intSetting(KEYS.interval, 1, 1, 24),
             sources: selectedSources,
             useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
@@ -376,8 +376,7 @@
     }
 
     function loadServerSettings() {
-        var path = '/translationsub/user-settings?userKey=' + encodeURIComponent(userKey());
-        if (uid()) path += '&uid=' + encodeURIComponent(uid());
+        var path = '/translationsub/user-settings?uid=' + encodeURIComponent(uid());
         request('GET', path, null, applyServerSettings, function () {
             selectedSources = enabledSources();
             availableItems = [];
@@ -395,7 +394,7 @@
         }
 
         notify('Проверяю новые серии…');
-        request('GET', '/translationsub/check?userKey=' + encodeURIComponent(userKey()) + '&sources=' + encodeURIComponent(sources.join(',')), null, function () {
+        request('GET', '/translationsub/check?uid=' + encodeURIComponent(uid()) + '&sources=' + encodeURIComponent(sources.join(',')), null, function () {
             function finish(updates) {
                 updates = Array.isArray(updates) ? updates : [];
                 notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
@@ -407,7 +406,7 @@
                     return;
                 }
             } catch (e) {}
-            request('GET', '/translationsub/updates?userKey=' + encodeURIComponent(userKey()) + '&force=false', null, finish, function () { done([]); });
+            request('GET', '/translationsub/updates?uid=' + encodeURIComponent(uid()) + '&force=false', null, finish, function () { done([]); });
         }, function () {
             notify('Не удалось проверить новые серии');
             done([]);
