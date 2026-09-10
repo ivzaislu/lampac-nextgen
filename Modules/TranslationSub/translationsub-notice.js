@@ -11,79 +11,10 @@
             if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
                 return Lampa.Storage.get(name, fallback);
         } catch (e) {}
-
         try {
             var value = localStorage.getItem(name);
             return value === null ? fallback : value;
-        } catch (e2) {
-            return fallback;
-        }
-    }
-
-    function uid() {
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
-                return String(window.TranslationSub.uid() || '');
-        } catch (e) {}
-        return String(storageGet('lampac_unic_id', '') || '');
-    }
-
-    function profileId() {
-        return String(storageGet('lampac_profile_id', '') || '');
-    }
-
-    function host() {
-        try {
-            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
-            return window.location.origin || '';
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function request(path, success, error) {
-        success = success || function () {};
-        error = error || function () {};
-        var url = host() + path;
-
-        if (typeof fetch === 'function') {
-            fetch(url, { method: 'GET', cache: 'no-store' })
-                .then(function (response) {
-                    if (!response.ok) throw new Error('HTTP ' + response.status);
-                    return response.text();
-                })
-                .then(function (text) {
-                    var data = [];
-                    try { data = text ? JSON.parse(text) : []; } catch (e) {}
-                    success(Array.isArray(data) ? data : []);
-                })
-                .catch(error);
-            return;
-        }
-
-        try {
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', url, true);
-            xhr.setRequestHeader('Cache-Control', 'no-cache');
-            xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    var data = [];
-                    try { data = xhr.responseText ? JSON.parse(xhr.responseText) : []; } catch (e) {}
-                    success(Array.isArray(data) ? data : []);
-                } else error(new Error('HTTP ' + xhr.status));
-            };
-            xhr.send(null);
-        } catch (e2) {
-            error(e2);
-        }
-    }
-
-    function value(item, pascal, camel, fallback) {
-        if (!item) return fallback;
-        if (item[pascal] !== undefined && item[pascal] !== null) return item[pascal];
-        if (item[camel] !== undefined && item[camel] !== null) return item[camel];
-        return fallback;
+        } catch (e2) { return fallback; }
     }
 
     function posterUrl(path) {
@@ -126,7 +57,7 @@
             }
         } catch (e) {}
 
-        var id = String(value(item, 'TmdbId', 'tmdbId', value(item, 'ContentId', 'contentId', '')) || '').trim();
+        var id = String(item && (item.tmdbId || item.contentId) || '').trim();
         if (!id || !window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
 
         var source = String(storageGet('translationsub_card_source', 'tmdb') || 'tmdb').toLowerCase() === 'cub' ? 'cub' : 'tmdb';
@@ -160,28 +91,39 @@
 
     function loadUpdates(done) {
         done = typeof done === 'function' ? done : function () {};
-        var path = '/translationsub/updates?uid=' + encodeURIComponent(uid()) + '&force=false';
-        var profile = profileId();
-        if (profile) path += '&profile_id=' + encodeURIComponent(profile);
 
-        request(path, function (updates) {
-            lastUpdates = updates;
-            done(updates);
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+                window.TranslationSubBadgeState.refresh(function (updates) {
+                    lastUpdates = Array.isArray(updates) ? updates.slice() : [];
+                    done(lastUpdates.slice());
+                });
+                return;
+            }
+        } catch (e) {}
+
+        var api = window.TranslationSubApi;
+        if (!api || typeof api.snapshot !== 'function') {
+            done(lastUpdates.slice());
+            return;
+        }
+
+        api.snapshot(function (snapshot) {
+            lastUpdates = snapshot && Array.isArray(snapshot.updates) ? snapshot.updates.slice() : [];
+            done(lastUpdates.slice());
         }, function () {
             done(lastUpdates.slice());
         });
     }
 
     function sourceLabels(item) {
-        var sources = value(item, 'Sources', 'sources', []);
+        var sources = item && Array.isArray(item.sources) ? item.sources : [];
         var names = [];
 
-        if (Array.isArray(sources)) {
-            sources.forEach(function (source) {
-                var name = String(value(source, 'Source', 'source', '') || '').trim();
-                if (name && names.indexOf(name) === -1) names.push(name);
-            });
-        }
+        sources.forEach(function (source) {
+            var name = String(source && source.source || '').trim();
+            if (name && names.indexOf(name) === -1) names.push(name);
+        });
         return names;
     }
 
@@ -193,14 +135,15 @@
             card = $('<div class="notice notice--card selector"><div class="notice__left"><div class="notice__img"><img /></div></div><div class="notice__body"><div class="notice__head"><div class="notice__title"></div><div class="notice__time"></div></div><div class="notice__descr"></div></div></div>');
         }
 
-        var title = String(value(item, 'Title', 'title', 'Сериал') || 'Сериал');
-        var voice = String(value(item, 'TranslationName', 'translationName', 'Озвучка') || 'Озвучка');
-        var season = Number(value(item, 'Season', 'season', value(item, 'CurrentSeason', 'currentSeason', 1)) || 1);
-        var watched = Number(value(item, 'WatchedEpisode', 'watchedEpisode', value(item, 'CurrentEpisode', 'currentEpisode', 0)) || 0);
-        var from = Number(value(item, 'FromEpisode', 'fromEpisode', watched + 1) || (watched + 1));
-        var to = Number(value(item, 'ToEpisode', 'toEpisode', value(item, 'AvailableEpisode', 'availableEpisode', 0)) || 0);
-        var count = Number(value(item, 'NewCount', 'newCount', Math.max(0, to - watched)) || 0);
-        var poster = posterUrl(value(item, 'Poster', 'poster', ''));
+        item = item || {};
+        var title = String(item.title || 'Сериал');
+        var voice = String(item.translationName || 'Озвучка');
+        var season = Number(item.season || 1) || 1;
+        var watched = Number(item.watchedEpisode || 0) || 0;
+        var from = Number(item.fromEpisode || 0) || 0;
+        var to = Number(item.toEpisode || 0) || 0;
+        var count = Number(item.newCount || 0) || 0;
+        var poster = posterUrl(item.poster || '');
         var labels = sourceLabels(item);
 
         card.attr('data-translationsub-update', String(index));
