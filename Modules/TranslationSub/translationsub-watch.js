@@ -4,8 +4,6 @@
     if (window.__TranslationSubWatchStarted) return;
     window.__TranslationSubWatchStarted = true;
 
-    var FALLBACK_SYNC_INTERVAL = 5 * 60 * 1000;
-    var syncTimer = null;
     var debounceTimer = null;
     var retryTimer = null;
     var syncing = false;
@@ -170,8 +168,10 @@
         if (withRetry !== false) {
             clearTimeout(retryTimer);
             retryTimer = setTimeout(function () {
-                // TimeCode пишет SQLite асинхронно после Timeline.update. Повторная
-                // сверка закрывает окно, когда первый запрос пришёл раньше commit.
+                // Compatibility safety net for clients where Timeline.update can
+                // race the asynchronous TimeCode SQLite commit. Passive polling
+                // is intentionally gone: server-side /timecode/add observation
+                // owns normal progress propagation.
                 syncAll();
             }, 4200);
         }
@@ -191,10 +191,6 @@
                 Lampa.Listener.follow('state:changed', function (event) {
                     if (event && event.target === 'timeline') scheduleSync(1600, true);
                 });
-
-                Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') scheduleSync(2200, false);
-                });
             }
         } catch (e2) {}
     }
@@ -203,15 +199,11 @@
         if (!window.Lampa) return;
 
         bindTimeline();
-        scheduleSync(3000, false);
-
-        if (syncTimer) clearInterval(syncTimer);
-        syncTimer = setInterval(syncAll, FALLBACK_SYNC_INTERVAL);
 
         window.TranslationSubWatch = {
             sync: syncAll,
             watchedPercent: 60,
-            source: 'lampac-timecode'
+            source: 'lampac-timecode-compat'
         };
     }
 
