@@ -98,10 +98,13 @@ public class ModInit : IModuleLoaded
 
         context.Response.OnCompleted(() =>
         {
-            if (context.Response.StatusCode >= 200 && context.Response.StatusCode < 300)
-                return TranslationSubRealtimeService.PublishProfile(uid, profileId, "timecode");
+            if (context.Response.StatusCode < 200 || context.Response.StatusCode >= 300)
+                return Task.CompletedTask;
 
-            return Task.CompletedTask;
+            int changed = TimeCodeProgressService.SyncUser(uid, profileId);
+            return changed > 0
+                ? TranslationSubRealtimeService.PublishProfile(uid, profileId, "timecode")
+                : Task.CompletedTask;
         });
 
         return true;
