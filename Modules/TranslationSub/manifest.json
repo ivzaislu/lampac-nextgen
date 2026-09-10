@@ -3,13 +3,19 @@
   "dynamic": true,
   "tree": [
     "Controller.cs",
+    "V2Controller.cs",
     "SettingsController.cs",
     "PluginController.cs",
     "ModInit.cs",
     "ModuleConf.cs",
+    "Models/SubscriptionProfileProgress.cs",
     "Models/TranslationMetadata.cs",
+    "Models/TranslationSubContentState.cs",
+    "Models/TranslationSubSnapshot.cs",
     "Models/TranslationSubscription.cs",
     "Models/TranslationVariant.cs",
+    "Services/ContentIdentityService.cs",
+    "Services/ProfileProgressStore.cs",
     "Services/SubscriptionStore.cs",
     "Services/TranslationSettingsStore.cs",
     "Services/TmdbScheduleService.cs",
@@ -18,7 +24,11 @@
     "Services/LampacMetadataClient.cs",
     "Services/LampacMetadataService.cs",
     "Services/TranslationSubscriptionService.cs",
+    "Services/TranslationSubCommandService.cs",
+    "Services/TranslationSubContentStateService.cs",
+    "Services/TranslationSubProjectionService.cs",
     "Services/TranslationSubRealtimeService.cs",
+    "Services/TranslationSubSnapshotService.cs",
     "Services/VoiceNormalize.cs"
   ]
 }
