@@ -19,8 +19,14 @@ const badge = read('Modules/TranslationSub/translationsub-badge-state.js');
 const settingsStore = read('Modules/TranslationSub/Services/TranslationSettingsStore.cs');
 const realtimeService = read('Modules/TranslationSub/Services/TranslationSubRealtimeService.cs');
 const subscriptionStore = read('Modules/TranslationSub/Services/SubscriptionStore.cs');
+const profileProgressStore = read('Modules/TranslationSub/Services/ProfileProgressStore.cs');
+const progressService = read('Modules/TranslationSub/Services/TimeCodeProgressService.cs');
+const snapshotService = read('Modules/TranslationSub/Services/TranslationSubSnapshotService.cs');
+const contentStateService = read('Modules/TranslationSub/Services/TranslationSubContentStateService.cs');
+const commandService = read('Modules/TranslationSub/Services/TranslationSubCommandService.cs');
 const pluginController = read('Modules/TranslationSub/PluginController.cs');
 const realtimeClient = read('Modules/TranslationSub/translationsub-realtime.js');
+const cardFlow = read('Modules/TranslationSub/translationsub-card-flow.js');
 
 // Lampac already owns the server->client transport.
 assert.match(sharedStartup, /public static INws Nws/);
@@ -53,11 +59,18 @@ assert.match(timeCode, /Route\("\/timecode\/add"\)/);
 assert.match(timeCode, /user_id = \$"\{user_id\}_\{profile_id\}"/);
 assert.match(modInit, /"\/timecode\/add"/);
 assert.match(modInit, /Response\.OnCompleted/);
+assert.match(modInit, /TimeCodeProgressService\.SyncUser\(uid, profileId\)/);
 assert.match(modInit, /PublishProfile\(uid, profileId, "timecode"\)/);
 
-// Shared subscription changes (scheduler, add/remove) publish UID-wide only when
-// meaningful shared state changed. Profile-local CurrentEpisode/Notified are
-// intentionally excluded from the shared-state fingerprint.
+// Profile-local watched state is now isolated from the shared subscription model.
+assert.match(profileProgressStore, /NormalizeProfileId/);
+assert.match(profileProgressStore, /SubscriptionId/);
+assert.match(profileProgressStore, /WatchedEpisode/);
+assert.match(progressService, /ProfileProgressStore\.Upsert\(uid, profileId, watchedBySubscription\)/);
+assert.doesNotMatch(progressService, /sub\.CurrentEpisode\s*=/);
+assert.doesNotMatch(progressService, /sub\.Notified\s*=/);
+
+// Shared subscription changes publish UID-wide only when meaningful shared state changed.
 assert.match(subscriptionStore, /SharedStateByUid/);
 assert.match(subscriptionStore, /PublishUid\(uid, "subscription"\)/);
 assert.doesNotMatch(subscriptionStore, /x\.CurrentEpisode/);
@@ -68,12 +81,37 @@ assert.match(subscriptionStore, /x\.LastEpisode/);
 assert.match(subscriptionStore, /x\.TmdbNextAirDate/);
 assert.match(subscriptionStore, /x\.ScheduleState/);
 
-// User-level scheduling defaults are backend-owned and match the intended policy.
+// The canonical read model is server-owned and contains presentation-ready state.
+assert.match(snapshotService, /HasNewEpisodes/);
+assert.match(snapshotService, /NewCount/);
+assert.match(snapshotService, /ProgressPercent/);
+assert.match(snapshotService, /BuildSchedule/);
+assert.match(snapshotService, /Badge = new TranslationSubBadgeSnapshot/);
+
+// Card/domain decisions and authoritative commands live on the backend.
+assert.match(contentStateService, /ContentIdentityService\.ResolveAsync/);
+assert.match(contentStateService, /LampacMetadataService\.GetVariants/);
+assert.match(contentStateService, /FindExisting/);
+assert.match(commandService, /Server-authoritative TranslationSub commands/);
+assert.match(commandService, /ContentIdentityService\.ResolveAsync/);
+assert.match(commandService, /LampacMetadataService\.GetVariants/);
+assert.match(commandService, /SubscriptionStore\.Mutate/);
+
+// Frontend card flow must stay a Lampa transport/rendering adapter.
+assert.match(cardFlow, /deliberately only a Lampa transport adapter/);
+assert.match(cardFlow, /client\.contentState\(/);
+assert.match(cardFlow, /client\.subscribe\(/);
+assert.match(cardFlow, /client\.unsubscribe\(/);
+assert.doesNotMatch(cardFlow, /function\s+sameContent\s*\(/);
+assert.doesNotMatch(cardFlow, /function\s+latestAiredSeason\s*\(/);
+assert.doesNotMatch(cardFlow, /function\s+normalizeVoice\s*\(/);
+assert.doesNotMatch(cardFlow, /function\s+findExisting\s*\(/);
+
+// User-level scheduling defaults are backend-owned and match intended policy.
 assert.match(settingsStore, /CheckIntervalHours \{ get; set; \} = 1/);
 assert.match(settingsStore, /TmdbRefreshHours \{ get; set; \} = 24/);
 
-// The new production client is actually shipped after BadgeState and uses a
-// distinct NWS id so it cannot replace RCH's lampac_nws_id connection.
+// Realtime client is shipped after BadgeState and uses a distinct NWS id.
 const badgeLoad = pluginController.indexOf('AppendScript(ref script, "translationsub-badge-state.js")');
 const realtimeLoad = pluginController.indexOf('AppendScript(ref script, "translationsub-realtime.js")');
 assert.ok(badgeLoad >= 0 && realtimeLoad > badgeLoad, 'realtime client must load after BadgeState');
@@ -83,13 +121,19 @@ assert.match(realtimeClient, /TranslationSubRegister/);
 assert.match(realtimeClient, /TranslationSubChanged/);
 assert.match(realtimeClient, /window\.TranslationSubBadgeState\.refresh\(\)/);
 
-// This is intentionally an additive migration checkpoint. The old frontend
-// synchronization remains until the user separately approves its removal.
+// Passive frontend polling is no longer allowed. Timeline reconciliation remains
+// only as a compatibility safety net until the repository-wide TimeCode writer
+// audit proves every write passes through /timecode/add.
+assert.doesNotMatch(watch, /FALLBACK_SYNC_INTERVAL/);
+assert.doesNotMatch(watch, /setInterval\(syncAll/);
+assert.doesNotMatch(watch, /scheduleSync\(3000/);
+assert.doesNotMatch(watch, /event\.type\s*===\s*['"]ready['"]/);
 assert.match(watch, /Timeline\.listener\.follow\('update'/);
-assert.match(badge, /setInterval\(refresh, 60 \* 1000\)/);
+assert.doesNotMatch(badge, /setInterval\(refresh,\s*60\s*\*\s*1000\)/);
+assert.match(badge, /visibilitychange/);
 assert.match(controller, /SyncTimeCodeProgress\(uid\)/);
 
-// Exercise the real production realtime JS with a minimal fake Lampac/WebSocket.
+// Exercise the production realtime JS with a minimal fake Lampac/WebSocket.
 const storage = new Map([
   ['lampac_unic_id', 'user1'],
   ['lampac_profile_id', '7']
@@ -178,7 +222,7 @@ assert.deepEqual(registration, {
   args: ['user1', '7']
 });
 assert.equal(badgeRefreshes, 0, 'initial NWS connect must not duplicate startup snapshot');
-console.log('PRODUCTION realtime connect: registered uid+profile without extra /updates');
+console.log('PRODUCTION realtime connect: registered uid+profile without extra snapshot');
 
 ws.onmessage({ data: JSON.stringify({ method: 'TranslationSubChanged', args: [1, 'timecode'] }) });
 assert.equal(badgeRefreshes, 1, 'backend invalidation must trigger exactly one Badge snapshot refresh');
@@ -193,46 +237,4 @@ assert.deepEqual(reRegistration, {
 });
 console.log('PRODUCTION profile switch registration: current profile_id is resent');
 
-// Target routing model for the server registry.
-class RoutingModel {
-  constructor() {
-    this.registrations = new Map();
-    this.sent = [];
-  }
-  register(connectionId, uid, profileId) {
-    this.registrations.set(connectionId, { uid, profileId: String(profileId || '0') });
-  }
-  disconnect(connectionId) { this.registrations.delete(connectionId); }
-  publishProfile(uid, profileId) {
-    for (const [connectionId, registration] of this.registrations) {
-      if (registration.uid === uid && registration.profileId === String(profileId || '0'))
-        this.sent.push(connectionId);
-    }
-  }
-  publishUid(uid) {
-    for (const [connectionId, registration] of this.registrations) {
-      if (registration.uid === uid) this.sent.push(connectionId);
-    }
-  }
-  reset() { this.sent.length = 0; }
-}
-
-const routing = new RoutingModel();
-routing.register('u1p7', 'user1', '7');
-routing.register('u1p8', 'user1', '8');
-routing.register('u2p7', 'user2', '7');
-routing.publishProfile('user1', '7');
-assert.deepEqual(routing.sent, ['u1p7']);
-console.log('TARGET TimeCode routing: only matching uid+profile receives invalidation');
-routing.reset();
-routing.publishUid('user1');
-assert.deepEqual(routing.sent.sort(), ['u1p7', 'u1p8']);
-console.log('TARGET shared metadata routing: all profiles of matching UID receive invalidation');
-routing.reset();
-routing.disconnect('u1p8');
-routing.publishUid('user1');
-assert.deepEqual(routing.sent, ['u1p7']);
-console.log('TARGET disconnect routing: stale connection receives nothing');
-
-console.log('ADDITIVE checkpoint: old polling/Timeline/progress paths intentionally still present');
-console.log('TranslationSub additive backend realtime production simulation passed.');
+console.log('TranslationSub backend-first architecture simulation passed.');
