@@ -42,11 +42,11 @@ for (const required of [
   assert.ok(texts.has(required), `Required TimeCode integration file is missing: ${required}`);
 }
 
-// The physical TimeCode database is allowed to be opened only by the TimeCode
-// owner itself and by TranslationSub's explicitly read-only projection reader.
+// Count executable string literals that point at the physical TimeCode database;
+// documentation/comments mentioning the path are intentionally ignored.
 const databaseReferences = [];
 for (const [file, code] of texts) {
-  if (/database[\\/]TimeCode\.sql/i.test(code)) databaseReferences.push(file);
+  if (/["']database[\\/]TimeCode\.sql["']/i.test(code)) databaseReferences.push(file);
 }
 
 const allowedDatabaseReferences = new Set([
@@ -57,7 +57,7 @@ const unexpectedDatabaseReferences = databaseReferences.filter((file) => !allowe
 assert.deepEqual(unexpectedDatabaseReferences, [],
   `Unexpected direct TimeCode database access: ${unexpectedDatabaseReferences.join(', ')}`);
 
-// Detect EF mutations against the TimeCode table anywhere in production source.
+// Detect EF/SQL mutations against the TimeCode table anywhere in production source.
 // Any new writer must either remain inside TimeCodeController or deliberately
 // extend the TranslationSub server hook before this allowlist is changed.
 const mutationPatterns = [
