@@ -20,8 +20,12 @@
         }
     }
 
-    function userKey() {
-        return String(storageGet('client_uid', '') || storageGet('lampac_unic_id', '') || 'local');
+    function uid() {
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
+                return String(window.TranslationSub.uid() || '');
+        } catch (e) {}
+        return String(storageGet('lampac_unic_id', '') || '');
     }
 
     function host() {
@@ -152,7 +156,7 @@
 
     function loadUpdates(done) {
         done = typeof done === 'function' ? done : function () {};
-        request('/translationsub/updates?userKey=' + encodeURIComponent(userKey()) + '&force=false', function (updates) {
+        request('/translationsub/updates?uid=' + encodeURIComponent(uid()) + '&force=false', function (updates) {
             lastUpdates = updates;
             done(updates);
         }, function () {
