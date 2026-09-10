@@ -66,7 +66,7 @@ internal static class LampacMetadataClient
 
         if (discovered.Count == 0)
         {
-            Serilog.Log.Warning(
+            Serilog.Log.Error(
                 "TranslationSub metadata discovery has no selected balancers. Selected={Selected}; Discovered={Discovered}",
                 string.Join(",", query.Sources.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)),
                 string.Join(",", discoveredAll.Select(x => x.Id).OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
@@ -122,7 +122,7 @@ internal static class LampacMetadataClient
         var response = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
         if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
         {
-            Serilog.Log.Warning("TranslationSub metadata discovery returned no body");
+            Serilog.Log.Error("TranslationSub metadata discovery returned no body");
             return new List<LampacSourceDescriptor>();
         }
 
@@ -133,7 +133,7 @@ internal static class LampacMetadataClient
         }
         catch (Exception ex)
         {
-            Serilog.Log.Warning(ex, "TranslationSub metadata discovery returned non-JSON body. Length={Length}", response.Body.Length);
+            Serilog.Log.Error(ex, "TranslationSub metadata discovery returned non-JSON body. Length={Length}", response.Body.Length);
             return new List<LampacSourceDescriptor>();
         }
 
@@ -142,7 +142,7 @@ internal static class LampacMetadataClient
             array = obj["online"] as JArray ?? obj["items"] as JArray;
         if (array == null)
         {
-            Serilog.Log.Warning("TranslationSub metadata discovery JSON has no online array. RootType={RootType}", root.Type);
+            Serilog.Log.Error("TranslationSub metadata discovery JSON has no online array. RootType={RootType}", root.Type);
             return new List<LampacSourceDescriptor>();
         }
 
@@ -216,7 +216,7 @@ internal static class LampacMetadataClient
             httpContext).ConfigureAwait(false);
 
         if (rows.Count == 0)
-            Serilog.Log.Warning("TranslationSub metadata source produced no episode rows. Source={Source}; Season={Season}", source.Id, query.Season);
+            Serilog.Log.Error("TranslationSub metadata source produced no episode rows. Source={Source}; Season={Season}", source.Id, query.Season);
 
         return rows
             .Where(x => x.Episode > 0)
@@ -287,7 +287,7 @@ internal static class LampacMetadataClient
         var response = await GetFollowingRedirectsAsync(url, query.Uid, httpContext).ConfigureAwait(false);
         if (response?.IsSuccess != true || string.IsNullOrWhiteSpace(response.Body))
         {
-            Serilog.Log.Warning(
+            Serilog.Log.Error(
                 "TranslationSub metadata HTTP returned no body. Source={Source}; Depth={Depth}; Route={Route}",
                 source.Id, depth, SafeRoute(url));
             return;
@@ -296,7 +296,7 @@ internal static class LampacMetadataClient
         var nodes = ParseMetadataNodes(response.Body);
         if (nodes.Count == 0)
         {
-            Serilog.Log.Warning(
+            Serilog.Log.Error(
                 "TranslationSub metadata parser found no nodes. Source={Source}; Depth={Depth}; Route={Route}; Length={Length}",
                 source.Id, depth, SafeRoute(url), response.Body.Length);
             return;
