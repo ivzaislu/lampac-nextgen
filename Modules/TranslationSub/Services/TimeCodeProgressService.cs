@@ -29,18 +29,18 @@ public static class TimeCodeProgressService
         public int Percent { get; init; }
     }
 
-    public static int SyncUser(string userKey, string requestUserUid, string profileId = null)
+    public static int SyncUser(string uid, string profileId = null)
     {
-        userKey = string.IsNullOrWhiteSpace(userKey) ? "local" : userKey;
-        string timeCodeUser = BuildTimeCodeUserId(requestUserUid, profileId);
+        uid = (uid ?? string.Empty).Trim();
+        string timeCodeUser = BuildTimeCodeUserId(uid, profileId);
 
-        if (string.IsNullOrWhiteSpace(timeCodeUser) || !File.Exists(DatabasePath))
+        if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(timeCodeUser) || !File.Exists(DatabasePath))
             return 0;
 
         try
         {
             var subscriptions = SubscriptionStore.Load()
-                .Where(x => x.IsSerial && x.UserKey == userKey)
+                .Where(x => x.IsSerial && string.Equals(x.Uid, uid, StringComparison.Ordinal))
                 .ToList();
 
             if (subscriptions.Count == 0)
@@ -80,7 +80,7 @@ public static class TimeCodeProgressService
             {
                 foreach (var item in list)
                 {
-                    if (item.UserKey != userKey || string.IsNullOrWhiteSpace(item.Id))
+                    if (!string.Equals(item.Uid, uid, StringComparison.Ordinal) || string.IsNullOrWhiteSpace(item.Id))
                         continue;
 
                     if (!watchedBySubscription.TryGetValue(item.Id, out int watched))
@@ -109,9 +109,9 @@ public static class TimeCodeProgressService
         }
     }
 
-    public static string BuildTimeCodeUserId(string requestUserUid, string profileId = null)
+    public static string BuildTimeCodeUserId(string uid, string profileId = null)
     {
-        string value = (requestUserUid ?? string.Empty).Trim();
+        string value = (uid ?? string.Empty).Trim();
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
