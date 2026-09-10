@@ -24,6 +24,7 @@ public static class TranslationSubContentStateService
         uid = (uid ?? string.Empty).Trim();
         profileId = ProfileProgressStore.NormalizeProfileId(profileId);
 
+        bool includeVoices = payload?.Value<bool?>("includeVoices") ?? true;
         var content = await ContentIdentityService.ResolveAsync(payload).ConfigureAwait(false);
         var result = new TranslationSubContentState
         {
@@ -53,6 +54,11 @@ public static class TranslationSubContentStateService
             Subscribed = anySubscription,
             Title = anySubscription ? "Озвучки · подписка активна" : "Подписки на озвучки"
         };
+
+        // Card rendering only needs eligibility + active button state. Avoid
+        // touching balancers until the user actually opens the voice selector.
+        if (!includeVoices)
+            return result;
 
         var selectedSources = (TranslationSettingsStore.Get(uid).Sources ?? new List<string>())
             .Select(TranslationSettingsStore.NormalizeSourceId)
