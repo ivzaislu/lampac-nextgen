@@ -136,6 +136,14 @@
         request('GET', '/translationsub/check', {}, null, success, error);
     }
 
+    function settings(success, error) {
+        request('GET', '/translationsub/v2/settings', {}, null, success, error);
+    }
+
+    function updateSettings(values, success, error) {
+        request('PUT', '/translationsub/v2/settings', {}, values || {}, success, error);
+    }
+
     window.TranslationSubApi = {
         request: request,
         snapshot: snapshot,
@@ -144,6 +152,8 @@
         subscribe: subscribe,
         unsubscribe: unsubscribe,
         check: check,
+        settings: settings,
+        updateSettings: updateSettings,
         uid: uid,
         profileId: profileId,
         host: host
