@@ -247,7 +247,7 @@ jobs:
           print('add/list/remove lifecycle passed')
           PY
 
-      - name: Verify removed APIs are unreachable
+      - name: Verify removed APIs are not served by TranslationSub
         shell: bash
         run: |
           set -euo pipefail
@@ -260,8 +260,9 @@ jobs:
                 toggle) body='{"uid":"ci@translationsub.test","contentId":"ci-series","translationId":"ci-voice","currentSeason":"1"}' ;;
               esac
 
+              bodyfile="/tmp/${prefix}-${route}.body"
               status=$(curl --silent --show-error --max-time 10 \
-                -o "/tmp/${prefix}-${route}.body" \
+                -o "$bodyfile" \
                 -w '%{http_code}' \
                 -H 'Content-Type: application/json' \
                 -X POST \
@@ -269,14 +270,33 @@ jobs:
                 "$base/$prefix/$route")
 
               echo "$prefix/$route -> HTTP $status"
-              if [ "$status" != '404' ]; then
-                echo "Expected removed API to return 404, got $status"
-                cat "/tmp/${prefix}-${route}.body" || true
-                exit 1
-              fi
+              STATUS="$status" BODYFILE="$bodyfile" ROUTE="$prefix/$route" python3 - <<'PY'
+          import json, os
+          status = os.environ['STATUS']
+          path = os.environ['BODYFILE']
+          route = os.environ['ROUTE']
+
+          if status == '404':
+              print(route, 'is absent (404)')
+              raise SystemExit(0)
+
+          if status != '200':
+              raise AssertionError(f'{route}: unexpected HTTP {status}')
+
+          try:
+              data = json.load(open(path, encoding='utf-8'))
+          except Exception as exc:
+              raise AssertionError(f'{route}: expected 404 or Lampac fallback JSON, got non-JSON HTTP 200: {exc}')
+
+          assert data.get('accsdb') is True, (route, data)
+          assert 'success' not in data, (route, data)
+          assert 'subscribed' not in data, (route, data)
+          assert 'updated' not in data, (route, data)
+          print(route, 'is absent; request reached Lampac AccsDB fallback')
+          PY
             done
           done
-          echo 'All removed APIs are unreachable'
+          echo 'All removed APIs are absent from TranslationSub routing'
 
       - name: Runtime log tail
         if: always()
