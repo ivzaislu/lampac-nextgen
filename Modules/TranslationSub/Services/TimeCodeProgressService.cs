@@ -12,10 +12,10 @@ namespace TranslationSub.Services;
 
 /// <summary>
 /// Reads the progress written by Lampac's TimeCode module (database/TimeCode.sql)
-/// and reconciles TranslationSub subscriptions with that server-side source.
+/// and reconciles the profile-scoped TranslationSub progress projection.
 ///
-/// Lampa.Timeline is only a client-side trigger. The durable Lampac TimeCode
-/// database is the authoritative source for watched progress.
+/// Lampac TimeCode is the authoritative source for watched progress. Shared
+/// TranslationSubscription objects must never be mutated with profile state.
 /// </summary>
 public static class TimeCodeProgressService
 {
@@ -32,6 +32,7 @@ public static class TimeCodeProgressService
     public static int SyncUser(string uid, string profileId = null)
     {
         uid = (uid ?? string.Empty).Trim();
+        profileId = ProfileProgressStore.NormalizeProfileId(profileId);
         string timeCodeUser = BuildTimeCodeUserId(uid, profileId);
 
         if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(timeCodeUser) || !File.Exists(DatabasePath))
@@ -74,32 +75,9 @@ public static class TimeCodeProgressService
             if (watchedBySubscription.Count == 0)
                 return 0;
 
-            int changed = 0;
-
-            SubscriptionStore.Mutate(list =>
-            {
-                foreach (var item in list)
-                {
-                    if (!string.Equals(item.Uid, uid, StringComparison.Ordinal) || string.IsNullOrWhiteSpace(item.Id))
-                        continue;
-
-                    if (!watchedBySubscription.TryGetValue(item.Id, out int watched))
-                        continue;
-
-                    int previous = item.CurrentEpisode.GetValueOrDefault(0);
-                    if (watched != previous)
-                    {
-                        item.CurrentEpisode = watched;
-                        changed++;
-                    }
-
-                    // One invariant for every client: an update exists only while
-                    // the selected voice has episodes beyond Lampac TimeCode progress.
-                    item.Notified = item.LastEpisode.GetValueOrDefault(0) <= watched;
-                }
-            });
-
-            return changed;
+            // Only profile-scoped state changes here. Shared subscription metadata
+            // (voice, sources, available episode, TMDB state) remains untouched.
+            return ProfileProgressStore.Upsert(uid, profileId, watchedBySubscription);
         }
         catch
         {
@@ -115,8 +93,8 @@ public static class TimeCodeProgressService
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
 
-        profileId = (profileId ?? string.Empty).Trim();
-        if (!string.IsNullOrWhiteSpace(profileId) && profileId != "0")
+        profileId = ProfileProgressStore.NormalizeProfileId(profileId);
+        if (profileId != "0")
             value += "_" + profileId;
 
         // Keep this identical to Modules/Sync/TimeCode/Controller.cs#getUserid.
@@ -197,11 +175,8 @@ public static class TimeCodeProgressService
         int scanTo = Math.Max(
             32,
             Math.Max(
-                sub.CurrentEpisode.GetValueOrDefault(0) + 8,
-                Math.Max(
-                    sub.LastEpisode.GetValueOrDefault(0) + 8,
-                    sub.TmdbTargetSeasonEpisodes.GetValueOrDefault(0) + 3
-                )
+                sub.LastEpisode.GetValueOrDefault(0) + 8,
+                sub.TmdbTargetSeasonEpisodes.GetValueOrDefault(0) + 3
             )
         );
         scanTo = Math.Min(MaxEpisodeScan, scanTo);
