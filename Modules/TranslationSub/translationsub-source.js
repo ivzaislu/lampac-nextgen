@@ -65,10 +65,7 @@
     function refreshState(result) {
         try {
             var badge = window.TranslationSubBadgeState;
-            if (result && result.snapshot && badge && typeof badge.applySnapshot === 'function') {
-                badge.applySnapshot(result.snapshot);
-                return;
-            }
+            if (badge && typeof badge.applyCommand === 'function' && badge.applyCommand(result)) return;
             if (badge && typeof badge.refresh === 'function') badge.refresh();
         } catch (e) {}
     }
