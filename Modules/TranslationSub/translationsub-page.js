@@ -259,10 +259,13 @@
 
         function consumeSnapshot(snapshot) {
             if (destroyed || !snapshot || typeof snapshot !== 'object') return;
+            var first = !hasSnapshot;
             hasSnapshot = true;
             try { self.activity.loader(false); } catch (e) {}
             render(snapshot);
-            try { self.activity.toggle(); } catch (e2) {}
+            if (first) {
+                try { self.activity.toggle(); } catch (e2) {}
+            }
         }
 
         function bindState() {
