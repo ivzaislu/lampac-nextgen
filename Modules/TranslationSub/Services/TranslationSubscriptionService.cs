@@ -47,6 +47,7 @@ public static class TranslationSubscriptionService
 
             DateTime now = DateTime.Now;
             var snapshot = SubscriptionStore.Load();
+            using var storeBatch = SubscriptionStore.BeginBatch();
             var settingsCache = new Dictionary<string, TranslationUserSettings>(StringComparer.Ordinal);
             var tmdbCache = new Dictionary<string, TmdbScheduleSnapshot>(StringComparer.OrdinalIgnoreCase);
             var variantCache = new Dictionary<string, TranslationVariantsResponse>(StringComparer.Ordinal);

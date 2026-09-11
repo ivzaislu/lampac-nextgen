@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using TranslationSub.Models;
 
 namespace TranslationSub.Services;
@@ -10,7 +11,38 @@ namespace TranslationSub.Services;
 public static class SubscriptionStore
 {
     static readonly object locker = new();
+    static readonly AsyncLocal<MutationBatch> ambientBatch = new();
     static string path => "database/translationsub/subscriptions.json";
+
+    sealed class MutationBatch
+    {
+        public int Depth { get; set; } = 1;
+        public List<Action<List<TranslationSubscription>>> Operations { get; } = new();
+    }
+
+    sealed class MutationBatchScope : IDisposable
+    {
+        readonly MutationBatch batch;
+        bool disposed;
+
+        public MutationBatchScope(MutationBatch batch)
+        {
+            this.batch = batch;
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+            disposed = true;
+
+            if (batch == null || --batch.Depth > 0)
+                return;
+
+            ambientBatch.Value = null;
+            FlushBatch(batch);
+        }
+    }
 
     static List<TranslationSubscription> LoadUnsafe()
     {
@@ -41,6 +73,23 @@ public static class SubscriptionStore
         File.Move(temp, path, true);
     }
 
+    static string PersistedState(IEnumerable<TranslationSubscription> list)
+        => JsonConvert.SerializeObject(list ?? Enumerable.Empty<TranslationSubscription>(), Formatting.None);
+
+    public static IDisposable BeginBatch()
+    {
+        var batch = ambientBatch.Value;
+        if (batch != null)
+        {
+            batch.Depth++;
+            return new MutationBatchScope(batch);
+        }
+
+        batch = new MutationBatch();
+        ambientBatch.Value = batch;
+        return new MutationBatchScope(batch);
+    }
+
     public static List<TranslationSubscription> Load()
     {
         lock (locker)
@@ -51,6 +100,13 @@ public static class SubscriptionStore
     {
         if (action == null)
             return;
+
+        var batch = ambientBatch.Value;
+        if (batch != null)
+        {
+            batch.Operations.Add(action);
+            return;
+        }
 
         string[] changedUids;
         lock (locker)
@@ -71,6 +127,13 @@ public static class SubscriptionStore
         if (action == null)
             return false;
 
+        var batch = ambientBatch.Value;
+        if (batch != null)
+        {
+            batch.Operations.Add(list => action(list));
+            return true;
+        }
+
         string[] changedUids;
         lock (locker)
         {
@@ -86,6 +149,42 @@ public static class SubscriptionStore
 
         PublishSharedChanges(changedUids);
         return true;
+    }
+
+    static void FlushBatch(MutationBatch batch)
+    {
+        if (batch?.Operations == null || batch.Operations.Count == 0)
+            return;
+
+        string[] changedUids;
+        lock (locker)
+        {
+            var list = LoadUnsafe();
+            string beforePersisted = PersistedState(list);
+            var beforeShared = SharedStateByUid(list);
+
+            foreach (var operation in batch.Operations)
+            {
+                try
+                {
+                    operation?.Invoke(list);
+                }
+                catch
+                {
+                    // Scheduler mutations are isolated per subscription. One stale
+                    // or invalid operation must not discard the rest of the batch.
+                }
+            }
+
+            if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
+                return;
+
+            var afterShared = SharedStateByUid(list);
+            SaveUnsafe(list);
+            changedUids = ChangedUids(beforeShared, afterShared);
+        }
+
+        PublishSharedChanges(changedUids);
     }
 
     static Dictionary<string, string> SharedStateByUid(IEnumerable<TranslationSubscription> list)

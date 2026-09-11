@@ -108,6 +108,27 @@ assert.match(commandService, /ContentIdentityService\.ResolveAsync/);
 assert.match(commandService, /LampacMetadataService\.GetVariants/);
 assert.match(commandService, /SubscriptionStore\.Mutate/);
 
+// Scheduler mutations are queued across network awaits and replayed once against
+// fresh storage. No-op batches do not write; one batch produces one save/publish pass.
+assert.match(subscriptionStore, /AsyncLocal<MutationBatch>/);
+assert.match(subscriptionStore, /public static IDisposable BeginBatch\(\)/);
+assert.match(subscriptionService,
+  /var snapshot = SubscriptionStore\.Load\(\);\s*using var storeBatch = SubscriptionStore\.BeginBatch\(\);/);
+assert.doesNotMatch(subscriptionService, /lock\s*\(/);
+const flushBatch = (subscriptionStore.match(
+  /static void FlushBatch\(MutationBatch batch\)[\s\S]*?\n    static Dictionary<string, string> SharedStateByUid/
+) || [''])[0];
+assert.ok(flushBatch, 'SubscriptionStore batch flush could not be isolated');
+assert.match(flushBatch, /Operations\.Count == 0[\s\S]*?return;/);
+assert.match(flushBatch,
+  /beforePersisted[\s\S]*?PersistedState\(list\)[\s\S]*?StringComparison\.Ordinal[\s\S]*?return;/);
+assert.equal((flushBatch.match(/SaveUnsafe\(list\)/g) || []).length, 1,
+  'one logical scheduler batch may save subscriptions only once');
+assert.equal((flushBatch.match(/PublishSharedChanges\(changedUids\)/g) || []).length, 1,
+  'one logical scheduler batch may publish shared changes only once');
+assert.match(flushBatch, /var list = LoadUnsafe\(\)/,
+  'queued scheduler mutations must replay against fresh storage at commit time');
+
 // The internal metadata aggregate serves backend consumers only. Legacy /variants
 // response decoration must not grow back around the canonical Translations list.
 assert.doesNotMatch(variantModel,
