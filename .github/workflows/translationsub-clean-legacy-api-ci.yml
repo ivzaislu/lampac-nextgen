@@ -223,6 +223,13 @@ jobs:
             -o /tmp/settings-post.json
 
           curl --silent --show-error --fail --max-time 10 \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            --data '{"newSeasonMode":"notify"}' \
+            "$base/translationsub/v2/settings?uid=$uid" \
+            -o /tmp/settings-partial.json
+
+          curl --silent --show-error --fail --max-time 10 \
             "$base/translationsub/v2/snapshot?uid=$uid&profile_id=7" \
             -o /tmp/snapshot.json
 
@@ -255,10 +262,29 @@ jobs:
           python3 - <<'PY'
           import json
 
+          def get(obj, pascal, camel):
+              return obj.get(pascal, obj.get(camel))
+
           settings = json.load(open('/tmp/settings-post.json', encoding='utf-8'))
           assert settings.get('success') is True, settings
           canonical = settings.get('settings') or {}
-          assert canonical.get('Sources', canonical.get('sources')) == [], settings
+          assert get(canonical, 'Sources', 'sources') == [], settings
+          schema = settings.get('schema') or {}
+          for key in ('checkIntervalHours', 'useTmdbSchedule', 'tmdbRefreshHours', 'endedRefreshDays', 'newSeasonMode'):
+              assert isinstance(schema.get(key), dict), (key, schema)
+          assert schema['checkIntervalHours'].get('defaultValue') == 1, schema
+          assert schema['newSeasonMode'].get('defaultValue') == 'auto', schema
+          assert set((schema['newSeasonMode'].get('values') or {}).keys()) == {'auto', 'notify', 'off'}, schema
+
+          partial = json.load(open('/tmp/settings-partial.json', encoding='utf-8'))
+          assert partial.get('success') is True, partial
+          partial_settings = partial.get('settings') or {}
+          assert get(partial_settings, 'CheckIntervalHours', 'checkIntervalHours') == 1, partial
+          assert get(partial_settings, 'Sources', 'sources') == [], partial
+          assert get(partial_settings, 'UseTmdbSchedule', 'useTmdbSchedule') is True, partial
+          assert get(partial_settings, 'TmdbRefreshHours', 'tmdbRefreshHours') == 24, partial
+          assert get(partial_settings, 'EndedRefreshDays', 'endedRefreshDays') == 7, partial
+          assert get(partial_settings, 'NewSeasonMode', 'newSeasonMode') == 'notify', partial
 
           snapshot = json.load(open('/tmp/snapshot.json', encoding='utf-8'))
           assert snapshot.get('ProfileId', snapshot.get('profileId')) == '7', snapshot
