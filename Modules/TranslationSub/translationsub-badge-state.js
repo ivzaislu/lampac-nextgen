@@ -15,25 +15,6 @@
         listeners: []
     };
 
-    function injectStyles() {
-        if (document.getElementById('translationsub-badge-state-style')) return;
-
-        var style = document.createElement('style');
-        style.id = 'translationsub-badge-state-style';
-        style.textContent =
-            '.translationsub-state-badge{' +
-                'position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;' +
-                'border-radius:1em;background:#e53935;color:#fff;font-size:.7em;font-weight:600;' +
-                'display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none;' +
-            '}' +
-            '.translationsub-state-menu-badge{' +
-                'margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;' +
-                'background:#e45e2c;color:#fff;font-size:.7em;font-weight:700;display:flex;' +
-                'align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none;' +
-            '}';
-        (document.head || document.documentElement).appendChild(style);
-    }
-
     function textCount(count) {
         count = Number(count) || 0;
         return count > 99 ? '99+' : String(count);
@@ -178,7 +159,6 @@
     }
 
     function start() {
-        injectStyles();
         refresh();
 
         try {
