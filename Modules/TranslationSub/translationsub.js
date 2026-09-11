@@ -96,9 +96,36 @@
             if (!flush()) waitForLampa();
         }
 
+        function controllerName(fallback) {
+            try {
+                if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.enabled === 'function') {
+                    var enabled = Lampa.Controller.enabled();
+                    var name = enabled && enabled.name ? String(enabled.name) : '';
+                    if (name && name !== 'select' && name !== 'modal') return name;
+                }
+            } catch (e) {}
+            return String(fallback || '');
+        }
+
+        function restoreController(name, fallback) {
+            var target = String(name || fallback || '');
+            if (!target) return;
+
+            setTimeout(function () {
+                try {
+                    if (!window.Lampa || !Lampa.Controller || typeof Lampa.Controller.toggle !== 'function') return;
+                    var enabled = typeof Lampa.Controller.enabled === 'function' ? Lampa.Controller.enabled() : null;
+                    if (enabled && enabled.name === target) return;
+                    Lampa.Controller.toggle(target);
+                } catch (e) {}
+            }, 0);
+        }
+
         window.TranslationSubRuntime = {
             onReady: onReady,
-            isReady: function () { return ready; }
+            isReady: function () { return ready; },
+            controllerName: controllerName,
+            restoreController: restoreController
         };
 
         waitForLampa();
