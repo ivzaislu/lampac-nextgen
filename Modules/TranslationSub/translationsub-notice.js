@@ -6,33 +6,12 @@
 
     var lastUpdates = [];
 
-    function storageGet(name, fallback) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
-                return Lampa.Storage.get(name, fallback);
-        } catch (e) {}
-        try {
-            var value = localStorage.getItem(name);
-            return value === null ? fallback : value;
-        } catch (e2) { return fallback; }
-    }
-
     function posterUrl(path) {
-        path = String(path || '');
-        if (!path) return '';
-        if (/^https?:\/\//i.test(path)) return path;
-
         try {
-            if (window.Lampa && Lampa.TMDB && typeof Lampa.TMDB.image === 'function')
-                return Lampa.TMDB.image('t/p/w300/' + path.replace(/^\//, ''));
+            if (window.TranslationSubUi && typeof window.TranslationSubUi.posterUrl === 'function')
+                return window.TranslationSubUi.posterUrl(path);
         } catch (e) {}
-
-        try {
-            if (window.Lampa && Lampa.Api && typeof Lampa.Api.img === 'function')
-                return Lampa.Api.img(path, 'w300');
-        } catch (e2) {}
-
-        return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
+        return '';
     }
 
     function openSubscriptionsPage() {
@@ -40,13 +19,10 @@
             if (Lampa.Modal && typeof Lampa.Modal.close === 'function') Lampa.Modal.close();
         } catch (e) {}
 
-        if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
-        Lampa.Activity.push({
-            url: '',
-            title: 'Подписки на озвучки',
-            component: 'translationsub_list',
-            page: 1
-        });
+        try {
+            if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
+                window.TranslationSub.openSubscriptions();
+        } catch (e2) {}
     }
 
     function openUpdate(item) {
@@ -56,23 +32,7 @@
                 return;
             }
         } catch (e) {}
-
-        var navigation = item && item.navigation && typeof item.navigation === 'object'
-            ? item.navigation
-            : null;
-        var id = String(navigation && navigation.id || '').trim();
-        if (!id || !window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
-
-        var source = String(storageGet('translationsub_card_source', 'tmdb') || 'tmdb').toLowerCase() === 'cub' ? 'cub' : 'tmdb';
-        var numericId = /^\d+$/.test(id) ? Number(id) : id;
-        Lampa.Activity.push({
-            url: '',
-            component: 'full',
-            source: source,
-            id: numericId,
-            method: String(navigation.method || 'tv'),
-            card: { id: numericId, source: source }
-        });
+        openSubscriptionsPage();
     }
 
     function addStyles() {
@@ -111,18 +71,7 @@
             }
         } catch (e) {}
 
-        var api = window.TranslationSubApi;
-        if (!api || typeof api.snapshot !== 'function') {
-            done(lastUpdates.slice());
-            return;
-        }
-
-        api.snapshot(function (snapshot) {
-            lastUpdates = snapshot && Array.isArray(snapshot.updates) ? snapshot.updates.slice() : [];
-            done(lastUpdates.slice());
-        }, function () {
-            done(lastUpdates.slice());
-        });
+        done(lastUpdates.slice());
     }
 
     function noticeCard(item, index) {
