@@ -24,17 +24,6 @@
         return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" aria-hidden="true"></svg>';
     }
 
-    function injectStyles() {
-        if (document.getElementById('translationsub-card-flow-style')) return;
-        var style = document.createElement('style');
-        style.id = 'translationsub-card-flow-style';
-        style.textContent =
-            '.translationsub-full-button{position:relative}' +
-            '.translationsub-full-button[data-translationsub-card-flow="1"]{gap:.55em}' +
-            '.translationsub-full-button[data-translationsub-card-flow="1"] span{white-space:nowrap}';
-        (document.head || document.documentElement).appendChild(style);
-    }
-
     function primitive(value) {
         return value === null || value === undefined ||
             typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
@@ -341,7 +330,6 @@
     }
 
     function start() {
-        injectStyles();
         bind();
         window.TranslationSubCardFlow = {
             refreshButton: function () { scheduleApply(lastEvent, 0); }
