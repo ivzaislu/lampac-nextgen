@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using TranslationSub.Models;
 
@@ -7,11 +8,13 @@ namespace TranslationSub.Services;
 
 /// <summary>
 /// Builds the canonical profile-aware TranslationSub read model consumed by
-/// thin clients. All progress/update/schedule/navigation decisions belong here,
-/// not in JavaScript.
+/// thin clients. All progress/update/schedule/navigation/display decisions belong
+/// here, not in JavaScript.
 /// </summary>
 public static class TranslationSubSnapshotService
 {
+    static readonly CultureInfo RuCulture = CultureInfo.GetCultureInfo("ru-RU");
+
     public static TranslationSubSnapshot Build(string uid, string profileId)
     {
         profileId = ProfileProgressStore.NormalizeProfileId(profileId);
@@ -45,6 +48,22 @@ public static class TranslationSubSnapshotService
         int available = Math.Max(0, sub.LastEpisode.GetValueOrDefault(0));
         bool hasNew = available > watched;
         int season = Math.Max(1, sub.LastSeason ?? sub.CurrentSeason ?? 1);
+        int from = hasNew ? watched + 1 : 0;
+        int to = hasNew ? available : 0;
+        int newCount = Math.Max(0, available - watched);
+        int progressPercent = available > 0
+            ? Math.Max(0, Math.Min(100, (int)Math.Round(watched * 100d / available)))
+            : 0;
+        var schedule = BuildSchedule(sub, available);
+        var sources = (sub.Sources ?? new List<TranslationSubscriptionSource>())
+            .Where(x => x != null)
+            .Select(x => new TranslationSubSourceSnapshot
+            {
+                Source = x.Source,
+                TranslationId = x.TranslationId,
+                TranslationName = x.TranslationName
+            })
+            .ToList();
 
         return new TranslationSubSubscriptionSnapshot
         {
@@ -63,26 +82,16 @@ public static class TranslationSubSnapshotService
             WatchedEpisode = watched,
             AvailableEpisode = available,
             HasNewEpisodes = hasNew,
-            FromEpisode = hasNew ? watched + 1 : 0,
-            ToEpisode = hasNew ? available : 0,
-            NewCount = Math.Max(0, available - watched),
-            ProgressPercent = available > 0
-                ? Math.Max(0, Math.Min(100, (int)Math.Round(watched * 100d / available)))
-                : 0,
+            FromEpisode = from,
+            ToEpisode = to,
+            NewCount = newCount,
+            ProgressPercent = progressPercent,
             Source = sub.Source,
-            Sources = (sub.Sources ?? new List<TranslationSubscriptionSource>())
-                .Where(x => x != null)
-                .Select(x => new TranslationSubSourceSnapshot
-                {
-                    Source = x.Source,
-                    TranslationId = x.TranslationId,
-                    TranslationName = x.TranslationName
-                })
-                .ToList(),
+            Sources = sources,
             TranslationId = sub.TranslationId,
             TranslationName = sub.TranslationName,
             LastCheckedAt = sub.LastCheckedAt,
-            Schedule = BuildSchedule(sub, available),
+            Schedule = schedule,
             Tmdb = new TranslationSubTmdbSnapshot
             {
                 Status = sub.TmdbStatus,
@@ -95,7 +104,17 @@ public static class TranslationSubSnapshotService
                 TargetSeasonEpisodes = sub.TmdbTargetSeasonEpisodes,
                 LastSyncedAt = sub.TmdbLastSyncedAt,
                 NewSeasonAvailable = sub.TmdbNewSeasonAvailable
-            }
+            },
+            Display = BuildDisplay(
+                sub,
+                season,
+                watched,
+                available,
+                hasNew,
+                from,
+                to,
+                newCount,
+                sources)
         };
     }
 
@@ -119,6 +138,71 @@ public static class TranslationSubSnapshotService
         {
             Id = id,
             Method = sub.IsSerial ? "tv" : "movie"
+        };
+    }
+
+    static TranslationSubDisplaySnapshot BuildDisplay(
+        TranslationSubscription sub,
+        int season,
+        int watched,
+        int available,
+        bool hasNew,
+        int from,
+        int to,
+        int newCount,
+        List<TranslationSubSourceSnapshot> sources)
+    {
+        var labels = (sources ?? new List<TranslationSubSourceSnapshot>())
+            .Select(x => (x?.Source ?? string.Empty).Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (labels.Count == 0 && !string.IsNullOrWhiteSpace(sub?.Source))
+            labels.Add(sub.Source.Trim());
+
+        string progress = hasNew
+            ? "Можно смотреть E" + from + (to > from ? "–E" + to : string.Empty)
+            : "Новых серий пока нет";
+
+        string voice = string.IsNullOrWhiteSpace(sub?.TranslationName)
+            ? "Озвучка"
+            : sub.TranslationName.Trim();
+
+        int aired = Math.Max(0, sub?.TmdbTargetSeasonEpisodes.GetValueOrDefault(0) ?? 0);
+        string tmdbFacts = aired > 0
+            ? "TMDB · вышло S" + season + "E" + aired
+            : !string.IsNullOrWhiteSpace(sub?.TmdbStatus)
+                ? "TMDB · " + sub.TmdbStatus.Trim()
+                : null;
+
+        string tmdbNext = null;
+        int nextSeason = Math.Max(0, sub?.TmdbNextSeason.GetValueOrDefault(0) ?? 0);
+        int nextEpisode = Math.Max(0, sub?.TmdbNextEpisode.GetValueOrDefault(0) ?? 0);
+        if (sub?.TmdbNextAirDate != null && nextSeason > 0 && nextEpisode > 0)
+        {
+            string date = sub.TmdbNextAirDate.Value.ToString("d MMM", RuCulture).Replace(".", string.Empty);
+            tmdbNext = "Следующая S" + nextSeason + "E" + nextEpisode + " · " + date;
+        }
+
+        return new TranslationSubDisplaySnapshot
+        {
+            Season = "S" + season,
+            Watched = "Просмотрено E" + watched,
+            Available = "В озвучке E" + available,
+            Progress = progress,
+            Source = string.Join(", ", labels),
+            SourceLabels = labels,
+            NewBadge = newCount > 0 ? newCount + " НОВЫХ" : null,
+            NoticeTime = newCount > 0 ? newCount + " новых" : "S" + season,
+            NoticeRange = hasNew
+                ? "S" + season + " · просмотрено E" + watched + " · доступны E" + from + (to > from ? "–E" + to : string.Empty)
+                : "S" + season + " · " + voice,
+            TmdbFacts = tmdbFacts,
+            TmdbNext = tmdbNext,
+            TmdbTitle = sub?.TmdbLastSyncedAt != null
+                ? "TMDB обновлён: " + sub.TmdbLastSyncedAt.Value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+                : null
         };
     }
 
