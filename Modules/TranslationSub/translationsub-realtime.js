@@ -33,23 +33,8 @@
         try { localStorage.setItem(name, value); } catch (e2) {}
     }
 
-    function uid() {
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
-                return String(window.TranslationSub.uid() || '');
-        } catch (e) {}
-        return String(storageGet('lampac_unic_id', '') || '');
-    }
-
-    function profileId() {
-        return String(storageGet('lampac_profile_id', '') || '');
-    }
-
-    function host() {
-        try {
-            if (window.LampacHost) return String(window.LampacHost).replace(/\/$/, '');
-            return window.location.origin || '';
-        } catch (e) { return ''; }
+    function api() {
+        return window.TranslationSubApi || null;
     }
 
     function connectionId() {
@@ -67,7 +52,8 @@
     }
 
     function websocketUrl() {
-        var base = host();
+        var client = api();
+        var base = client && typeof client.host === 'function' ? String(client.host() || '') : '';
         if (!base) return '';
         if (/^https:/i.test(base)) base = base.replace(/^https:/i, 'wss:');
         else if (/^http:/i.test(base)) base = base.replace(/^http:/i, 'ws:');
@@ -84,23 +70,18 @@
     }
 
     function register() {
-        var user = uid();
-        if (!user) return false;
-        return send('TranslationSubRegister', [user, profileId() || '0']);
+        var client = api();
+        if (!client || typeof client.uid !== 'function' || typeof client.profileId !== 'function') return false;
+        var uid = String(client.uid() || '');
+        if (!uid) return false;
+        return send('TranslationSubRegister', [uid, String(client.profileId() || '0')]);
     }
 
     function refreshSnapshot() {
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
                 window.TranslationSubBadgeState.refresh();
-                return;
-            }
         } catch (e) {}
-
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.checkUpdates === 'function')
-                window.TranslationSub.checkUpdates();
-        } catch (e2) {}
     }
 
     function scheduleRefresh() {
