@@ -53,12 +53,10 @@ public class TranslationSubV2Controller : BaseController
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("{\"eligible\":false,\"reason\":\"uid_required\"}");
 
-        string profileId = ResolveProfileId();
-        TimeCodeProgressService.SyncUser(uid, profileId);
-
+        // Content/voice subscription state is shared user metadata and does not
+        // depend on profile-local watched progress. Keep card reads off TimeCode.
         var state = await TranslationSubContentStateService.BuildAsync(
             uid,
-            profileId,
             body,
             HttpContext);
 

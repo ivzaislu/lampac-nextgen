@@ -17,12 +17,10 @@ public static class TranslationSubContentStateService
 {
     public static async Task<TranslationSubContentState> BuildAsync(
         string uid,
-        string profileId,
         JObject payload,
         HttpContext httpContext = null)
     {
         uid = (uid ?? string.Empty).Trim();
-        profileId = ProfileProgressStore.NormalizeProfileId(profileId);
 
         bool includeVoices = payload?.Value<bool?>("includeVoices") ?? true;
         var content = await ContentIdentityService.ResolveAsync(payload).ConfigureAwait(false);
