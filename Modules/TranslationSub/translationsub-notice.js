@@ -57,7 +57,10 @@
             }
         } catch (e) {}
 
-        var id = String(item && (item.tmdbId || item.contentId) || '').trim();
+        var navigation = item && item.navigation && typeof item.navigation === 'object'
+            ? item.navigation
+            : null;
+        var id = String(navigation && navigation.id || '').trim();
         if (!id || !window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
 
         var source = String(storageGet('translationsub_card_source', 'tmdb') || 'tmdb').toLowerCase() === 'cub' ? 'cub' : 'tmdb';
@@ -67,7 +70,7 @@
             component: 'full',
             source: source,
             id: numericId,
-            method: 'tv',
+            method: String(navigation.method || 'tv'),
             card: { id: numericId, source: source }
         });
     }
@@ -116,17 +119,6 @@
         });
     }
 
-    function sourceLabels(item) {
-        var sources = item && Array.isArray(item.sources) ? item.sources : [];
-        var names = [];
-
-        sources.forEach(function (source) {
-            var name = String(source && source.source || '').trim();
-            if (name && names.indexOf(name) === -1) names.push(name);
-        });
-        return names;
-    }
-
     function noticeCard(item, index) {
         var card;
         try {
@@ -136,33 +128,26 @@
         }
 
         item = item || {};
+        var display = item.display && typeof item.display === 'object' ? item.display : {};
         var title = String(item.title || 'Сериал');
         var voice = String(item.translationName || 'Озвучка');
-        var season = Number(item.season || 1) || 1;
-        var watched = Number(item.watchedEpisode || 0) || 0;
-        var from = Number(item.fromEpisode || 0) || 0;
-        var to = Number(item.toEpisode || 0) || 0;
-        var count = Number(item.newCount || 0) || 0;
         var poster = posterUrl(item.poster || '');
-        var labels = sourceLabels(item);
+        var labels = Array.isArray(display.sourceLabels) ? display.sourceLabels : [];
 
         card.attr('data-translationsub-update', String(index));
         card.addClass('image--poster');
         card.find('.notice__title').text(title);
-        card.find('.notice__time').text(count > 0 ? (count + ' новых') : ('S' + season));
-
-        var range = to > 0
-            ? ('S' + season + ' · просмотрено E' + watched + ' · доступны E' + from + (to > from ? '–E' + to : ''))
-            : ('S' + season + ' · ' + voice);
+        card.find('.notice__time').text(String(display.noticeTime || ''));
 
         var descr = card.find('.notice__descr');
         descr.empty();
         descr.append($('<div></div>').text(voice));
-        descr.append($('<div></div>').text(range));
+        if (display.noticeRange)
+            descr.append($('<div></div>').text(String(display.noticeRange)));
 
         if (labels.length) {
             var footer = $('<div class="notice__footer"></div>');
-            labels.forEach(function (label) { footer.append($('<div></div>').text(label)); });
+            labels.forEach(function (label) { footer.append($('<div></div>').text(String(label || ''))); });
             descr.append(footer);
         }
 
