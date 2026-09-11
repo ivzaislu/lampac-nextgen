@@ -83,6 +83,10 @@ for (const route of [
 ]) {
   if (!api.includes(route)) error(`Shared API client is missing ${route}`);
 }
+if (/request\(['"](?:PUT|DELETE)['"]/.test(api))
+  error('Thin API client uses unsupported dynamic-module mutation verbs');
+if (!api.includes("'/translationsub/v2/subscriptions/' + id + '/remove'"))
+  error('Thin API client is missing canonical POST unsubscribe command route');
 
 const core = read('translationsub.js');
 for (const symbol of ['injectFullButton', 'registerComponent', 'SubscriptionComponent', 'schedulePolling', 'addSettings', 'checkIntervalMinutes']) {
@@ -94,8 +98,14 @@ if (!core.includes('api.check(') || !core.includes('applySnapshot'))
 const page = read('translationsub-page.js');
 if (!page.includes('snapshot.subscriptions')) error('Subscriptions page must render backend snapshot data');
 if (!page.includes('result.snapshot')) error('Subscriptions page must consume manual-check snapshot without refetch');
+if (!page.includes('item.display')) error('Subscriptions page must render backend display projection');
 if (/api\.check\([\s\S]{0,900}?\bload\s*\(/.test(page))
   error('Subscriptions page refetches immediately after v2/check');
+for (const domainField of ['item.watchedEpisode', 'item.availableEpisode', 'item.fromEpisode', 'item.toEpisode']) {
+  if (page.includes(domainField)) error(`Subscriptions page reconstructs domain display from ${domainField}`);
+}
+if (/function\s+sourceLabels\s*\(/.test(page))
+  error('Subscriptions page must not aggregate source labels client-side');
 
 const settings = read('translationsub-settings-v2.js');
 if (!settings.includes('api.updateSettings')) error('Settings UI must persist through backend API');
@@ -109,6 +119,13 @@ if (/Lampa\.Select\.show\s*=/.test(navigation)) error('Navigation must not monke
 const notice = read('translationsub-notice.js');
 if (/new\s+MutationObserver/.test(notice)) error('Notice drawer must not own a global MutationObserver');
 if (/setInterval\s*\(\s*refresh/.test(notice)) error('Notice drawer must not poll in background');
+if (!notice.includes('item.display')) error('Notice drawer must render backend display projection');
+for (const domainField of ['item.season', 'item.watchedEpisode', 'item.fromEpisode', 'item.toEpisode', 'item.newCount']) {
+  if (notice.includes(domainField)) error(`Notice drawer reconstructs notification semantics from ${domainField}`);
+}
+if (/function\s+sourceLabels\s*\(/.test(notice)) error('Notice drawer must not aggregate sources client-side');
+if (/item\s*&&\s*\(item\.tmdbId\s*\|\|\s*item\.contentId\)/.test(notice))
+  error('Notice drawer must use backend navigation target, not content-id fallbacks');
 
 const badge = read('translationsub-badge-state.js');
 if (/new\s+MutationObserver/.test(badge)) error('Badge state must not own a global MutationObserver');
@@ -142,6 +159,12 @@ if (cardFlow.includes('Lampa.Select.close')) error('Card flow must not call Lamp
 
 const tmdbUi = read('translationsub-tmdb-ui.js');
 if (/ScheduleState|scheduleState/.test(tmdbUi)) error('TMDB UI must not own schedule state machine');
+if (!tmdbUi.includes('display.tmdbFacts') || !tmdbUi.includes('display.tmdbNext'))
+  error('TMDB UI must render backend TMDB display projection');
+for (const leakedDomain of ['targetSeasonEpisodes', 'nextAirDate', 'nextSeason', 'nextEpisode', 'tmdb.status']) {
+  if (tmdbUi.includes(leakedDomain)) error(`TMDB UI reconstructs backend state from ${leakedDomain}`);
+}
+if (/new\s+Date\s*\(/.test(tmdbUi)) error('TMDB UI must not format schedule dates client-side');
 
 console.log(`TranslationSub JS files checked: ${loaded.length}`);
 console.log(`Global MutationObserver count: ${observerCount}`);
