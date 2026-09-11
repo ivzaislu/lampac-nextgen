@@ -226,11 +226,7 @@
             openSubscriptions: openSubscriptionsPage,
             checkUpdates: refreshUpdates,
             forceCheckUpdatesUI: forceCheckUpdatesUI,
-            refresh: refresh,
-            // Compatibility hooks while the settings layer is migrated. Server
-            // settings are authoritative; these hooks no longer own source state.
-            enabledSources: function () { return []; },
-            refreshSources: function (done) { if (typeof done === 'function') done([]); }
+            refresh: refresh
         };
 
         log('plugin core started', META.version);
