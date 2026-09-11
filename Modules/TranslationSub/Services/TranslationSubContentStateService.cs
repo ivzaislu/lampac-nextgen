@@ -23,7 +23,7 @@ public static class TranslationSubContentStateService
         uid = (uid ?? string.Empty).Trim();
 
         bool includeVoices = payload?.Value<bool?>("includeVoices") ?? true;
-        var content = await ContentIdentityService.ResolveAsync(payload).ConfigureAwait(false);
+        var content = await ContentIdentityService.ResolveAsync(payload, uid, httpContext).ConfigureAwait(false);
         var result = new TranslationSubContentState
         {
             Content = content
