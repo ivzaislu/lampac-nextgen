@@ -185,11 +185,13 @@
 
     function refreshPlugin() {
         try {
-            if (window.TranslationSub && typeof window.TranslationSub.refresh === 'function') window.TranslationSub.refresh();
-        } catch (e) {}
-        try {
             if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
                 window.TranslationSubBadgeState.refresh();
+        } catch (e) {}
+
+        try {
+            var flow = window.TranslationSub && window.TranslationSub.cardFlow;
+            if (flow && typeof flow.refreshButton === 'function') flow.refreshButton();
         } catch (e2) {}
     }
 
