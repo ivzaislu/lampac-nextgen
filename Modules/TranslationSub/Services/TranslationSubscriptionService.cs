@@ -525,6 +525,12 @@ public static class TranslationSubscriptionService
 
         SubscriptionStore.MutateIfChanged(list =>
         {
+            bool sourceExists = list.Any(x => x != null
+                && string.Equals(x.Id, sub.Id, StringComparison.Ordinal)
+                && string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal));
+            if (!sourceExists)
+                return false;
+
             bool exists = list.Any(x =>
                 string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal)
                 && x.ContentId == sub.ContentId
