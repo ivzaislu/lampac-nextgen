@@ -161,7 +161,7 @@
     function applyCommand(result) {
         if (!result || result.success !== true || !result.snapshot || typeof result.snapshot !== 'object')
             return null;
-        applySnapshot(result.snapshot);
+        if (!applySnapshot(result.snapshot)) return null;
         return view();
     }
 
