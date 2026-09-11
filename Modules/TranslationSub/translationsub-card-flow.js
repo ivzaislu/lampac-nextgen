@@ -20,16 +20,10 @@
         try { console.log('[TranslationSub]', text); } catch (e2) {}
     }
 
-    function bellSvg(filled) {
-        if (filled) {
-            return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-                '<path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"></path>' +
-            '</svg>';
-        }
-        return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-            '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>' +
-            '<path d="M10 21h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"></path>' +
-        '</svg>';
+    // Bell geometry belongs to translationsub-bell-theme.js. Card flow only
+    // provides the stable SVG anchor and subscribed state class.
+    function bellSvg() {
+        return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" aria-hidden="true"></svg>';
     }
 
     function injectStyles() {
@@ -38,7 +32,6 @@
         style.id = 'translationsub-card-flow-style';
         style.textContent =
             '.translationsub-full-button{position:relative}' +
-            '.translationsub-full-button>.translationsub-full-button__bell{width:1.2em;height:1.35em;flex-shrink:0}' +
             '.translationsub-full-button[data-translationsub-card-flow="1"]{gap:.55em}' +
             '.translationsub-full-button[data-translationsub-card-flow="1"] span{white-space:nowrap}';
         (document.head || document.documentElement).appendChild(style);
@@ -290,7 +283,7 @@
         if (!button || !button.length) return;
         buttonState = buttonState && typeof buttonState === 'object' ? buttonState : {};
         var active = !!buttonState.subscribed;
-        button.empty().append(bellSvg(active)).append('<span>Озвучки</span>');
+        button.empty().append(bellSvg()).append('<span>Озвучки</span>');
         button.toggleClass('translationsub-full-button--subscribed', active);
         button.attr('title', String(buttonState.title || (active ? 'Озвучки · подписка активна' : 'Подписки на озвучки')));
     }
@@ -317,6 +310,10 @@
             button.off('.translationsubCardFlow');
             button.attr('data-translationsub-card-flow', '1');
             renderButton(button, state.button);
+            try {
+                if (window.TranslationSubUi && typeof window.TranslationSubUi.refresh === 'function')
+                    window.TranslationSubUi.refresh();
+            } catch (e) {}
             button.on('hover:enter.translationsubCardFlow', function () { openForItem(raw); });
             button.on('hover:long.translationsubCardFlow', function () {
                 try {
