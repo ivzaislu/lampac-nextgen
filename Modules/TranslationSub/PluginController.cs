@@ -30,7 +30,6 @@ public class TranslationSubPluginController : BaseController
         AppendScript(ref script, "translationsub-mobile.js");
         AppendScript(ref script, "translationsub-polish.js");
         AppendScript(ref script, "translationsub-settings-v2.js");
-        AppendScript(ref script, "translationsub-tmdb-ui.js");
         AppendScript(ref script, "translationsub-card-flow.js");
         AppendScript(ref script, "translationsub-layout-v3.js");
         AppendScript(ref script, "translationsub-badge-state.js");
