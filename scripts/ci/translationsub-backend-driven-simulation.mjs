@@ -134,18 +134,24 @@ assert.match(settingsStore, /TmdbRefreshHours \{ get; set; \} = 24/);
 assert.match(badge, /api\.snapshot/);
 assert.doesNotMatch(badge, /setInterval\(refresh/);
 
-// Realtime client uses a dedicated socket and refreshes canonical state.
+// Realtime owns only websocket transport. Identity/host come from the shared API
+// client, and invalidation always refreshes canonical BadgeState.
 const badgeLoad = pluginController.indexOf('AppendScript(ref script, "translationsub-badge-state.js")');
 const realtimeLoad = pluginController.indexOf('AppendScript(ref script, "translationsub-realtime.js")');
 assert.ok(badgeLoad >= 0 && realtimeLoad > badgeLoad, 'realtime client must load after BadgeState');
 assert.match(realtimeClient, /translationsub_nws_id/);
 assert.doesNotMatch(realtimeClient, /lampac_nws_id/);
+assert.match(realtimeClient, /client\.host\(\)/);
+assert.match(realtimeClient, /client\.uid\(\)/);
+assert.match(realtimeClient, /client\.profileId\(\)/);
+assert.doesNotMatch(realtimeClient, /function\s+(?:uid|profileId|host)\s*\(/);
+assert.doesNotMatch(realtimeClient, /TranslationSub\.checkUpdates/);
 assert.match(realtimeClient, /TranslationSubRegister/);
 assert.match(realtimeClient, /TranslationSubChanged/);
 assert.match(realtimeClient, /window\.TranslationSubBadgeState\.refresh\(\)/);
 
 // Execute production realtime client against a minimal socket harness.
-const storage = new Map([['lampac_unic_id', 'user1'], ['lampac_profile_id', '7']]);
+const storage = new Map();
 const sockets = [];
 let badgeRefreshes = 0;
 let timerId = 0;
@@ -164,7 +170,6 @@ const context = {
   document: { hidden: false, addEventListener() {} },
   setInterval() { return ++timerId; }, clearInterval() {},
   setTimeout(fn) { const id = ++timerId; fn(); return id; }, clearTimeout() {},
-  location: { origin: 'http://lampac.test' },
   Lampa: {
     Storage: {
       get(name, fallback) { return storage.has(name) ? storage.get(name) : fallback; },
@@ -172,12 +177,16 @@ const context = {
     },
     Utils: { uid() { return 'abcdef0123456789abcdef0123456789'; } },
     Listener: { follow() {} }
+  },
+  TranslationSubApi: {
+    host() { return 'http://lampac.test'; },
+    uid() { return 'user1'; },
+    profileId() { return '7'; }
   }
 };
 context.window = context;
 context.window.Lampa = context.Lampa;
-context.window.LampacHost = 'http://lampac.test';
-context.window.TranslationSub = { uid() { return 'user1'; } };
+context.window.TranslationSubApi = context.TranslationSubApi;
 context.window.TranslationSubBadgeState = { refresh() { badgeRefreshes++; } };
 
 vm.runInNewContext(realtimeClient, context, { filename: 'translationsub-realtime.js' });
