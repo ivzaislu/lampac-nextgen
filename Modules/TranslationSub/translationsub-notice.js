@@ -76,7 +76,10 @@
         if (poster && img.length) {
             img.on('load', function () { card.addClass('image--loaded'); });
             img.on('error', function () {
-                try { this.src = './img/img_broken.svg'; } catch (e) {}
+                try {
+                    $(this).off('error');
+                    this.src = './img/img_broken.svg';
+                } catch (e) {}
             });
             img.attr('src', poster);
         } else {
