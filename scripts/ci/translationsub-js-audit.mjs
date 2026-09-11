@@ -32,7 +32,13 @@ for (const name of loaded) {
 for (const name of jsFiles) {
   if (!loadedSet.has(name)) error(`Orphan TranslationSub JS file is not loaded: ${name}`);
 }
-for (const obsoleteFile of ['translationsub-watch.js', 'translationsub-tmdb-ui.js', 'translationsub-polish.js']) {
+for (const obsoleteFile of [
+  'translationsub-watch.js',
+  'translationsub-tmdb-ui.js',
+  'translationsub-polish.js',
+  'translationsub-layout-v3.js',
+  'translationsub-mobile.js'
+]) {
   if (jsFiles.includes(obsoleteFile)) error(`Obsolete frontend patch returned: ${obsoleteFile}`);
   if (controller.includes(obsoleteFile)) error(`PluginController ships obsolete frontend patch: ${obsoleteFile}`);
 }
@@ -76,6 +82,8 @@ if (componentRegistrationCount !== 1) error(`translationsub_list must be registe
 if (globalSelectOverrides !== 0) error(`Global Lampa.Select.show override found ${globalSelectOverrides} time(s)`);
 if (/\b(?:enabledSources|refreshSources)\b/.test(bundle))
   error('Obsolete client source-state compatibility hooks returned');
+if (/translationsub-(?:layout-v3|mobile-button|polish|tmdb-ui)-style/.test(bundle))
+  error('Removed presentation patch style owner returned');
 
 const api = read('translationsub-api.js');
 for (const route of [
@@ -98,6 +106,15 @@ for (const symbol of ['injectFullButton', 'registerComponent', 'SubscriptionComp
 }
 if (!core.includes('api.check(') || !core.includes('applySnapshot'))
   error('Core manual check must consume the snapshot returned by v2/check');
+if (/<path\b/i.test(core)) error('Core must not own bell SVG geometry');
+
+const ui = read('translationsub-ui.js');
+if (!ui.includes('translationsub-layout--mobile') || !ui.includes('translationsub-layout--tv'))
+  error('Unified UI must own mobile/TV page layout');
+if (!ui.includes('translationsub-full-button--mobile'))
+  error('Unified UI must own mobile full-button presentation');
+if (!/Lampa\.Listener\.follow\(['"]full['"]/.test(ui))
+  error('Unified UI must refresh presentation on Lampa full-card lifecycle');
 
 const page = read('translationsub-page.js');
 if (!page.includes('snapshot.subscriptions')) error('Subscriptions page must render backend snapshot data');
@@ -139,6 +156,8 @@ const navigation = read('translationsub-navigation.js');
 if (!navigation.includes('new MutationObserver')) error('Navigation DOM repair observer is missing');
 if (/Lampa\.Select\.show\s*=/.test(navigation)) error('Navigation must not monkey-patch global Lampa.Select');
 if (/repairTimer|15000/.test(navigation)) error('Navigation must not use periodic DOM repair polling');
+if (/function\s+injectStyles\s*\(/.test(navigation)) error('Navigation must not own bell/icon styling');
+if (/<path\b/i.test(navigation)) error('Navigation must not own bell SVG geometry');
 
 const notice = read('translationsub-notice.js');
 if (/new\s+MutationObserver/.test(notice)) error('Notice drawer must not own a global MutationObserver');
@@ -166,6 +185,8 @@ if (/setInterval\s*\(\s*updateHeadState/.test(bell) || /750\s*\)/.test(bell))
   error('Bell theme must not poll badge state');
 if (!bell.includes('badge.subscribe(updateHeadState)'))
   error('Bell theme must subscribe to observable badge state');
+if (!bell.includes('BELL_BODY') || !bell.includes('BELL_CLAPPER'))
+  error('Bell theme must remain the canonical bell geometry owner');
 
 const source = read('translationsub-source.js');
 if (!source.includes('hover:long.translationsubSource')) error('Subscriptions page long-press menu is missing');
@@ -190,6 +211,9 @@ for (const domainOwner of [
 }
 if (cardFlow.includes('Lampa.Timeline.watchedEpisode')) error('Card flow must not derive watched state from Lampa Timeline');
 if (cardFlow.includes('Lampa.Select.close')) error('Card flow must not call Lampa.Select.close()');
+if (/<path\b/i.test(cardFlow)) error('Card flow must not own bell SVG geometry');
+if (!cardFlow.includes('window.TranslationSubUi.refresh()'))
+  error('Card flow must apply unified presentation after async button render');
 
 console.log(`TranslationSub JS files checked: ${loaded.length}`);
 console.log(`Global MutationObserver count: ${observerCount}`);
