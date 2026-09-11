@@ -7,20 +7,6 @@
     var observer = null;
     var applyTimer = null;
 
-    function injectStyles() {
-        if (document.getElementById('translationsub-navigation-style')) return;
-        var style = document.createElement('style');
-        style.id = 'translationsub-navigation-style';
-        style.textContent =
-            '.translationsub-menu-item .menu__ico svg{' +
-                'width:100%!important;height:100%!important;fill:none!important;stroke:currentColor!important;' +
-            '}' +
-            '.translationsub-menu-item .menu__ico svg path{' +
-                'fill:none!important;stroke:currentColor!important;' +
-            '}';
-        (document.head || document.documentElement).appendChild(style);
-    }
-
     function openNotice() {
         try {
             if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.open === 'function') {
@@ -62,7 +48,7 @@
     }
 
     function menuIcon() {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+        return '<svg viewBox="0 0 24 24" aria-hidden="true">' +
             '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>' +
             '<path d="M10 21h4"></path>' +
         '</svg>';
@@ -118,7 +104,6 @@
     }
 
     function apply() {
-        injectStyles();
         bindHead();
         ensureMenuItem();
         try {
