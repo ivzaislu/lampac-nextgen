@@ -6,7 +6,6 @@
 
     var observer = null;
     var applyTimer = null;
-    var repairTimer = null;
 
     function injectStyles() {
         if (document.getElementById('translationsub-navigation-style')) return;
@@ -173,9 +172,6 @@
             });
             observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
         } catch (e2) {}
-
-        if (repairTimer) clearInterval(repairTimer);
-        repairTimer = setInterval(function () { scheduleApply(0); }, 15000);
 
         window.TranslationSubNavigation = {
             refresh: function () { scheduleApply(0); },
