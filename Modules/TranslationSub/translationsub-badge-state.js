@@ -120,8 +120,6 @@
     }
 
     function applySnapshot(snapshot) {
-        // An authoritative snapshot is newer than any outstanding GET. Invalidate
-        // that read and resolve its waiters from the supplied backend state.
         state.requestSeq++;
         var updates = commitSnapshot(snapshot);
         if (state.loading) finishRefresh(updates);
@@ -179,20 +177,8 @@
         });
     }
 
-    function bindLampa() {
-        try {
-            if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (!event || event.type !== 'ready') return;
-                    render();
-                });
-            }
-        } catch (e) {}
-    }
-
     function start() {
         injectStyles();
-        bindLampa();
         refresh();
 
         try {
@@ -210,17 +196,5 @@
         };
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
