@@ -22,6 +22,24 @@
         return 'desktop';
     }
 
+    function posterUrl(path) {
+        path = String(path || '');
+        if (!path) return '';
+        if (/^https?:\/\//i.test(path)) return path;
+
+        try {
+            if (window.Lampa && Lampa.Api && typeof Lampa.Api.img === 'function')
+                return Lampa.Api.img(path, 'w300');
+        } catch (e) {}
+
+        try {
+            if (window.Lampa && Lampa.TMDB && typeof Lampa.TMDB.image === 'function')
+                return Lampa.TMDB.image('t/p/w300/' + path.replace(/^\//, ''));
+        } catch (e2) {}
+
+        return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
+    }
+
     function injectStyles() {
         if (document.getElementById('translationsub-ui-v2-style')) return;
 
@@ -156,7 +174,7 @@
     function start() {
         injectStyles();
         bindLampa();
-        window.TranslationSubUi = { refresh: refresh, mode: layoutMode };
+        window.TranslationSubUi = { refresh: refresh, mode: layoutMode, posterUrl: posterUrl };
         refresh();
         try {
             window.addEventListener('resize', refresh);
