@@ -64,21 +64,9 @@
 
     function refreshState() {
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
-                window.TranslationSubBadgeState.refresh(function () {
-                    try {
-                        if (typeof window.TranslationSubPageRefresh === 'function')
-                            window.TranslationSubPageRefresh({ useCachedSnapshot: true });
-                    } catch (e) {}
-                });
-                return;
-            }
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
+                window.TranslationSubBadgeState.refresh();
         } catch (e) {}
-
-        try {
-            if (typeof window.TranslationSubPageRefresh === 'function')
-                window.TranslationSubPageRefresh();
-        } catch (e2) {}
     }
 
     function restoreContentController() {
