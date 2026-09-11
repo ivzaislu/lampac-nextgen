@@ -1,4 +1,7 @@
 using Newtonsoft.Json.Linq;
+using Shared;
+using Shared.Models.Base;
+using Shared.Services;
 using System;
 using System.Globalization;
 using System.Linq;
@@ -56,6 +59,37 @@ public static class ContentIdentityService
 
         int season = isSerial ? LatestAiredSeason(card, seasonHint) : 0;
 
+        // The pre-backend TranslationSub frontend enriched cards through Lampac's
+        // /externalids endpoint before polling balancers. Preserve that exact
+        // contract on the backend so providers that require kinopoisk_id still work.
+        if (string.IsNullOrWhiteSpace(kpId))
+        {
+            string externalSource = cardSource;
+            if (externalSource == "themoviedb")
+                externalSource = "tmdb";
+            if (string.IsNullOrWhiteSpace(externalSource) && !string.IsNullOrWhiteSpace(tmdbId))
+                externalSource = "tmdb";
+
+            string externalId = externalSource == "tmdb" && !string.IsNullOrWhiteSpace(tmdbId)
+                ? tmdbId
+                : cardId;
+
+            try
+            {
+                var ids = await ResolveExternalIds(externalSource, externalId, isSerial).ConfigureAwait(false);
+                if (ids != null)
+                {
+                    kpId = Value(ids, "kinopoisk_id", "kp_id", "kpId");
+                    if (string.IsNullOrWhiteSpace(imdbId))
+                        imdbId = Value(ids, "imdb_id", "imdbId");
+                }
+            }
+            catch
+            {
+                // External-id enrichment is optional; keep the card usable when unavailable.
+            }
+        }
+
         if (isSerial && (!string.IsNullOrWhiteSpace(tmdbId) || !string.IsNullOrWhiteSpace(imdbId)))
         {
             try
@@ -96,6 +130,60 @@ public static class ContentIdentityService
             IsSerial = isSerial,
             Season = isSerial ? Math.Max(1, season) : 0
         };
+    }
+
+    static async Task<JObject> ResolveExternalIds(string source, string id, bool serial)
+    {
+        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(id))
+            return null;
+
+        var listen = CoreInit.conf?.listen;
+        if (listen == null || listen.port <= 0)
+            return null;
+
+        string localHost = string.IsNullOrWhiteSpace(listen.localhost)
+            ? "127.0.0.1"
+            : listen.localhost.Trim();
+        if (localHost.Contains(':') && !localHost.StartsWith('['))
+            localHost = $"[{localHost}]";
+
+        string route = "/externalids?source=" + Uri.EscapeDataString(source.Trim())
+            + "&id=" + Uri.EscapeDataString(id.Trim())
+            + "&serial=" + (serial ? "true" : "false");
+        var uri = new Uri(new Uri($"http://{localHost}:{listen.port}/"), route.TrimStart('/'));
+
+        string xhost = !string.IsNullOrWhiteSpace(listen.host)
+            ? listen.host.Trim()
+            : $"http://{localHost}:{listen.port}";
+        string xscheme = string.IsNullOrWhiteSpace(listen.scheme)
+            ? "http"
+            : listen.scheme.Trim();
+
+        var headers = HeadersModel.Init(
+            ("xhost", xhost),
+            ("xscheme", xscheme),
+            ("lcrqpasswd", CoreInit.rootPasswd)
+        );
+
+        string body = await Http.Get(
+            uri.ToString(),
+            timeoutSeconds: 15,
+            headers: headers,
+            statusCodeOK: true,
+            weblog: false
+        ).ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            return JObject.Parse(body);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     static bool DetectSerial(JObject source, JObject card)
