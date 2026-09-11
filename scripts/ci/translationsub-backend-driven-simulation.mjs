@@ -34,6 +34,9 @@ const pluginController = read('Modules/TranslationSub/PluginController.cs');
 const realtimeClient = read('Modules/TranslationSub/translationsub-realtime.js');
 const cardFlow = read('Modules/TranslationSub/translationsub-card-flow.js');
 const sourceClient = read('Modules/TranslationSub/translationsub-source.js');
+const contentStateController = (v2Controller.match(
+  /Route\("translationsub\/v2\/content-state"\)[\s\S]*?\n    }\n\n    \[HttpPost\]/
+) || [''])[0];
 
 assert.ok(!fs.existsSync('Modules/TranslationSub/Controller.cs'),
   'Legacy TranslationSubController must stay removed');
@@ -99,6 +102,16 @@ assert.match(contentStateService, /FindExisting/);
 assert.match(commandService, /ContentIdentityService\.ResolveAsync/);
 assert.match(commandService, /LampacMetadataService\.GetVariants/);
 assert.match(commandService, /SubscriptionStore\.Mutate/);
+
+// Content/voice state is shared user metadata. Card state must never couple
+// itself back to profile-local watched progress or touch the TimeCode DB.
+assert.ok(contentStateController, 'v2 content-state controller method could not be isolated');
+assert.doesNotMatch(contentStateController, /ResolveProfileId|profileId|TimeCodeProgressService/);
+assert.match(contentStateController,
+  /TranslationSubContentStateService\.BuildAsync\(\s*uid,\s*body,\s*HttpContext\s*\)/);
+assert.match(contentStateService,
+  /BuildAsync\(\s*string uid,\s*JObject payload,\s*HttpContext httpContext = null\s*\)/);
+assert.doesNotMatch(contentStateService, /\bprofileId\b|ProfileProgressStore|TimeCodeProgressService/);
 
 // Public application API is v2-only.
 for (const route of [
