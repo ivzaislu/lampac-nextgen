@@ -107,6 +107,11 @@ public class TranslationSubSubscriptionSnapshot
 
     [JsonProperty("tmdb")]
     public TranslationSubTmdbSnapshot Tmdb { get; set; }
+
+    // Presentation-ready strings are produced by the backend so clients do not
+    // reconstruct progress ranges, source aggregation or TMDB facts from domain fields.
+    [JsonProperty("display")]
+    public TranslationSubDisplaySnapshot Display { get; set; } = new();
 }
 
 public class TranslationSubNavigationSnapshot
@@ -173,4 +178,43 @@ public class TranslationSubTmdbSnapshot
 
     [JsonProperty("newSeasonAvailable")]
     public bool NewSeasonAvailable { get; set; }
+}
+
+public class TranslationSubDisplaySnapshot
+{
+    [JsonProperty("season")]
+    public string Season { get; set; }
+
+    [JsonProperty("watched")]
+    public string Watched { get; set; }
+
+    [JsonProperty("available")]
+    public string Available { get; set; }
+
+    [JsonProperty("progress")]
+    public string Progress { get; set; }
+
+    [JsonProperty("source")]
+    public string Source { get; set; }
+
+    [JsonProperty("sourceLabels")]
+    public List<string> SourceLabels { get; set; } = new();
+
+    [JsonProperty("newBadge")]
+    public string NewBadge { get; set; }
+
+    [JsonProperty("noticeTime")]
+    public string NoticeTime { get; set; }
+
+    [JsonProperty("noticeRange")]
+    public string NoticeRange { get; set; }
+
+    [JsonProperty("tmdbFacts")]
+    public string TmdbFacts { get; set; }
+
+    [JsonProperty("tmdbNext")]
+    public string TmdbNext { get; set; }
+
+    [JsonProperty("tmdbTitle")]
+    public string TmdbTitle { get; set; }
 }
