@@ -64,15 +64,20 @@
 
     function refreshState() {
         try {
-            if (typeof window.TranslationSubPageRefresh === 'function') {
-                window.TranslationSubPageRefresh();
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
+                window.TranslationSubBadgeState.refresh(function () {
+                    try {
+                        if (typeof window.TranslationSubPageRefresh === 'function')
+                            window.TranslationSubPageRefresh({ useCachedSnapshot: true });
+                    } catch (e) {}
+                });
                 return;
             }
         } catch (e) {}
 
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
-                window.TranslationSubBadgeState.refresh();
+            if (typeof window.TranslationSubPageRefresh === 'function')
+                window.TranslationSubPageRefresh();
         } catch (e2) {}
     }
 
@@ -98,19 +103,16 @@
         if (!window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return;
 
         item = item || {};
+        var display = item.display && typeof item.display === 'object' ? item.display : {};
         var id = String(item.id || '');
         var title = String(item.title || 'Подписка');
         var voice = String(item.translationName || 'Озвучка');
-        var season = Number(item.season || 1) || 1;
-        var method = item.navigation && String(item.navigation.method || '').toLowerCase() === 'movie' ? 'movie' : 'tv';
         var actions = [];
 
-        if (item.hasNewEpisodes) {
-            var from = Number(item.fromEpisode || 0) || 0;
-            var to = Number(item.toEpisode || 0) || 0;
+        if (display.newBadge) {
             actions.push({
-                title: 'Доступны серии ' + from + (to > from ? '–' + to : ''),
-                subtitle: 'Просмотрено до ' + (Number(item.watchedEpisode || 0) || 0) + ' серии',
+                title: String(display.progress || display.newBadge),
+                subtitle: String(display.noticeRange || ''),
                 onclick: function () { openCard(item); }
             });
         }
@@ -122,7 +124,7 @@
 
         actions.push({
             title: 'Отписаться от озвучки',
-            subtitle: voice + (method === 'tv' ? (' · ' + season + ' сезон') : ''),
+            subtitle: voice + (display.season ? (' · ' + String(display.season)) : ''),
             onclick: function () {
                 if (!id) return;
                 var api = window.TranslationSubApi;
@@ -137,7 +139,7 @@
                         refreshState();
                         return;
                     }
-                    notify('Вы отписались · ' + voice + (method === 'tv' ? (' · ' + season + ' сезон') : ''));
+                    notify('Вы отписались · ' + voice + (display.season ? (' · ' + String(display.season)) : ''));
                     refreshState();
                 }, function () {
                     notify('Не удалось отписаться · ' + voice);
