@@ -20,39 +20,6 @@
         } catch (e) {}
     }
 
-    function storageGet(name, fallback) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
-                return Lampa.Storage.get(name, fallback);
-        } catch (e) {}
-        try {
-            var value = localStorage.getItem(name);
-            return value === null ? fallback : value;
-        } catch (e2) { return fallback; }
-    }
-
-    function storageSet(name, value) {
-        try {
-            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
-                Lampa.Storage.set(name, value);
-                return;
-            }
-        } catch (e) {}
-        try { localStorage.setItem(name, value); } catch (e2) {}
-    }
-
-    function lampacUid() {
-        var uid = String(storageGet('lampac_unic_id', '') || '');
-        if (uid) return uid;
-        try {
-            if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
-                uid = String(Lampa.Utils.uid(8) || '').toLowerCase();
-        } catch (e) {}
-        if (!uid) uid = Math.random().toString(36).slice(2, 10).toLowerCase();
-        storageSet('lampac_unic_id', uid);
-        return uid;
-    }
-
     function registerManifest() {
         try {
             if (!Lampa.Manifest) Lampa.Manifest = {};
@@ -77,7 +44,6 @@
 
         window.TranslationSub = {
             version: META.version,
-            uid: lampacUid,
             openSubscriptions: openSubscriptionsPage
         };
 
