@@ -101,7 +101,7 @@
                 if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.enabled === 'function') {
                     var enabled = Lampa.Controller.enabled();
                     var name = enabled && enabled.name ? String(enabled.name) : '';
-                    if (name && name !== 'select' && name !== 'modal') return name;
+                    if (name) return name;
                 }
             } catch (e) {}
             return String(fallback || '');
