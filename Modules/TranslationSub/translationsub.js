@@ -11,7 +11,6 @@
         description: 'Подписки на озвучки и уведомления о новых сериях',
         type: 'other'
     };
-    var state = { started: false };
 
     function log() {
         try {
@@ -54,12 +53,6 @@
         return uid;
     }
 
-    // Geometry belongs to translationsub-bell-theme.js. Other layers only
-    // provide a stable SVG anchor for the canonical mask.
-    function bellSvg() {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"></svg>';
-    }
-
     function registerManifest() {
         try {
             if (!Lampa.Manifest) Lampa.Manifest = {};
@@ -73,94 +66,32 @@
         } catch (e) { log('manifest registration failed', e); }
     }
 
-    function injectStyles() {
-        if (document.getElementById('translationsub-core-style')) return;
-        var style = document.createElement('style');
-        style.id = 'translationsub-core-style';
-        style.textContent = '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}';
-        (document.head || document.documentElement).appendChild(style);
-    }
-
     function openSubscriptionsPage() {
         if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
         Lampa.Activity.push({ url: '', title: META.name, component: 'translationsub_list', page: 1 });
     }
 
-    function openNoticeOrPage() {
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.open === 'function') {
-                window.TranslationSubBadgeState.open();
-                return;
-            }
-        } catch (e) {}
-        openSubscriptionsPage();
-    }
-
-    function injectHeadButton() {
-        if (typeof $ !== 'function') return;
-        var row = $('.head__actions').first();
-        if (!row.length) return;
-        var button = row.find('.translationsub-head').first();
-        if (!button.length) {
-            button = $('<div class="head__action selector translationsub-head" title="Уведомления озвучек">' + bellSvg() + '</div>');
-            row.append(button);
-        }
-        button.off('hover:enter.translationsubCore');
-        button.on('hover:enter.translationsubCore', openNoticeOrPage);
-    }
-
-    function cardFlow() {
-        try { return window.TranslationSub && window.TranslationSub.cardFlow ? window.TranslationSub.cardFlow : null; }
-        catch (e) { return null; }
-    }
-
-    function refresh() {
-        injectHeadButton();
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
-                window.TranslationSubBadgeState.render();
-        } catch (e) {}
-        var flow = cardFlow();
-        if (flow && typeof flow.refreshButton === 'function') flow.refreshButton();
-    }
-
-    function bindLampa() {
-        if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
-        Lampa.Listener.follow('app', function (event) {
-            if (!event || event.type !== 'ready') return;
-            injectHeadButton();
-        });
-    }
-
     function start() {
-        if (state.started || !window.Lampa) return;
-        state.started = true;
+        if (!window.Lampa) return false;
         registerManifest();
-        injectStyles();
-        injectHeadButton();
-        bindLampa();
 
         window.TranslationSub = {
             version: META.version,
             uid: lampacUid,
-            openSubscriptions: openSubscriptionsPage,
-            refresh: refresh
+            openSubscriptions: openSubscriptionsPage
         };
 
         log('plugin core started', META.version);
+        return true;
     }
 
-    if (window.Lampa) start();
-    else {
+    if (!start()) {
         var attempts = 0;
         var wait = setInterval(function () {
             attempts++;
-            if (window.Lampa) {
+            if (start() || attempts > 80) {
                 clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-                log('Lampa not found');
+                if (attempts > 80 && !window.Lampa) log('Lampa not found');
             }
         }, 250);
     }
