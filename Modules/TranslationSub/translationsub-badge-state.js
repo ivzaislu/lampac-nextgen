@@ -122,12 +122,19 @@
     }
 
     function applySnapshot(snapshot) {
-        // A command snapshot is newer than any outstanding GET. Invalidate that
-        // read and resolve its waiters from the authoritative command result.
+        // An authoritative snapshot is newer than any outstanding GET. Invalidate
+        // that read and resolve its waiters from the supplied backend state.
         state.requestSeq++;
         var updates = commitSnapshot(snapshot);
         if (state.loading) finishRefresh(updates);
         return updates;
+    }
+
+    function applyCommand(result) {
+        if (!result || result.success !== true || !result.snapshot || typeof result.snapshot !== 'object')
+            return false;
+        applySnapshot(result.snapshot);
+        return true;
     }
 
     function refresh(done) {
@@ -200,6 +207,7 @@
         window.TranslationSubBadgeState = {
             refresh: refresh,
             applySnapshot: applySnapshot,
+            applyCommand: applyCommand,
             subscribe: subscribe,
             render: render,
             open: openDrawerSynced,
