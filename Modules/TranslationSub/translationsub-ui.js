@@ -160,7 +160,7 @@
     function bindLampa() {
         if (lampaBound) return true;
         try {
-            if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return false;
+            if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return false;
             Lampa.Listener.follow('full', function (event) {
                 if (event && event.type === 'complite') refresh();
             });
@@ -182,6 +182,5 @@
         } catch (e) {}
     }
 
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-    else start();
+    window.TranslationSubRuntime.onReady(start);
 })();
