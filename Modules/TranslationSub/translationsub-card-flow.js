@@ -134,10 +134,13 @@
         return window.TranslationSubApi;
     }
 
-    function refreshState() {
+    function refreshState(result) {
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function')
-                window.TranslationSubBadgeState.refresh();
+            var badge = window.TranslationSubBadgeState;
+            if (result && result.snapshot && badge && typeof badge.applySnapshot === 'function')
+                badge.applySnapshot(result.snapshot);
+            else if (badge && typeof badge.refresh === 'function')
+                badge.refresh();
         } catch (e) {}
         scheduleApply(lastEvent, 0);
     }
@@ -160,13 +163,13 @@
             busy = false;
             if (!result || result.success !== true) {
                 notify(commandFailed(result, 'Не удалось оформить подписку'));
-                refreshState();
+                refreshState(result);
                 return;
             }
 
             var season = state && state.content ? Number(state.content.season || 1) : 1;
             notify('Подписка оформлена · ' + String(voice.name || 'Озвучка') + ' · ' + season + ' сезон');
-            refreshState();
+            refreshState(result);
         }, function () {
             busy = false;
             notify('Не удалось оформить подписку');
@@ -185,13 +188,13 @@
             busy = false;
             if (!result || result.success !== true) {
                 notify(commandFailed(result, 'Не удалось отписаться'));
-                refreshState();
+                refreshState(result);
                 return;
             }
 
             var season = state && state.content ? Number(state.content.season || 1) : 1;
             notify('Вы отписались · ' + String(voice.name || 'Озвучка') + ' · ' + season + ' сезон');
-            refreshState();
+            refreshState(result);
         }, function () {
             busy = false;
             notify('Не удалось отписаться');
