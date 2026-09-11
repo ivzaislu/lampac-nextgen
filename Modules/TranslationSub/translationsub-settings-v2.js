@@ -295,22 +295,40 @@
         });
     }
 
+    function prepareBalancersComponent() {
+        try {
+            if (typeof Lampa.SettingsApi.removeComponent === 'function')
+                Lampa.SettingsApi.removeComponent(BALANCERS);
+        } catch (e) {
+            try {
+                if (typeof Lampa.SettingsApi.removeParams === 'function')
+                    Lampa.SettingsApi.removeParams(BALANCERS);
+            } catch (e2) {}
+        }
+
+        try {
+            if (Lampa.Template && typeof Lampa.Template.add === 'function')
+                Lampa.Template.add('settings_' + BALANCERS, '<div></div>');
+        } catch (e3) {}
+
+        try {
+            if (Lampa.Settings && typeof Lampa.Settings.main === 'function') {
+                var main = Lampa.Settings.main();
+                if (main && typeof main.render === 'function')
+                    main.render().find('[data-component="' + BALANCERS + '"]').remove();
+            }
+        } catch (e4) {}
+    }
+
     function rebuildSettings() {
         if (!window.Lampa || !Lampa.SettingsApi) return;
 
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(ROOT); } catch (e) {}
-        try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(BALANCERS); } catch (e2) {}
-        if (!serverReady) {
-            try {
-                if (typeof Lampa.SettingsApi.removeComponent === 'function') Lampa.SettingsApi.removeComponent(BALANCERS);
-            } catch (e3) {}
-        }
+        prepareBalancersComponent();
 
         Lampa.SettingsApi.addComponent({ component: ROOT, name: 'Подписки на озвучки', icon: settingsBellSvg() });
 
         if (serverReady) {
-            Lampa.SettingsApi.addComponent({ component: BALANCERS, name: 'Балансеры для опроса', icon: '' });
-
             var available = availableIdSet();
             var activeCount = selectedSources.filter(function (id) { return available[id]; }).length;
             Lampa.SettingsApi.addParam({
