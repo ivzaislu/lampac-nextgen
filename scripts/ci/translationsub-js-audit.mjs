@@ -72,6 +72,8 @@ catch (err) { error(`Combined TranslationSub bundle syntax error: ${err.message}
 if (observerCount !== 1) error(`Expected exactly one global MutationObserver, found ${observerCount}`);
 if (componentRegistrationCount !== 1) error(`translationsub_list must be registered exactly once, found ${componentRegistrationCount}`);
 if (globalSelectOverrides !== 0) error(`Global Lampa.Select.show override found ${globalSelectOverrides} time(s)`);
+if (/\b(?:enabledSources|refreshSources)\b/.test(bundle))
+  error('Obsolete client source-state compatibility hooks returned');
 
 const api = read('translationsub-api.js');
 for (const route of [
@@ -111,6 +113,16 @@ const settings = read('translationsub-settings-v2.js');
 if (!settings.includes('api.updateSettings')) error('Settings UI must persist through backend API');
 if (!settings.includes('api.settings')) error('Settings UI must load canonical backend settings');
 if (!settings.includes('viewBox="0 0 37 37"')) error('Settings bell SVG lost its native-like proportions');
+if (!settings.includes('data.schema') || !settings.includes('schemaValues(') || !settings.includes('schemaDefault('))
+  error('Settings UI must render server-provided policy schema');
+if (/function\s+hourValues\s*\(/.test(settings)) error('Settings UI must not define polling interval policy');
+if (/\bSOURCES_KEY\b|translationsub_sources/.test(settings)) error('Settings UI must not persist a local source-of-truth list');
+if (/values\s*:\s*\{\s*['"]6['"]\s*:\s*['"]6 часов/.test(settings))
+  error('Settings UI hardcodes TMDB refresh policy values');
+if (/values\s*:\s*\{\s*['"]7['"]\s*:\s*['"]7 дней/.test(settings))
+  error('Settings UI hardcodes ended-series refresh policy values');
+if (/values\s*:\s*\{\s*auto\s*:/.test(settings))
+  error('Settings UI hardcodes new-season policy modes');
 
 const navigation = read('translationsub-navigation.js');
 if (!navigation.includes('new MutationObserver')) error('Navigation DOM repair observer is missing');
