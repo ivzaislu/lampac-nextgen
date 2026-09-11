@@ -78,8 +78,7 @@
         var descr = card.find('.notice__descr');
         descr.empty();
         descr.append($('<div></div>').text(voice));
-        if (display.noticeRange)
-            descr.append($('<div></div>').text(String(display.noticeRange)));
+        if (display.noticeRange) descr.append($('<div></div>').text(String(display.noticeRange)));
 
         if (labels.length) {
             var footer = $('<div class="notice__footer"></div>');
@@ -129,11 +128,8 @@
         updates = Array.isArray(updates) ? updates : [];
 
         var html = $('<div class="translationsub-notice"></div>');
-        if (updates.length) {
-            updates.forEach(function (item, index) { html.append(noticeCard(item, index)); });
-        } else {
-            html.append(emptyCard());
-        }
+        if (updates.length) updates.forEach(function (item, index) { html.append(noticeCard(item, index)); });
+        else html.append(emptyCard());
 
         var first = html.find('.selector').first()[0];
         Lampa.Modal.open({
@@ -142,16 +138,12 @@
             html: html,
             select: first,
             scroll_to_center: true,
-            buttons: [{
-                name: 'Все подписки на озвучки',
-                onSelect: openSubscriptionsPage
-            }],
+            buttons: [{ name: 'Все подписки на озвучки', onSelect: openSubscriptionsPage }],
             buttons_position: 'inside',
             onSelect: function (selected) {
                 var node = $(selected);
                 var index = parseInt(node.attr('data-translationsub-update'), 10);
                 if (isNaN(index) || !updates[index]) return;
-
                 try { Lampa.Modal.close(); } catch (e) {}
                 openUpdate(updates[index]);
             },
@@ -164,28 +156,13 @@
             openSubscriptionsPage();
             return;
         }
-
         renderDrawer(Array.isArray(preloadedUpdates) ? preloadedUpdates : []);
     }
 
     function start() {
         addStyles();
-        window.TranslationSubNotice = {
-            open: openDrawer
-        };
+        window.TranslationSubNotice = { open: openDrawer };
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
