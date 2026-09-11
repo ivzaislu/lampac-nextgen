@@ -137,10 +137,11 @@
     function refreshState(result) {
         try {
             var badge = window.TranslationSubBadgeState;
-            if (result && result.snapshot && badge && typeof badge.applySnapshot === 'function')
-                badge.applySnapshot(result.snapshot);
-            else if (badge && typeof badge.refresh === 'function')
-                badge.refresh();
+            if (badge && typeof badge.applyCommand === 'function' && badge.applyCommand(result)) {
+                scheduleApply(lastEvent, 0);
+                return;
+            }
+            if (badge && typeof badge.refresh === 'function') badge.refresh();
         } catch (e) {}
         scheduleApply(lastEvent, 0);
     }
