@@ -164,8 +164,9 @@
             if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('app', function (event) {
                     if (!event || event.type !== 'ready') return;
+                    // Startup already fetched the canonical snapshot. app-ready only
+                    // re-renders it into DOM that may not have existed yet.
                     render();
-                    refresh();
                 });
             }
         } catch (e) {}
