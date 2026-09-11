@@ -14,16 +14,23 @@ const badgeSource = read('translationsub-badge-state.js');
 const bellSource = read('translationsub-bell-theme.js');
 const navigationSource = read('translationsub-navigation.js');
 const realtimeSource = read('translationsub-realtime.js');
+const uiSource = read('translationsub-ui.js');
 const v2ControllerSource = read('V2Controller.cs');
 const modInitSource = read('ModInit.cs');
 const pluginControllerSource = read('PluginController.cs');
 
-assert.ok(!fs.existsSync(path.join(moduleDir, 'Controller.cs')),
-  'Legacy TranslationSub controller must stay removed');
-assert.ok(!fs.existsSync(path.join(moduleDir, 'translationsub-watch.js')),
-  'Client progress watcher must stay removed');
-assert.doesNotMatch(pluginControllerSource, /translationsub-watch\.js/,
-  'Removed progress watcher must not be shipped');
+for (const obsolete of [
+  'Controller.cs',
+  'translationsub-watch.js',
+  'translationsub-tmdb-ui.js',
+  'translationsub-polish.js',
+  'translationsub-layout-v3.js',
+  'translationsub-mobile.js'
+]) {
+  assert.ok(!fs.existsSync(path.join(moduleDir, obsolete)), `Obsolete TranslationSub file must stay removed: ${obsolete}`);
+  assert.doesNotMatch(pluginControllerSource, new RegExp(obsolete.replaceAll('.', '\\.')),
+    `Removed TranslationSub file must not be shipped: ${obsolete}`);
+}
 
 // Backend owns progress propagation and every canonical read reconciles from
 // TimeCode as a safety net for restarts or missed realtime delivery.
@@ -33,13 +40,21 @@ assert.match(modInitSource, /PublishProfile\(uid, profileId, "timecode"\)/);
 assert.match(v2ControllerSource,
   /Route\("translationsub\/v2\/snapshot"\)[\s\S]*?TimeCodeProgressService\.SyncUser\(uid, profileId\)/);
 
-// State/network refresh is event driven: startup, app-ready, foreground and NWS.
+// State/network refresh is event driven: one startup read, foreground revalidate
+// and NWS invalidation. app-ready only renders the snapshot already in memory.
 assert.doesNotMatch(badgeSource, /setInterval\s*\(\s*refresh/);
 assert.match(badgeSource, /function\s+start\s*\(\)[\s\S]*refresh\(\)/);
-assert.match(badgeSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]*refresh\(\)/);
+assert.match(badgeSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]{0,500}?render\(\)/);
+assert.doesNotMatch(badgeSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]{0,500}?refresh\(\)/);
 assert.match(badgeSource, /visibilitychange[\s\S]*if\s*\(!document\.hidden\)\s*refresh\(\)/);
 assert.match(realtimeSource, /TranslationSubChanged/);
 assert.match(realtimeSource, /window\.TranslationSubBadgeState\.refresh\(\)/);
+
+// Presentation has one layout owner. Mobile/page layout lives in UI; deleted
+// patch layers are forbidden from returning.
+assert.match(uiSource, /translationsub-layout--mobile/);
+assert.match(uiSource, /translationsub-full-button--mobile/);
+assert.match(uiSource, /Lampa\.Listener\.follow\(['"]full['"]/);
 
 // Presentation follows the observable snapshot store. Permanent visual repair
 // polling is forbidden; MutationObserver/app lifecycle are the DOM repair path.
@@ -103,11 +118,11 @@ assert.deepEqual(observedCounts, [0, 3], 'state subscription must publish author
 unsubscribe();
 
 appListeners.forEach((callback) => callback({ type: 'ready' }));
-assert.deepEqual(network, ['snapshot', 'snapshot'], 'app-ready must add exactly one snapshot read');
+assert.deepEqual(network, ['snapshot'], 'app-ready must not duplicate the startup snapshot read');
 
 sandbox.document.hidden = false;
 for (const callback of documentListeners.get('visibilitychange') || []) callback();
-assert.deepEqual(network, ['snapshot', 'snapshot', 'snapshot'],
+assert.deepEqual(network, ['snapshot', 'snapshot'],
   'foreground return must add exactly one snapshot read');
 
-console.log('TranslationSub refresh ownership: server-driven state, no client polling.');
+console.log('TranslationSub refresh ownership: one startup read, server-driven state, no client polling.');
