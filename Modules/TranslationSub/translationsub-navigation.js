@@ -7,44 +7,11 @@
     var observer = null;
     var applyTimer = null;
 
-    function openNotice() {
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.open === 'function') {
-                window.TranslationSubBadgeState.open();
-                return;
-            }
-        } catch (e) {}
-
-        try {
-            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
-                window.TranslationSubNotice.open();
-                return;
-            }
-        } catch (e2) {}
-    }
-
     function openSubscriptions() {
-        try {
-            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.openPage === 'function') {
-                window.TranslationSubNotice.openPage();
-                return;
-            }
-        } catch (e) {}
-
         try {
             if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
                 window.TranslationSub.openSubscriptions();
-        } catch (e2) {}
-    }
-
-    function bindHead() {
-        if (typeof $ !== 'function') return;
-        $('.translationsub-head').each(function () {
-            var button = $(this);
-            button.off('hover:enter');
-            button.on('hover:enter.translationsubNavigation', openNotice);
-            button.attr('title', 'Уведомления озвучек');
-        });
+        } catch (e) {}
     }
 
     function menuIcon() {
@@ -96,17 +63,22 @@
         }
 
         item.find('.menu__text').first().text('Озвучки');
-        item.off('hover:enter');
+        item.off('hover:enter.translationsubNavigation');
         item.on('hover:enter.translationsubNavigation', openSubscriptions);
     }
 
     function apply() {
-        bindHead();
         ensureMenuItem();
+
         try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
-                window.TranslationSubBadgeState.render();
+            if (window.TranslationSub && typeof window.TranslationSub.refresh === 'function')
+                window.TranslationSub.refresh();
         } catch (e) {}
+
+        try {
+            if (window.TranslationSubBellTheme && typeof window.TranslationSubBellTheme.refresh === 'function')
+                window.TranslationSubBellTheme.refresh();
+        } catch (e2) {}
     }
 
     function scheduleApply(delay) {
@@ -157,7 +129,6 @@
 
         window.TranslationSubNavigation = {
             refresh: function () { scheduleApply(0); },
-            openNotice: openNotice,
             openSubscriptions: openSubscriptions
         };
     }
