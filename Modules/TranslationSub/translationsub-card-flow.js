@@ -20,8 +20,6 @@
         try { console.log('[TranslationSub]', text); } catch (e2) {}
     }
 
-    // Bell geometry belongs to translationsub-bell-theme.js. Card flow only
-    // provides the stable SVG anchor and subscribed state class.
     function bellSvg() {
         return '<svg class="translationsub-full-button__bell" viewBox="0 0 24 24" aria-hidden="true"></svg>';
     }
@@ -58,9 +56,6 @@
         catch (e) { return null; }
     }
 
-    // This is deliberately only a Lampa transport adapter. It copies raw card
-    // facts and does not decide whether the item is a serial, which season is
-    // current, how content IDs match, or which voice/subscription is active.
     function transportPayload(object) {
         object = object || {};
         var card = object.movie || object.card || object.data || object || {};
@@ -326,8 +321,6 @@
                 } catch (e) {}
             });
         }, function () {
-            // A transient backend error must not leave a stale button from a
-            // previous card visible on the current Lampa full page.
             if (token === viewToken) removeButton(event);
         });
     }
@@ -342,7 +335,7 @@
     }
 
     function bind() {
-        if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
+        if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
         Lampa.Listener.follow('full', function (event) {
             if (!event || event.type !== 'complite') return;
             viewToken++;
@@ -352,7 +345,6 @@
     }
 
     function start() {
-        if (!window.Lampa) return;
         injectStyles();
         bind();
         window.TranslationSubCardFlow = {
@@ -360,15 +352,5 @@
         };
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) clearInterval(wait);
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
