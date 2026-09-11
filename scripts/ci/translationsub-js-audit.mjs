@@ -33,7 +33,9 @@ for (const name of jsFiles) {
   if (!loadedSet.has(name)) error(`Orphan TranslationSub JS file is not loaded: ${name}`);
 }
 if (jsFiles.includes('translationsub-watch.js')) error('Obsolete client progress watcher returned');
+if (jsFiles.includes('translationsub-tmdb-ui.js')) error('Obsolete TMDB decorator returned');
 if (controller.includes('translationsub-watch.js')) error('PluginController still ships obsolete progress watcher');
+if (controller.includes('translationsub-tmdb-ui.js')) error('PluginController still ships obsolete TMDB decorator');
 
 const guards = new Map();
 let observerCount = 0;
@@ -101,11 +103,17 @@ const page = read('translationsub-page.js');
 if (!page.includes('snapshot.subscriptions')) error('Subscriptions page must render backend snapshot data');
 if (!page.includes('result.snapshot')) error('Subscriptions page must consume manual-check snapshot without refetch');
 if (!page.includes('item.display')) error('Subscriptions page must render backend display projection');
+if (!page.includes('display.tmdbFacts') || !page.includes('display.tmdbNext'))
+  error('Subscriptions page must render backend TMDB display projection directly');
 if (/api\.check\([\s\S]{0,900}?\bload\s*\(/.test(page))
   error('Subscriptions page refetches immediately after v2/check');
 for (const domainField of ['item.watchedEpisode', 'item.availableEpisode', 'item.fromEpisode', 'item.toEpisode']) {
   if (page.includes(domainField)) error(`Subscriptions page reconstructs domain display from ${domainField}`);
 }
+for (const leakedTmdb of ['targetSeasonEpisodes', 'nextAirDate', 'nextSeason', 'nextEpisode', 'tmdb.status']) {
+  if (page.includes(leakedTmdb)) error(`Subscriptions page reconstructs TMDB state from ${leakedTmdb}`);
+}
+if (/new\s+Date\s*\(/.test(page)) error('Subscriptions page must not format TMDB schedule dates client-side');
 if (/function\s+sourceLabels\s*\(/.test(page))
   error('Subscriptions page must not aggregate source labels client-side');
 
@@ -127,6 +135,7 @@ if (/values\s*:\s*\{\s*auto\s*:/.test(settings))
 const navigation = read('translationsub-navigation.js');
 if (!navigation.includes('new MutationObserver')) error('Navigation DOM repair observer is missing');
 if (/Lampa\.Select\.show\s*=/.test(navigation)) error('Navigation must not monkey-patch global Lampa.Select');
+if (/repairTimer|15000/.test(navigation)) error('Navigation must not use periodic DOM repair polling');
 
 const notice = read('translationsub-notice.js');
 if (/new\s+MutationObserver/.test(notice)) error('Notice drawer must not own a global MutationObserver');
@@ -178,15 +187,6 @@ for (const domainOwner of [
 }
 if (cardFlow.includes('Lampa.Timeline.watchedEpisode')) error('Card flow must not derive watched state from Lampa Timeline');
 if (cardFlow.includes('Lampa.Select.close')) error('Card flow must not call Lampa.Select.close()');
-
-const tmdbUi = read('translationsub-tmdb-ui.js');
-if (/ScheduleState|scheduleState/.test(tmdbUi)) error('TMDB UI must not own schedule state machine');
-if (!tmdbUi.includes('display.tmdbFacts') || !tmdbUi.includes('display.tmdbNext'))
-  error('TMDB UI must render backend TMDB display projection');
-for (const leakedDomain of ['targetSeasonEpisodes', 'nextAirDate', 'nextSeason', 'nextEpisode', 'tmdb.status']) {
-  if (tmdbUi.includes(leakedDomain)) error(`TMDB UI reconstructs backend state from ${leakedDomain}`);
-}
-if (/new\s+Date\s*\(/.test(tmdbUi)) error('TMDB UI must not format schedule dates client-side');
 
 console.log(`TranslationSub JS files checked: ${loaded.length}`);
 console.log(`Global MutationObserver count: ${observerCount}`);
