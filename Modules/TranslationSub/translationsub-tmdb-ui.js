@@ -14,18 +14,6 @@
             .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
-    function formatDate(value) {
-        if (!value) return '';
-        var date = new Date(value);
-        if (isNaN(date.getTime())) return '';
-        try {
-            return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '');
-        } catch (e) {
-            var month = date.getMonth() + 1;
-            return date.getDate() + '.' + (month < 10 ? '0' : '') + month;
-        }
-    }
-
     function decorateCard(card) {
         var node = $(card);
         var item = node.data('translationsubTmdbItem');
@@ -36,23 +24,14 @@
 
         meta.find('.translationsub-tmdb-v2').remove();
 
-        var tmdb = item.tmdb && typeof item.tmdb === 'object' ? item.tmdb : {};
+        var display = item.display && typeof item.display === 'object' ? item.display : {};
         var schedule = item.schedule && typeof item.schedule === 'object' ? item.schedule : null;
-        var season = Number(item.season || 1) || 1;
-        var aired = Number(tmdb.targetSeasonEpisodes || 0) || 0;
-        var nextSeason = Number(tmdb.nextSeason || 0) || 0;
-        var nextEpisode = Number(tmdb.nextEpisode || 0) || 0;
-        var nextDate = formatDate(tmdb.nextAirDate);
         var parts = [];
 
-        if (aired > 0)
-            parts.push('<span class="translationsub-tmdb-v2__air">TMDB · вышло S' + season + 'E' + aired + '</span>');
-
-        if (nextDate && nextSeason > 0 && nextEpisode > 0)
-            parts.push('<span class="translationsub-tmdb-v2__next">Следующая S' + nextSeason + 'E' + nextEpisode + ' · ' + escapeHtml(nextDate) + '</span>');
-
-        if (!parts.length && tmdb.status)
-            parts.push('<span class="translationsub-tmdb-v2__air">TMDB · ' + escapeHtml(tmdb.status) + '</span>');
+        if (display.tmdbFacts)
+            parts.push('<span class="translationsub-tmdb-v2__air">' + escapeHtml(display.tmdbFacts) + '</span>');
+        if (display.tmdbNext)
+            parts.push('<span class="translationsub-tmdb-v2__next">' + escapeHtml(display.tmdbNext) + '</span>');
 
         if (!parts.length && !(schedule && schedule.text)) return;
 
@@ -65,7 +44,7 @@
             row.append('<div class="translationsub-tmdb-v2__state translationsub-tmdb-v2__state--' + type + '">' + escapeHtml(schedule.text) + '</div>');
         }
 
-        if (tmdb.lastSyncedAt) row.attr('title', 'TMDB обновлён: ' + tmdb.lastSyncedAt);
+        if (display.tmdbTitle) row.attr('title', String(display.tmdbTitle));
         meta.append(row);
     }
 
