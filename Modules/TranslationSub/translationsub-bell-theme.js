@@ -30,6 +30,7 @@
         var style = document.createElement('style');
         style.id = 'translationsub-bell-theme-style';
         style.textContent =
+            '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}' +
             '.translationsub-full-button:before{display:none!important}' +
             '.translationsub-full-button>.translationsub-full-button__bell{' +
                 'display:block!important;width:1.55em!important;height:1.55em!important;flex:0 0 1.55em!important;' +
