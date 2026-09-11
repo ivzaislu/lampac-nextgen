@@ -37,43 +37,26 @@
         return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
     }
 
-    function sourceLabels(item) {
-        var names = [];
-        var sources = item && Array.isArray(item.sources) ? item.sources : [];
-        sources.forEach(function (source) {
-            var name = String(source && source.source || '').trim();
-            if (name && names.indexOf(name) === -1) names.push(name);
-        });
-        if (!names.length && item && item.source)
-            names.push(String(item.source));
-        return names;
-    }
-
     function metaHtml(item) {
         item = item || {};
-        var season = Number(item.season || 1) || 1;
-        var watched = Number(item.watchedEpisode || 0) || 0;
-        var available = Number(item.availableEpisode || 0) || 0;
+        var display = item.display && typeof item.display === 'object' ? item.display : {};
         var progress = Math.max(0, Math.min(100, Number(item.progressPercent || 0) || 0));
-        var names = sourceLabels(item);
         var body = '<div class="translationsub-meta-v2">' +
             '<div class="translationsub-meta-v2__row">' +
-                '<span class="translationsub-meta-v2__season">S' + season + '</span>' +
-                '<span class="translationsub-meta-v2__pill">Просмотрено <b>E' + watched + '</b></span>' +
-                '<span class="translationsub-meta-v2__pill">В озвучке <b>E' + available + '</b></span>' +
+                '<span class="translationsub-meta-v2__season">' + escapeHtml(display.season || '') + '</span>' +
+                '<span class="translationsub-meta-v2__pill">' + escapeHtml(display.watched || '') + '</span>' +
+                '<span class="translationsub-meta-v2__pill">' + escapeHtml(display.available || '') + '</span>' +
             '</div>' +
             '<div class="translationsub-progress-v2"><i style="width:' + progress + '%"></i></div>';
 
-        if (item.hasNewEpisodes) {
-            var from = Number(item.fromEpisode || 0) || 0;
-            var to = Number(item.toEpisode || 0) || 0;
-            body += '<div class="translationsub-meta-v2__next">Можно смотреть E' + from + (to > from ? '–E' + to : '') + '</div>';
-        } else {
-            body += '<div class="translationsub-meta-v2__ok">Новых серий пока нет</div>';
+        if (display.progress) {
+            body += '<div class="' + (item.hasNewEpisodes ? 'translationsub-meta-v2__next' : 'translationsub-meta-v2__ok') + '">' +
+                escapeHtml(display.progress) +
+            '</div>';
         }
 
-        if (names.length)
-            body += '<div class="translationsub-meta-v2__source">' + escapeHtml(names.join(', ')) + '</div>';
+        if (display.source)
+            body += '<div class="translationsub-meta-v2__source">' + escapeHtml(display.source) + '</div>';
 
         if (item.schedule && item.schedule.text) {
             var type = String(item.schedule.type || 'plain').replace(/[^a-z0-9-]/gi, '');
@@ -243,6 +226,7 @@
 
             list.forEach(function (item) {
                 item = item || {};
+                var display = item.display && typeof item.display === 'object' ? item.display : {};
                 var id = String(item.id || '');
                 var title = String(item.title || 'Без названия');
                 var voice = String(item.translationName || 'Озвучка');
@@ -259,7 +243,7 @@
                         '<div class="translationsub-card__voice">' + escapeHtml(voice) + '</div>' +
                         '<div class="translationsub-card__meta">' + metaHtml(item) + '</div>' +
                     '</div>' +
-                    (newCount > 0 ? '<div class="translationsub-card__new">' + newCount + ' НОВЫХ</div>' : '') +
+                    (display.newBadge ? '<div class="translationsub-card__new">' + escapeHtml(display.newBadge) + '</div>' : '') +
                 '</div>');
 
                 card.on('hover:focus', function (event) {
