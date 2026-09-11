@@ -84,12 +84,6 @@
     function updateHeadState(next) {
         if (next && typeof next === 'object' && next.count !== undefined)
             currentCount = Math.max(0, Number(next.count) || 0);
-        else {
-            try {
-                if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.count === 'function')
-                    currentCount = Math.max(0, Number(window.TranslationSubBadgeState.count()) || 0);
-            } catch (e) {}
-        }
 
         var nodes = document.querySelectorAll ? document.querySelectorAll('.translationsub-head') : [];
         for (var i = 0; i < nodes.length; i++) {

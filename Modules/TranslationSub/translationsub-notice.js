@@ -161,24 +161,13 @@
         });
     }
 
-    function cachedUpdates() {
-        try {
-            var badge = window.TranslationSubBadgeState;
-            if (badge && typeof badge.updates === 'function') {
-                var updates = badge.updates();
-                return Array.isArray(updates) ? updates : [];
-            }
-        } catch (e) {}
-        return [];
-    }
-
     function openDrawer(preloadedUpdates) {
         if (!window.Lampa || !Lampa.Modal || typeof Lampa.Modal.open !== 'function') {
             openSubscriptionsPage();
             return;
         }
 
-        renderDrawer(Array.isArray(preloadedUpdates) ? preloadedUpdates : cachedUpdates());
+        renderDrawer(Array.isArray(preloadedUpdates) ? preloadedUpdates : []);
     }
 
     function start() {

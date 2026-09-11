@@ -190,7 +190,7 @@
         } catch (e) {}
 
         try {
-            var flow = window.TranslationSub && window.TranslationSub.cardFlow;
+            var flow = window.TranslationSubCardFlow;
             if (flow && typeof flow.refreshButton === 'function') flow.refreshButton();
         } catch (e2) {}
     }

@@ -341,16 +341,6 @@
         }, typeof delay === 'number' ? delay : 80);
     }
 
-    function expose() {
-        if (!window.TranslationSub) return false;
-        window.TranslationSub.openForItem = openForItem;
-        window.TranslationSub.cardFlow = {
-            open: openForItem,
-            refreshButton: function () { scheduleApply(lastEvent, 0); }
-        };
-        return true;
-    }
-
     function bind() {
         if (!window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
         Lampa.Listener.follow('full', function (event) {
@@ -365,12 +355,9 @@
         if (!window.Lampa) return;
         injectStyles();
         bind();
-        expose();
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (expose() || attempts > 40) clearInterval(wait);
-        }, 100);
+        window.TranslationSubCardFlow = {
+            refreshButton: function () { scheduleApply(lastEvent, 0); }
+        };
     }
 
     if (window.Lampa) start();

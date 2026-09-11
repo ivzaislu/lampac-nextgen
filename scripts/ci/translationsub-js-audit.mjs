@@ -105,6 +105,8 @@ if (/\b(?:enabledSources|refreshSources|TranslationSubPageRefresh|checkUpdates|f
   error('Obsolete client compatibility hook returned');
 if (/TranslationSub\.refresh\b/.test(bundle))
   error('Obsolete cross-layer TranslationSub.refresh facade returned');
+if (/window\.TranslationSubNavigation\s*=/.test(bundle))
+  error('Navigation must stay internal and must not expose a global facade');
 if (/translationsub-(?:layout-v3|mobile-button|polish|tmdb-ui)-style/.test(bundle))
   error('Removed presentation patch style owner returned');
 
@@ -122,12 +124,16 @@ if (/request\(['"](?:PUT|DELETE)['"]/.test(api))
   error('Thin API client uses unsupported dynamic-module mutation verbs');
 if (!api.includes("'/translationsub/v2/subscriptions/' + id + '/remove'"))
   error('Thin API client is missing canonical POST unsubscribe command route');
+if (/\brequest\s*:\s*request\b/.test(api))
+  error('Shared API client must not expose its raw request primitive');
+if (!/function\s+uid\s*\(\)/.test(api) || !api.includes('lampac_unic_id') || !api.includes('uid: uid'))
+  error('Shared API client must own Lampac UID generation and exposure');
 
 const core = read('translationsub.js');
 for (const symbol of [
   'injectFullButton', 'registerComponent', 'SubscriptionComponent', 'schedulePolling',
   'addSettings', 'checkIntervalMinutes', 'refreshUpdates', 'forceCheckUpdatesUI',
-  'applySnapshot', 'injectStyles', 'injectHeadButton', 'bellSvg', 'bindLampa'
+  'applySnapshot', 'injectStyles', 'injectHeadButton', 'bellSvg', 'bindLampa', 'lampacUid'
 ]) {
   if (core.includes(symbol)) error(`translationsub.js still contains obsolete owner: ${symbol}`);
 }
@@ -137,7 +143,9 @@ if (/translationsub-head|translationsub-menu-item|MutationObserver|Lampa\.Listen
   error('Core must not own TranslationSub DOM or lifecycle presentation');
 if (/\brefresh\s*:\s*refresh\b|function\s+refresh\s*\(/.test(core))
   error('Core must not expose a cross-layer refresh facade');
-for (const required of ['registerManifest', 'lampacUid', 'openSubscriptionsPage']) {
+if (/lampac_unic_id|function\s+uid\s*\(/.test(core))
+  error('Core must not own transport identity');
+for (const required of ['registerManifest', 'openSubscriptionsPage']) {
   if (!core.includes(required)) error(`Core bootstrap facade is missing ${required}`);
 }
 
@@ -169,6 +177,8 @@ if (!/badge\.applyCommand\(result\)/.test(page))
   error('Subscriptions page must delegate manual-check command state to BadgeState');
 if (/result\.snapshot|applySnapshot\s*\(/.test(page))
   error('Subscriptions page must not know command snapshot transport details');
+if (/badge\.(?:count|snapshot|updates)\s*\(/.test(page))
+  error('Subscriptions page must consume the observable state view instead of store getters');
 if (/image\.tmdb\.org|Lampa\.Api\.img|Lampa\.TMDB\.image/.test(page))
   error('Subscriptions page must use the shared poster presentation helper');
 for (const domainField of ['item.watchedEpisode', 'item.availableEpisode', 'item.fromEpisode', 'item.toEpisode']) {
@@ -196,11 +206,11 @@ if (/values\s*:\s*\{\s*['"]7['"]\s*:\s*['"]7 дней/.test(settings))
   error('Settings UI hardcodes ended-series refresh policy values');
 if (/values\s*:\s*\{\s*auto\s*:/.test(settings))
   error('Settings UI hardcodes new-season policy modes');
-if (/TranslationSub\.refresh\b/.test(settings))
-  error('Settings UI must not use the removed cross-layer refresh facade');
+if (/TranslationSub\.refresh\b|TranslationSub\.cardFlow\b/.test(settings))
+  error('Settings UI must not use removed cross-layer core facades');
 if (!/TranslationSubBadgeState[\s\S]{0,180}?\.refresh/.test(settings))
   error('Settings changes must revalidate canonical snapshot state');
-if (!/cardFlow[\s\S]{0,180}?refreshButton/.test(settings))
+if (!/TranslationSubCardFlow[\s\S]{0,180}?refreshButton/.test(settings))
   error('Settings changes must refresh only the current full-card button explicitly');
 
 const navigation = read('translationsub-navigation.js');
@@ -221,6 +231,8 @@ if (!navigation.includes('TranslationSubBadgeState.render') || !navigation.inclu
   error('Navigation repair must repaint cached badge/bell state after DOM reconstruction');
 if (!/if\s*\(text\.text\(\)\s*!==\s*['"]Озвучки['"]\)/.test(navigation))
   error('Navigation must avoid mutation-observer loops when repairing menu text');
+if (/window\.TranslationSubNavigation\s*=/.test(navigation))
+  error('Navigation must remain internal');
 
 const notice = read('translationsub-notice.js');
 if (/new\s+MutationObserver/.test(notice)) error('Notice drawer must not own a global MutationObserver');
@@ -238,10 +250,10 @@ if (!notice.includes('TranslationSubCardSource.open'))
   error('Notice drawer must delegate item navigation to CardSource');
 if (/image\.tmdb\.org|Lampa\.Api\.img|Lampa\.TMDB\.image/.test(notice))
   error('Notice drawer must use the shared poster presentation helper');
-if (/\blastUpdates\b|function\s+loadUpdates\s*\(|function\s+refresh\s*\(|TranslationSubBadgeState\.refresh/.test(notice))
-  error('Notice drawer must not own snapshot state or refresh');
-if (!/TranslationSubBadgeState[\s\S]{0,180}?updates/.test(notice))
-  error('Notice drawer may only read cached updates from BadgeState when opened directly');
+if (/\blastUpdates\b|function\s+loadUpdates\s*\(|function\s+refresh\s*\(|TranslationSubBadgeState/.test(notice))
+  error('Notice drawer must receive preloaded updates and must not own/read snapshot state');
+if (/function\s+cachedUpdates\s*\(/.test(notice))
+  error('Notice drawer must not keep a cached-state compatibility path');
 if (!/window\.TranslationSubNotice\s*=\s*\{\s*open\s*:\s*openDrawer\s*\}/m.test(notice))
   error('Notice public surface must expose only open()');
 
@@ -249,17 +261,21 @@ const badge = read('translationsub-badge-state.js');
 if (/new\s+MutationObserver/.test(badge)) error('Badge state must not own a global MutationObserver');
 if (/setInterval\s*\(\s*refresh/.test(badge)) error('Badge state must not poll in background');
 if (!badge.includes('api.snapshot')) error('Badge state must consume canonical backend snapshot');
-if (!badge.includes('applySnapshot')) error('Badge state must accept authoritative snapshots');
+if (!badge.includes('applySnapshot')) error('Badge state must accept authoritative snapshots internally');
 if (!/function\s+applyCommand\s*\(result\)/.test(badge) || !badge.includes('applyCommand: applyCommand'))
   error('Badge state must own command-result snapshot application');
-if (!/applyCommand[\s\S]{0,320}?result\.snapshot[\s\S]{0,320}?applySnapshot\(result\.snapshot\)/.test(badge))
-  error('Badge state command application must validate and apply the canonical command snapshot');
+if (!/applyCommand[\s\S]{0,320}?result\.snapshot[\s\S]{0,320}?applySnapshot\(result\.snapshot\)[\s\S]{0,160}?return\s+view\(\)/.test(badge))
+  error('Badge state command application must apply the canonical snapshot and return the observable view');
 if (!/function\s+subscribe\s*\(/.test(badge) || !badge.includes('subscribe: subscribe'))
   error('Badge state must expose observable snapshot updates');
 if (!/function\s+emit\s*\(/.test(badge) || !/commitSnapshot[\s\S]{0,900}?emit\(\)/.test(badge))
   error('Badge state must notify subscribers when authoritative snapshot changes');
 if (!/loading\s*:\s*false/.test(badge) || !/waiters\s*:\s*\[\]/.test(badge) || !/if\s*\(state\.loading\)\s*return/.test(badge))
   error('Badge state must coalesce concurrent snapshot reads');
+if (/applySnapshot\s*:\s*applySnapshot|\b(?:count|updates|snapshot)\s*:\s*function/.test(badge))
+  error('Badge state must not expose raw snapshot/getter compatibility methods');
+if (!/window\.TranslationSubBadgeState\s*=\s*\{\s*refresh\s*:\s*refresh,\s*applyCommand\s*:\s*applyCommand,\s*subscribe\s*:\s*subscribe,\s*render\s*:\s*render,\s*open\s*:\s*openDrawerSynced\s*\}/m.test(badge))
+  error('Badge state public surface must stay minimal');
 
 const bell = read('translationsub-bell-theme.js');
 if (/setInterval\s*\(\s*updateHeadState/.test(bell) || /750\s*\)/.test(bell))
@@ -270,6 +286,8 @@ if (!bell.includes('BELL_BODY') || !bell.includes('BELL_CLAPPER'))
   error('Bell theme must remain the canonical bell geometry owner');
 if (!bell.includes('.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}'))
   error('Bell theme must own structural header-bell presentation');
+if (/TranslationSubBadgeState\.count/.test(bell))
+  error('Bell theme must retain the last subscribed count instead of reading a state getter');
 
 const source = read('translationsub-source.js');
 if (!source.includes('hover:long.translationsubSource')) error('Subscriptions page long-press menu is missing');
@@ -286,6 +304,10 @@ if (!source.includes('item.display') || !source.includes('display.noticeRange'))
   error('Subscriptions actions must render backend display projection');
 if (!/badge\.applyCommand\(result\)/.test(source) || /result\.snapshot|badge\.applySnapshot/.test(source))
   error('Subscriptions actions must delegate command snapshot transport to BadgeState');
+if (/\bget\s*:\s*selectedSource|\bactions\s*:\s*showActions/.test(source))
+  error('CardSource must not expose internal source/action helpers');
+if (!/window\.TranslationSubCardSource\s*=\s*\{\s*open\s*:\s*openCard,\s*bindPage\s*:\s*bindPage\s*\}/m.test(source))
+  error('CardSource public surface must expose only open/bindPage');
 
 const cardFlow = read('translationsub-card-flow.js');
 if (!cardFlow.includes('deliberately only a Lampa transport adapter')) error('Card flow thin-client boundary comment is missing');
@@ -306,6 +328,12 @@ if (!cardFlow.includes('window.TranslationSubUi.refresh()'))
   error('Card flow must apply unified presentation after async button render');
 if (!/badge\.applyCommand\(result\)/.test(cardFlow) || /result\.snapshot|badge\.applySnapshot/.test(cardFlow))
   error('Card flow must delegate command snapshot transport to BadgeState');
+if (/TranslationSub\.openForItem|TranslationSub\.cardFlow|function\s+expose\s*\(|open\s*:\s*openForItem/.test(cardFlow))
+  error('Card flow must not mutate the core facade or expose its internal open action');
+if (/attempts\s*>\s*40|},\s*100\s*\)/.test(cardFlow))
+  error('Card flow must not poll for the core facade during startup');
+if (!/window\.TranslationSubCardFlow\s*=\s*\{\s*refreshButton\s*:\s*function\s*\(\)/m.test(cardFlow))
+  error('Card flow public surface must expose only refreshButton');
 
 console.log(`TranslationSub JS files checked: ${loaded.length}`);
 console.log(`Global MutationObserver count: ${observerCount}`);

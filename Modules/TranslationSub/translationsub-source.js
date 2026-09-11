@@ -189,10 +189,8 @@
 
     function start() {
         window.TranslationSubCardSource = {
-            get: selectedSource,
             open: openCard,
-            bindPage: bindPage,
-            actions: showActions
+            bindPage: bindPage
         };
     }
 

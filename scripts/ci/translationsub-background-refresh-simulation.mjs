@@ -112,11 +112,20 @@ sandbox.window.Lampa = sandbox.Lampa;
 
 vm.runInNewContext(badgeSource, sandbox, { filename: 'translationsub-badge-state.js' });
 assert.deepEqual(network, ['snapshot'], 'startup must perform exactly one snapshot read');
+assert.equal(
+  Object.keys(sandbox.TranslationSubBadgeState).sort().join(','),
+  'applyCommand,open,refresh,render,subscribe',
+  'BadgeState public surface must stay minimal'
+);
 
 const observedCounts = [];
 const unsubscribe = sandbox.TranslationSubBadgeState.subscribe((value) => observedCounts.push(value.count));
 assert.deepEqual(observedCounts, [0], 'state subscription must publish the current snapshot immediately');
-sandbox.TranslationSubBadgeState.applySnapshot({ badge: { count: 3 }, subscriptions: [], updates: [{ id: 'x' }] });
+const applied = sandbox.TranslationSubBadgeState.applyCommand({
+  success: true,
+  snapshot: { badge: { count: 3 }, subscriptions: [], updates: [{ id: 'x' }] }
+});
+assert.equal(applied && applied.count, 3, 'command application must return the canonical state view');
 assert.deepEqual(observedCounts, [0, 3], 'state subscription must publish authoritative snapshot changes');
 unsubscribe();
 
@@ -138,6 +147,9 @@ assert.deepEqual(network, ['snapshot', 'snapshot', 'snapshot'],
 assert.equal(pendingSnapshots.length, 1, 'exactly one snapshot request must remain in flight');
 pendingSnapshots.shift()({ badge: { count: 1 }, subscriptions: [], updates: [{ id: 'new' }] });
 assert.equal(coalescedCallbacks, 2, 'all coalesced refresh consumers must be completed');
-assert.equal(sandbox.TranslationSubBadgeState.count(), 1, 'coalesced snapshot must update canonical state');
+let finalCount = -1;
+const stop = sandbox.TranslationSubBadgeState.subscribe((value) => { finalCount = value.count; });
+stop();
+assert.equal(finalCount, 1, 'coalesced snapshot must update canonical state');
 
 console.log('TranslationSub refresh ownership: one startup read, coalesced state, no client polling.');

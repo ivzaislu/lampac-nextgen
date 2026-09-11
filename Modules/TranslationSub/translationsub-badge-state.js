@@ -127,14 +127,13 @@
         state.requestSeq++;
         var updates = commitSnapshot(snapshot);
         if (state.loading) finishRefresh(updates);
-        return updates;
     }
 
     function applyCommand(result) {
         if (!result || result.success !== true || !result.snapshot || typeof result.snapshot !== 'object')
-            return false;
+            return null;
         applySnapshot(result.snapshot);
-        return true;
+        return view();
     }
 
     function refresh(done) {
@@ -206,14 +205,10 @@
 
         window.TranslationSubBadgeState = {
             refresh: refresh,
-            applySnapshot: applySnapshot,
             applyCommand: applyCommand,
             subscribe: subscribe,
             render: render,
-            open: openDrawerSynced,
-            count: function () { return state.count; },
-            updates: function () { return state.updates.slice(); },
-            snapshot: function () { return state.snapshot; }
+            open: openDrawerSynced
         };
     }
 

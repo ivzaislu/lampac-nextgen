@@ -182,12 +182,13 @@
 
                 notify('Проверяю новые серии…');
                 api.check(function (result) {
-                    if (!badge.applyCommand(result)) {
+                    var applied = badge.applyCommand(result);
+                    if (!applied) {
                         notify('Не удалось проверить новые серии');
                         return;
                     }
 
-                    var count = typeof badge.count === 'function' ? Number(badge.count() || 0) || 0 : 0;
+                    var count = Number(applied.count || 0) || 0;
                     notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
                 }, function () {
                     notify('Не удалось проверить новые серии');
@@ -278,7 +279,9 @@
                 return;
             }
 
-            if (hasSnapshot || (typeof badge.snapshot === 'function' && badge.snapshot())) return;
+            // subscribe() emits the current view synchronously, so hasSnapshot is
+            // already authoritative here and no public snapshot getter is needed.
+            if (hasSnapshot) return;
 
             try { self.activity.loader(true); } catch (e) {}
             badge.refresh(function () {
