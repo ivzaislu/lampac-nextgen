@@ -59,6 +59,16 @@
             '.translationsub-progress-v2>i{display:block;height:100%;border-radius:inherit;background:#67c997}' +
             '.translationsub-meta-v2__next{font-size:.94em;font-weight:600;color:#ffb07f}' +
             '.translationsub-meta-v2__ok{font-size:.94em;opacity:.55}' +
+            '.translationsub-tmdb-v2{margin-top:.12em;padding-top:.5em;border-top:1px solid rgba(255,255,255,.07);font-size:.91em;line-height:1.35}' +
+            '.translationsub-card.focus .translationsub-tmdb-v2{border-top-color:rgba(0,0,0,.09)}' +
+            '.translationsub-tmdb-v2__facts{display:flex;gap:.4em;align-items:center;flex-wrap:wrap;opacity:.62}' +
+            '.translationsub-tmdb-v2__sep{opacity:.45}' +
+            '.translationsub-tmdb-v2__state{margin-top:.25em;font-weight:550;opacity:.72}' +
+            '.translationsub-tmdb-v2__state--active,.translationsub-tmdb-v2__state--new-season{color:#ffad7d;opacity:1}' +
+            '.translationsub-tmdb-v2__state--ok{color:#75cfa0;opacity:.88}' +
+            '.translationsub-tmdb-v2__state--warn{color:#e7c56c;opacity:.9}' +
+            '.translationsub-card.focus .translationsub-tmdb-v2__state--active,.translationsub-card.focus .translationsub-tmdb-v2__state--new-season{color:#b65125}' +
+            '.translationsub-card.focus .translationsub-tmdb-v2__state--ok{color:#26794d}' +
             '.translationsub-card__new{position:absolute;right:.72em!important;top:.72em!important;padding:.36em .58em!important;border-radius:.58em!important;background:#f36f3d!important;color:#fff;font-size:.68em!important;font-weight:700}' +
             '.translationsub-empty{grid-column:1/-1;padding:4em 1.5em!important;border-radius:1em;background:rgba(255,255,255,.045);font-size:1.05em;line-height:1.55}' +
             '.translationsub-layout--tv{max-width:none!important;width:100%!important;padding:1.15em 1.4em 3em!important}' +
@@ -75,7 +85,8 @@
             '.translationsub-layout--mobile .translationsub-card{min-height:8.6em!important}' +
             '.translationsub-layout--mobile .translationsub-card__poster{width:5.8em!important;min-width:5.8em!important}' +
             '.translationsub-layout--mobile .translationsub-card__title{font-size:1.05em!important}' +
-            '.translationsub-layout--mobile .translationsub-card__body{padding:.82em!important}';
+            '.translationsub-layout--mobile .translationsub-card__body{padding:.82em!important}' +
+            '@media(max-width:700px){.translationsub-tmdb-v2{font-size:.84em}}';
         (document.head || document.documentElement).appendChild(style);
     }
 
