@@ -101,6 +101,7 @@
             item = $('<div class="notice notice--card selector"><div class="notice__body"><div class="notice__head"><div class="notice__title"></div></div><div class="notice__descr"></div></div></div>');
         }
 
+        item.removeClass('selector focus hover');
         item.addClass('image--icon image--loaded translationsub-notice__empty');
         item.find('.notice__time').remove();
         item.find('.notice__title').text('Новых серий пока нет');
@@ -117,7 +118,7 @@
         if (updates.length) updates.forEach(function (item, index) { html.append(noticeCard(item, index)); });
         else html.append(emptyCard());
 
-        var first = html.find('.selector').first()[0];
+        var first = updates.length ? html.find('.selector').first()[0] : null;
         try {
             Lampa.Modal.open({
                 title: 'Уведомления озвучек',
