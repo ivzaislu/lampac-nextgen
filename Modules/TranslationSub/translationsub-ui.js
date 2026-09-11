@@ -61,7 +61,6 @@
         var style = document.createElement('style');
         style.id = 'translationsub-ui-v2-style';
         style.textContent = [
-            /* Page: follow Lampa spacing and transparent surfaces. */
             '.translationsub-page{width:100%;padding:1.5em 1.5em 5em;box-sizing:border-box}',
             '.translationsub-page__top{display:flex;align-items:center;gap:1em;flex-wrap:wrap;margin:0 0 1.5em}',
             '.translationsub-page__top .translationsub-toolbar,.translationsub-page__top .translationsub-summary-v2{margin:0}',
@@ -73,8 +72,6 @@
             '.translationsub-toolbar{display:flex;gap:.75em;flex-wrap:wrap}',
             '.translationsub-toolbar__item{min-height:2.8em;box-sizing:border-box;padding:.55em 1em;border-radius:1em;background:rgba(0,0,0,.3);font-size:1em;display:flex;align-items:center;transition:background-color .2s,color .2s}',
             '.translationsub-toolbar__item.focus{background:#fff;color:#000}',
-
-            /* Block layout is the legacy-TV fallback; Grid enhances it where supported. */
             '.translationsub-list,.translationsub-layout--tv .translationsub-list,.translationsub-layout--desktop .translationsub-list{display:block}',
             '.translationsub-card{display:flex;align-items:stretch;height:11.25em;min-height:11.25em;margin:0 0 1.15em;border-radius:1em;background:rgba(0,0,0,.3);overflow:hidden;position:relative;transition:box-shadow .2s,background-color .2s;transform:translateZ(0)}',
             '.translationsub-card.focus{box-shadow:0 0 0 .3em #fff;z-index:3}',
@@ -108,17 +105,11 @@
             '.translationsub-card__new{position:absolute;right:.7em;top:.7em;padding:.35em .7em;border-radius:5em;background:#d9822b;color:#241508;border:1px solid rgba(255,205,145,.28);font-size:.7em;font-weight:600}',
             '.translationsub-empty{padding:3em 1.5em;border-radius:.3em;background:rgba(0,0,0,.3);font-size:1.1em;line-height:1.5;font-weight:300}',
             '@supports(display:grid){.translationsub-list,.translationsub-layout--tv .translationsub-list,.translationsub-layout--desktop .translationsub-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.15em 1.25em;align-items:stretch}.translationsub-card{margin:0}.translationsub-empty{grid-column:1/-1}}',
-
-            /* Lampa size mode. */
             'body.size--bigger .translationsub-card{font-size:1.14em}',
-
-            /* TV keeps the same focus language instead of a separate white-card state. */
             '.translationsub-layout--tv{width:100%;padding:1.5em 1.5em 5em}',
             '.translationsub-layout--tv .translationsub-card{height:11.025em;min-height:11.025em}',
             '.translationsub-layout--tv .translationsub-card__poster{width:7.35em;min-width:7.35em;flex-basis:7.35em}',
             '.translationsub-layout--tv .translationsub-card__body{padding:.75em 1.1em}',
-
-            /* Mobile follows Lampa compact spacing and one-column flow. */
             '.translationsub-layout--mobile{width:100%;padding:1em 1em calc(8em + env(safe-area-inset-bottom,0px))}',
             '.translationsub-layout--mobile .translationsub-page__top{display:grid;grid-template-columns:1fr;gap:.75em;margin-bottom:1em}',
             '.translationsub-layout--mobile .translationsub-toolbar{width:100%}',
@@ -141,23 +132,15 @@
             '.translationsub-full-button--mobile>span,.translationsub-full-button--mobile .translationsub-full-button__progress{display:none!important}',
             '.translationsub-full-button--mobile{touch-action:manipulation;-webkit-tap-highlight-color:transparent}',
             '@media(max-width:390px){.translationsub-layout--mobile .translationsub-card{height:8.4em;min-height:8.4em}.translationsub-layout--mobile .translationsub-card__poster{width:5.6em;min-width:5.6em;flex-basis:5.6em}.translationsub-layout--mobile .translationsub-card__body{padding:.5em .7em}.translationsub-layout--mobile .translationsub-meta-v2__row{flex-wrap:wrap}.translationsub-layout--mobile .translationsub-card__title{font-size:1em}}',
-
-            /* Native Lampa light layout uses squarer media and controls. */
             'body.light--version .translationsub-card{border-radius:0}',
             'body.light--version .translationsub-card.focus,body.light--version .translationsub-card.hover{border-radius:.4em}',
             'body.light--version .translationsub-toolbar__item{border-radius:.2em}',
             'body.light--version .translationsub-card__voice,body.light--version .translationsub-meta-v2__pill,body.light--version .translationsub-empty{border-radius:.3em}',
-
-            /* Native glass treatment for custom TranslationSub surfaces. */
             'body.glass--style .translationsub-card,body.glass--style .translationsub-toolbar__item,body.glass--style .translationsub-summary-v2__item,body.glass--style .translationsub-empty{background-color:rgba(70,70,70,.3)}',
             'body.glass--style.platform--browser .translationsub-card,body.glass--style.platform--nw .translationsub-card,body.glass--style.platform--apple .translationsub-card,body.glass--style.platform--apple_tv .translationsub-card{backdrop-filter:blur(1em)}',
-
-            /* Orange marks new episodes; progress keeps a quieter amber tone. */
             '.translationsub-state-badge{position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;border-radius:1em;background:#d9822b;color:#241508;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
             '.translationsub-state-menu-badge{margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;background:#d9822b;color:#241508;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
             '.translationsub-menu-item.focus .translationsub-state-menu-badge{background:#000;color:#fff}',
-
-            /* Data-URI backgrounds are the legacy fallback; mask keeps currentColor where supported. */
             '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}',
             '.translationsub-full-button:before{display:none!important}',
             '.translationsub-full-button>.translationsub-full-button__bell{display:block;width:1.5em;height:1.5em;flex:0 0 1.5em;background:' + outline + ' center/contain no-repeat;fill:none;stroke:none}',
@@ -166,9 +149,10 @@
             '.translationsub-head.translationsub-head--has-updates>svg{background-image:' + filled + '}',
             '.translationsub-menu-item .menu__ico svg{display:block;width:100%;height:100%;background:' + outline + ' center/contain no-repeat;fill:none;stroke:none}',
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{width:2em;height:2em;transform:scale(1.35);transform-origin:50% 50%;overflow:visible;background:' + outline + ' center/contain no-repeat;fill:none;stroke:none}',
-
-            /* Notice cards inherit Lampa spacing but keep TranslationSub poster/status semantics. */
             '.translationsub-notice{padding:0}',
+            '.translationsub-notice__item{border:1px solid rgba(255,255,255,.14);border-radius:.8em;box-sizing:border-box;overflow:hidden;margin-bottom:.85em}',
+            '.translationsub-notice__item:last-child{margin-bottom:0}',
+            '.translationsub-notice__item.focus{border-color:rgba(255,255,255,.48)}',
             '.translationsub-notice .notice__img{background:#242424}',
             '.translationsub-notice .notice__img img{width:100%;height:100%;object-fit:contain;background:#242424}',
             '.translationsub-notice .notice__time{padding:.25em .65em;border-radius:1em;background:#d9822b;color:#241508;border:1px solid rgba(255,205,145,.28);font-weight:600;opacity:1}',
@@ -176,11 +160,7 @@
             '.translationsub-notice__empty .notice__img{position:relative}',
             '.translationsub-notice__empty .notice__img>*{display:none}',
             '.translationsub-notice__empty .notice__img:before{content:"";display:block;width:3.5em;height:3.5em;margin:auto;background:' + outline + ' center/contain no-repeat}',
-
-            /* Mask enhancement is isolated so engines without mask keep visible fallback icons. */
             '@supports ((-webkit-mask-image:url("")) or (mask-image:url(""))){.translationsub-full-button>.translationsub-full-button__bell{background:currentColor;-webkit-mask:' + outline + ' center/contain no-repeat;mask:' + outline + ' center/contain no-repeat}.translationsub-full-button--subscribed>.translationsub-full-button__bell{-webkit-mask:' + filled + ' center/contain no-repeat;mask:' + filled + ' center/contain no-repeat}.translationsub-head>svg{background:currentColor;-webkit-mask:' + outline + ' center/contain no-repeat;mask:' + outline + ' center/contain no-repeat}.translationsub-head.translationsub-head--has-updates>svg{-webkit-mask:' + filled + ' center/contain no-repeat;mask:' + filled + ' center/contain no-repeat}.translationsub-menu-item .menu__ico svg{background:currentColor;-webkit-mask:' + outline + ' center/contain no-repeat;mask:' + outline + ' center/contain no-repeat}.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{background:currentColor;-webkit-mask:' + outline + ' center/contain no-repeat;mask:' + outline + ' center/contain no-repeat}.translationsub-notice__empty .notice__img:before{background:currentColor;-webkit-mask:' + outline + ' center/contain no-repeat;mask:' + outline + ' center/contain no-repeat}}',
-
-            /* Full-card button relies on native .full-start__button dimensions/focus. */
             '.translationsub-full-button{position:relative}',
             '.translationsub-full-button[data-translationsub-card-flow="1"] span{white-space:nowrap}'
         ].join('');
