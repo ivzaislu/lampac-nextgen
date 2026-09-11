@@ -20,8 +20,12 @@ const apiClient = read('Modules/TranslationSub/translationsub-api.js');
 const settingsStore = read('Modules/TranslationSub/Services/TranslationSettingsStore.cs');
 const realtimeService = read('Modules/TranslationSub/Services/TranslationSubRealtimeService.cs');
 const subscriptionStore = read('Modules/TranslationSub/Services/SubscriptionStore.cs');
+const subscriptionModel = read('Modules/TranslationSub/Models/TranslationSubscription.cs');
+const profileProgressModel = read('Modules/TranslationSub/Models/SubscriptionProfileProgress.cs');
 const profileProgressStore = read('Modules/TranslationSub/Services/ProfileProgressStore.cs');
 const progressService = read('Modules/TranslationSub/Services/TimeCodeProgressService.cs');
+const projectionService = read('Modules/TranslationSub/Services/TranslationSubProjectionService.cs');
+const subscriptionService = read('Modules/TranslationSub/Services/TranslationSubscriptionService.cs');
 const snapshotService = read('Modules/TranslationSub/Services/TranslationSubSnapshotService.cs');
 const contentStateService = read('Modules/TranslationSub/Services/TranslationSubContentStateService.cs');
 const commandService = read('Modules/TranslationSub/Services/TranslationSubCommandService.cs');
@@ -57,26 +61,39 @@ assert.match(modInit, /PublishProfile\(uid, profileId, "timecode"\)/);
 assert.match(v2Controller, /Route\("translationsub\/v2\/snapshot"\)[\s\S]*?TimeCodeProgressService\.SyncUser\(uid, profileId\)/);
 assert.doesNotMatch(pluginController, /translationsub-watch\.js/);
 
-// Profile-local state is isolated from shared subscription metadata.
+// Profile-local state is physically separated from shared subscription metadata.
+assert.match(profileProgressModel, /class SubscriptionProfileProgress/);
+assert.match(profileProgressModel, /class TranslationSubProfileProjection/);
+assert.match(profileProgressModel, /WatchedEpisode/);
+assert.doesNotMatch(subscriptionModel, /\bCurrentEpisode\b/);
+assert.doesNotMatch(subscriptionModel, /\bNotified\b/);
 assert.match(profileProgressStore, /ProfileId/);
 assert.match(profileProgressStore, /SubscriptionId/);
 assert.match(profileProgressStore, /WatchedEpisode/);
 assert.match(progressService, /ProfileProgressStore\.Upsert\(uid, profileId, watchedBySubscription\)/);
-assert.doesNotMatch(progressService, /sub\.CurrentEpisode\s*=/);
-assert.doesNotMatch(progressService, /sub\.Notified\s*=/);
+assert.doesNotMatch(progressService, /CurrentEpisode|Notified/);
+assert.match(projectionService, /List<TranslationSubProfileProjection>/);
+assert.match(projectionService, /WatchedEpisode\s*=/);
+assert.doesNotMatch(projectionService, /CurrentEpisode|Notified/);
+assert.doesNotMatch(commandService, /CurrentEpisode|Notified/);
+assert.doesNotMatch(subscriptionService, /CurrentEpisode|Notified/);
 assert.match(subscriptionStore, /PublishUid\(uid, "subscription"\)/);
-assert.doesNotMatch(subscriptionStore, /x\.CurrentEpisode/);
-assert.doesNotMatch(subscriptionStore, /x\.Notified/);
+assert.doesNotMatch(subscriptionStore, /CurrentEpisode|Notified/);
 
-// Canonical read model owns all derived state and navigation targets.
+// Canonical read model owns all derived profile state and navigation targets.
 for (const symbol of ['HasNewEpisodes', 'NewCount', 'ProgressPercent', 'BuildSchedule', 'BuildNavigation'])
   assert.match(snapshotService, new RegExp(symbol));
 assert.match(snapshotService, /Badge = new TranslationSubBadgeSnapshot/);
+assert.match(snapshotService, /TranslationSubProfileProjection projection/);
+assert.match(snapshotService, /projection\.WatchedEpisode/);
 assert.match(snapshotService, /Navigation = BuildNavigation\(sub\)/);
+assert.doesNotMatch(snapshotService, /sub\.CurrentEpisode|sub\.Notified/);
 
 // Identity, source selection, voice matching and mutations are backend-owned.
 assert.match(contentStateService, /ContentIdentityService\.ResolveAsync/);
 assert.match(contentStateService, /LampacMetadataService\.GetVariants/);
+assert.match(contentStateService, /SubscriptionStore\.Load\(\)/);
+assert.doesNotMatch(contentStateService, /TranslationSubProjectionService\.ForProfile/);
 assert.match(contentStateService, /FindExisting/);
 assert.match(commandService, /ContentIdentityService\.ResolveAsync/);
 assert.match(commandService, /LampacMetadataService\.GetVariants/);
