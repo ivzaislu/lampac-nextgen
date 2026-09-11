@@ -32,10 +32,10 @@ for (const name of loaded) {
 for (const name of jsFiles) {
   if (!loadedSet.has(name)) error(`Orphan TranslationSub JS file is not loaded: ${name}`);
 }
-if (jsFiles.includes('translationsub-watch.js')) error('Obsolete client progress watcher returned');
-if (jsFiles.includes('translationsub-tmdb-ui.js')) error('Obsolete TMDB decorator returned');
-if (controller.includes('translationsub-watch.js')) error('PluginController still ships obsolete progress watcher');
-if (controller.includes('translationsub-tmdb-ui.js')) error('PluginController still ships obsolete TMDB decorator');
+for (const obsoleteFile of ['translationsub-watch.js', 'translationsub-tmdb-ui.js', 'translationsub-polish.js']) {
+  if (jsFiles.includes(obsoleteFile)) error(`Obsolete frontend patch returned: ${obsoleteFile}`);
+  if (controller.includes(obsoleteFile)) error(`PluginController ships obsolete frontend patch: ${obsoleteFile}`);
+}
 
 const guards = new Map();
 let observerCount = 0;
@@ -105,6 +105,9 @@ if (!page.includes('result.snapshot')) error('Subscriptions page must consume ma
 if (!page.includes('item.display')) error('Subscriptions page must render backend display projection');
 if (!page.includes('display.tmdbFacts') || !page.includes('display.tmdbNext'))
   error('Subscriptions page must render backend TMDB display projection directly');
+if (!page.includes('translationsub-page__top')) error('Subscriptions page must build its final top layout directly');
+if (/translationsub-page__title|translationsub-page__subtitle/.test(page))
+  error('Subscriptions page must not render headings that require a later polish patch');
 if (/api\.check\([\s\S]{0,900}?\bload\s*\(/.test(page))
   error('Subscriptions page refetches immediately after v2/check');
 for (const domainField of ['item.watchedEpisode', 'item.availableEpisode', 'item.fromEpisode', 'item.toEpisode']) {
