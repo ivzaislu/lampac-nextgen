@@ -83,14 +83,6 @@
         return body + '</div>';
     }
 
-    function applySnapshot(snapshot) {
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.applySnapshot === 'function')
-                window.TranslationSubBadgeState.applySnapshot(snapshot);
-        } catch (e) {}
-        return snapshot;
-    }
-
     function SubscriptionPage() {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="translationsub-page"></div>');
@@ -182,20 +174,20 @@
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
             check.on('hover:enter', function () {
                 var api = window.TranslationSubApi;
-                if (!api || typeof api.check !== 'function') {
+                var badge = window.TranslationSubBadgeState;
+                if (!api || typeof api.check !== 'function' || !badge || typeof badge.applyCommand !== 'function') {
                     notify('TranslationSub API недоступен');
                     return;
                 }
 
                 notify('Проверяю новые серии…');
                 api.check(function (result) {
-                    if (!result || result.success !== true || !result.snapshot) {
+                    if (!badge.applyCommand(result)) {
                         notify('Не удалось проверить новые серии');
                         return;
                     }
 
-                    var next = applySnapshot(result.snapshot);
-                    var count = next && next.badge ? Number(next.badge.count || 0) || 0 : 0;
+                    var count = typeof badge.count === 'function' ? Number(badge.count() || 0) || 0 : 0;
                     notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
                 }, function () {
                     notify('Не удалось проверить новые серии');
