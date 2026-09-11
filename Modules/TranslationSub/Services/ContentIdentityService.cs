@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Http;
 using Newtonsoft.Json.Linq;
 using Shared;
 using Shared.Models.Base;
 using Shared.Services;
+using Shared.Services.Utilities;
 using System;
 using System.Globalization;
 using System.Linq;
@@ -17,7 +19,10 @@ namespace TranslationSub.Services;
 /// </summary>
 public static class ContentIdentityService
 {
-    public static async Task<TranslationSubResolvedContent> ResolveAsync(JObject payload)
+    public static async Task<TranslationSubResolvedContent> ResolveAsync(
+        JObject payload,
+        string uid = null,
+        HttpContext httpContext = null)
     {
         payload ??= new JObject();
 
@@ -59,29 +64,37 @@ public static class ContentIdentityService
 
         int season = isSerial ? LatestAiredSeason(card, seasonHint) : 0;
 
-        // The pre-backend TranslationSub frontend enriched cards through Lampac's
-        // /externalids endpoint before polling balancers. Preserve that exact
-        // contract on the backend so providers that require kinopoisk_id still work.
-        if (string.IsNullOrWhiteSpace(kpId))
+        // This mirrors the last frontend implementation before the backend move:
+        // GET /externalids?id=<tmdb/content>&serial=1&imdb_id=...&kinopoisk_id=...
+        // plus Lampac identity arguments (uid/account/nws) for the current request.
+        if (isSerial
+            && (string.IsNullOrWhiteSpace(tmdbId)
+                || string.IsNullOrWhiteSpace(kpId)
+                || string.IsNullOrWhiteSpace(imdbId)))
         {
-            string externalSource = cardSource;
-            if (externalSource == "themoviedb")
-                externalSource = "tmdb";
-            if (string.IsNullOrWhiteSpace(externalSource) && !string.IsNullOrWhiteSpace(tmdbId))
-                externalSource = "tmdb";
-
-            string externalId = externalSource == "tmdb" && !string.IsNullOrWhiteSpace(tmdbId)
-                ? tmdbId
-                : cardId;
+            string externalId = FirstNonEmpty(tmdbId, kpId, imdbId, cardId, title);
 
             try
             {
-                var ids = await ResolveExternalIds(externalSource, externalId, isSerial).ConfigureAwait(false);
+                var ids = await ResolveExternalIds(
+                    externalId,
+                    imdbId,
+                    kpId,
+                    uid,
+                    httpContext).ConfigureAwait(false);
+
                 if (ids != null)
                 {
-                    kpId = Value(ids, "kinopoisk_id", "kp_id", "kpId");
-                    if (string.IsNullOrWhiteSpace(imdbId))
-                        imdbId = Value(ids, "imdb_id", "imdbId");
+                    string resolvedKp = Value(ids, "kinopoisk_id", "kp_id", "kpId");
+                    string resolvedImdb = Value(ids, "imdb_id", "imdbId");
+                    string resolvedTmdb = Value(ids, "tmdb_id", "tmdbId");
+
+                    if (!string.IsNullOrWhiteSpace(resolvedKp))
+                        kpId = resolvedKp;
+                    if (!string.IsNullOrWhiteSpace(resolvedImdb))
+                        imdbId = resolvedImdb;
+                    if (!string.IsNullOrWhiteSpace(resolvedTmdb))
+                        tmdbId = resolvedTmdb;
                 }
             }
             catch
@@ -132,14 +145,35 @@ public static class ContentIdentityService
         };
     }
 
-    static async Task<JObject> ResolveExternalIds(string source, string id, bool serial)
+    static async Task<JObject> ResolveExternalIds(
+        string id,
+        string imdbId,
+        string kpId,
+        string uid,
+        HttpContext httpContext)
     {
-        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(id))
+        if (string.IsNullOrWhiteSpace(id))
             return null;
 
         var listen = CoreInit.conf?.listen;
         if (listen == null || listen.port <= 0)
             return null;
+
+        string route = "/externalids";
+        route = LampacMetadataClient.AppendQuery(route, "id", id.Trim());
+        route = LampacMetadataClient.AppendQuery(route, "serial", "1");
+        if (!string.IsNullOrWhiteSpace(imdbId))
+            route = LampacMetadataClient.AppendQuery(route, "imdb_id", imdbId.Trim());
+        if (!string.IsNullOrWhiteSpace(kpId))
+            route = LampacMetadataClient.AppendQuery(route, "kinopoisk_id", kpId.Trim());
+
+        // The old browser request sent uid/account_email/nws_id. For interactive
+        // backend calls use Lampac's native request identity expansion; keep uid
+        // as a fallback for callers without HttpContext.
+        if (httpContext != null)
+            route = AccsDbInvk.Args(route, httpContext);
+        else if (!string.IsNullOrWhiteSpace(uid))
+            route = LampacMetadataClient.AppendQuery(route, "uid", uid.Trim());
 
         string localHost = string.IsNullOrWhiteSpace(listen.localhost)
             ? "127.0.0.1"
@@ -147,17 +181,19 @@ public static class ContentIdentityService
         if (localHost.Contains(':') && !localHost.StartsWith('['))
             localHost = $"[{localHost}]";
 
-        string route = "/externalids?source=" + Uri.EscapeDataString(source.Trim())
-            + "&id=" + Uri.EscapeDataString(id.Trim())
-            + "&serial=" + (serial ? "true" : "false");
         var uri = new Uri(new Uri($"http://{localHost}:{listen.port}/"), route.TrimStart('/'));
 
-        string xhost = !string.IsNullOrWhiteSpace(listen.host)
-            ? listen.host.Trim()
-            : $"http://{localHost}:{listen.port}";
-        string xscheme = string.IsNullOrWhiteSpace(listen.scheme)
-            ? "http"
-            : listen.scheme.Trim();
+        string xhost;
+        if (httpContext != null)
+            xhost = CoreInit.Host(httpContext);
+        else if (!string.IsNullOrWhiteSpace(listen.host))
+            xhost = listen.host.Trim();
+        else
+            xhost = $"http://{localHost}:{listen.port}";
+
+        string xscheme = !string.IsNullOrWhiteSpace(httpContext?.Request?.Scheme)
+            ? httpContext.Request.Scheme
+            : (string.IsNullOrWhiteSpace(listen.scheme) ? "http" : listen.scheme.Trim());
 
         var headers = HeadersModel.Init(
             ("xhost", xhost),
