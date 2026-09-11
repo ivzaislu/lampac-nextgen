@@ -113,8 +113,6 @@
         return 'translationsub_source_' + id.replace(/[^a-z0-9]+/gi, '_') + '_' + Math.abs(hash);
     }
 
-    // Geometry is owned by translationsub-bell-theme.js; settings only supplies
-    // the native-size SVG anchor that the canonical mask is applied to.
     function settingsBellSvg() {
         return '<svg class="translationsub-settings-bell" width="37" height="37" viewBox="0 0 37 37" aria-hidden="true"></svg>';
     }
@@ -228,8 +226,6 @@
                 return;
             }
 
-            // Do not apply an older canonical response over a newer local edit.
-            // The queued body was captured at onChange time and is sent next.
             if (pendingSettingsBody) {
                 flushServerSettings();
                 return;
@@ -372,8 +368,6 @@
             });
         }
 
-        // This preference changes only which Lampa card provider opens from the UI;
-        // it is intentionally local and is not a TranslationSub domain policy.
         Lampa.SettingsApi.addParam({
             component: ROOT,
             param: { name: KEYS.cardSource, type: 'select', values: { tmdb: 'TMDB', cub: 'CUB' }, 'default': 'tmdb' },
@@ -422,15 +416,9 @@
     }
 
     function start() {
-        if (!window.Lampa || !Lampa.SettingsApi || !window.TranslationSubApi) return false;
-        return loadServerSettings();
+        if (!Lampa.SettingsApi || !window.TranslationSubApi) return;
+        loadServerSettings();
     }
 
-    if (!start()) {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (start() || attempts > 80) clearInterval(wait);
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
