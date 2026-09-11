@@ -4,8 +4,6 @@
     if (window.__TranslationSubNoticeStarted) return;
     window.__TranslationSubNoticeStarted = true;
 
-    var lastUpdates = [];
-
     function posterUrl(path) {
         try {
             if (window.TranslationSubUi && typeof window.TranslationSubUi.posterUrl === 'function')
@@ -56,22 +54,6 @@
             '.translationsub-notice__empty{padding:1.1em 0;opacity:.72}' +
             '.translationsub-notice__empty .notice__time{display:none!important}';
         (document.head || document.documentElement).appendChild(style);
-    }
-
-    function loadUpdates(done) {
-        done = typeof done === 'function' ? done : function () {};
-
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
-                window.TranslationSubBadgeState.refresh(function (updates) {
-                    lastUpdates = Array.isArray(updates) ? updates.slice() : [];
-                    done(lastUpdates.slice());
-                });
-                return;
-            }
-        } catch (e) {}
-
-        done(lastUpdates.slice());
     }
 
     function noticeCard(item, index) {
@@ -147,7 +129,6 @@
 
     function renderDrawer(updates) {
         updates = Array.isArray(updates) ? updates : [];
-        lastUpdates = updates.slice();
 
         var html = $('<div class="translationsub-notice"></div>');
         if (updates.length) {
@@ -180,33 +161,30 @@
         });
     }
 
+    function cachedUpdates() {
+        try {
+            var badge = window.TranslationSubBadgeState;
+            if (badge && typeof badge.updates === 'function') {
+                var updates = badge.updates();
+                return Array.isArray(updates) ? updates : [];
+            }
+        } catch (e) {}
+        return [];
+    }
+
     function openDrawer(preloadedUpdates) {
         if (!window.Lampa || !Lampa.Modal || typeof Lampa.Modal.open !== 'function') {
             openSubscriptionsPage();
             return;
         }
 
-        if (Array.isArray(preloadedUpdates)) {
-            renderDrawer(preloadedUpdates);
-            return;
-        }
-
-        loadUpdates(renderDrawer);
-    }
-
-    function refresh(done) {
-        loadUpdates(function (updates) {
-            if (typeof done === 'function') done(updates);
-        });
+        renderDrawer(Array.isArray(preloadedUpdates) ? preloadedUpdates : cachedUpdates());
     }
 
     function start() {
         addStyles();
         window.TranslationSubNotice = {
-            open: openDrawer,
-            refresh: refresh,
-            openPage: openSubscriptionsPage,
-            updates: function () { return lastUpdates.slice(); }
+            open: openDrawer
         };
     }
 
