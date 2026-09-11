@@ -6,6 +6,7 @@
 
     var observer = null;
     var applyTimer = null;
+    var lampaBound = false;
 
     function openNotice() {
         try {
@@ -98,26 +99,6 @@
         item.on('hover:enter.translationsubNavigation', openSubscriptions);
     }
 
-    function apply() {
-        ensureHeadButton();
-        ensureMenuItem();
-
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
-                window.TranslationSubBadgeState.render();
-        } catch (e) {}
-
-        try {
-            if (window.TranslationSubBellTheme && typeof window.TranslationSubBellTheme.refresh === 'function')
-                window.TranslationSubBellTheme.refresh();
-        } catch (e2) {}
-    }
-
-    function scheduleApply(delay) {
-        clearTimeout(applyTimer);
-        applyTimer = setTimeout(apply, typeof delay === 'number' ? delay : 35);
-    }
-
     function relevantNode(node) {
         if (!node || node.nodeType !== 1 || typeof $ !== 'function') return false;
         var element = $(node);
@@ -138,10 +119,6 @@
         if (typeof $ !== 'function') return true;
         for (var i = 0; i < mutations.length; i++) {
             var mutation = mutations[i];
-
-            // Badge text/icon updates happen inside our own head/menu nodes. They
-            // must not schedule another apply(), otherwise our render can feed
-            // the observer that called it.
             if (mutationInsideOwnUi(mutation)) continue;
 
             if ($(mutation.target).closest('.head,.menu').length) return true;
@@ -155,15 +132,79 @@
         return false;
     }
 
-    function start() {
-        apply();
+    function disconnectObserver() {
+        if (!observer) return;
+        try { observer.disconnect(); } catch (e) {}
+    }
 
+    function observeNavigationRoots() {
+        if (!observer || typeof $ !== 'function') return;
+        disconnectObserver();
+
+        var roots = [];
+        $('.head,.menu').each(function () {
+            if (roots.indexOf(this) === -1) roots.push(this);
+        });
+
+        roots.forEach(function (root) {
+            try { observer.observe(root, { childList: true, subtree: true }); } catch (e) {}
+            var parent = root.parentNode;
+            if (parent && roots.indexOf(parent) === -1) {
+                try { observer.observe(parent, { childList: true, subtree: false }); } catch (e2) {}
+            }
+        });
+    }
+
+    function apply() {
+        // Do not let our own insertion/removal work feed back into the observer.
+        disconnectObserver();
+
+        ensureHeadButton();
+        ensureMenuItem();
+
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
+                window.TranslationSubBadgeState.render();
+        } catch (e) {}
+
+        try {
+            if (window.TranslationSubBellTheme && typeof window.TranslationSubBellTheme.refresh === 'function')
+                window.TranslationSubBellTheme.refresh();
+        } catch (e2) {}
+
+        observeNavigationRoots();
+    }
+
+    function scheduleApply(delay) {
+        clearTimeout(applyTimer);
+        applyTimer = setTimeout(apply, typeof delay === 'number' ? delay : 35);
+    }
+
+    function bindLampa() {
+        if (lampaBound) return;
+        try {
+            if (!Lampa.Listener || typeof Lampa.Listener.follow !== 'function') return;
+            Lampa.Listener.follow('full', function (event) {
+                if (event && event.type === 'complite') scheduleApply(0);
+            });
+            Lampa.Listener.follow('app', function (event) {
+                if (event && event.type === 'ready') scheduleApply(0);
+            });
+            lampaBound = true;
+        } catch (e) {}
+    }
+
+    function start() {
         try {
             observer = new MutationObserver(function (mutations) {
                 if (relevantMutations(mutations || [])) scheduleApply(35);
             });
-            observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        } catch (e) {}
+        } catch (e) {
+            observer = null;
+        }
+
+        bindLampa();
+        apply();
     }
 
     window.TranslationSubRuntime.onReady(start);
