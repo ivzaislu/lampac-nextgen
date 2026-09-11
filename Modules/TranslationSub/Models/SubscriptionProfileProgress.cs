@@ -15,3 +15,14 @@ public class SubscriptionProfileProgress
     public int WatchedEpisode { get; set; }
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 }
+
+/// <summary>
+/// Read-only composition of shared subscription metadata and one profile's
+/// watched progress. Profile state never gets written back into the shared
+/// TranslationSubscription object.
+/// </summary>
+public sealed class TranslationSubProfileProjection
+{
+    public TranslationSubscription Subscription { get; init; }
+    public int WatchedEpisode { get; init; }
+}
