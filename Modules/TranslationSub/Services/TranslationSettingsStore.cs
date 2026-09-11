@@ -154,4 +154,73 @@ public static class TranslationSettingsStore
             return Clone(current);
         }
     }
+
+    /// <summary>
+    /// Canonical UI options/defaults for server-owned policy settings. Clients
+    /// render this schema and mirror canonical values, but do not define policy.
+    /// </summary>
+    public static object UiSchema()
+    {
+        var intervalValues = Enumerable.Range(1, 24)
+            .ToDictionary(x => x.ToString(), HourLabel, StringComparer.Ordinal);
+
+        return new
+        {
+            checkIntervalHours = new
+            {
+                defaultValue = 1,
+                values = intervalValues
+            },
+            useTmdbSchedule = new
+            {
+                defaultValue = true
+            },
+            tmdbRefreshHours = new
+            {
+                defaultValue = 24,
+                values = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["6"] = "6 часов",
+                    ["12"] = "12 часов",
+                    ["24"] = "24 часа",
+                    ["48"] = "2 дня",
+                    ["72"] = "3 дня",
+                    ["168"] = "7 дней"
+                }
+            },
+            endedRefreshDays = new
+            {
+                defaultValue = 7,
+                values = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["7"] = "7 дней",
+                    ["14"] = "14 дней",
+                    ["30"] = "30 дней",
+                    ["60"] = "60 дней"
+                }
+            },
+            newSeasonMode = new
+            {
+                defaultValue = "auto",
+                values = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["auto"] = "Автоматически продолжать",
+                    ["notify"] = "Только показать новый сезон",
+                    ["off"] = "Не отслеживать новые сезоны"
+                }
+            }
+        };
+    }
+
+    static string HourLabel(int value)
+    {
+        int mod10 = value % 10;
+        int mod100 = value % 100;
+        string suffix = mod10 == 1 && mod100 != 11
+            ? "час"
+            : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+                ? "часа"
+                : "часов";
+        return value + " " + suffix;
+    }
 }
