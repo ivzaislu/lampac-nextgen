@@ -69,7 +69,7 @@
             '.translationsub-summary-v2__item{display:flex;align-items:center;gap:.5em;padding:.45em .75em;border-radius:1em;background:rgba(0,0,0,.3);font-size:.9em;line-height:1.3}',
             '.translationsub-summary-v2__item b{font-weight:600}',
             '.translationsub-summary-v2__dot{width:.6em;height:.6em;border-radius:100%;background:#fff;opacity:.7}',
-            '.translationsub-summary-v2__item--new .translationsub-summary-v2__dot{background:#c9a15b;opacity:1}',
+            '.translationsub-summary-v2__item--new .translationsub-summary-v2__dot{background:#d9822b;opacity:1}',
             '.translationsub-toolbar{display:flex;gap:.75em;flex-wrap:wrap}',
             '.translationsub-toolbar__item{min-height:2.8em;box-sizing:border-box;padding:.55em 1em;border-radius:1em;background:rgba(0,0,0,.3);font-size:1em;display:flex;align-items:center;transition:background-color .2s,color .2s}',
             '.translationsub-toolbar__item.focus{background:#fff;color:#000}',
@@ -79,7 +79,7 @@
             '.translationsub-card{display:flex;align-items:stretch;min-height:11.2em;margin:0 0 1.15em;border-radius:1em;background:rgba(0,0,0,.3);overflow:hidden;position:relative;transition:box-shadow .2s,background-color .2s;transform:translateZ(0)}',
             '.translationsub-card.focus{box-shadow:0 0 0 .3em #fff;z-index:3}',
             '.translationsub-card.hover{box-shadow:0 0 0 .3em rgba(255,255,255,.5)}',
-            '.translationsub-card__poster{width:7.5em;min-width:7.5em;height:11.25em;flex:0 0 7.5em;align-self:flex-start;position:relative;background:#242424;overflow:hidden;display:flex;align-items:center;justify-content:center}',
+            '.translationsub-card__poster{width:7.5em;min-width:7.5em;height:11.25em;flex:0 0 7.5em;align-self:center;position:relative;background:#242424;overflow:hidden;display:flex;align-items:center;justify-content:center}',
             '.translationsub-card__poster img{width:100%;height:100%;object-fit:contain;display:block;background:#242424}',
             '.translationsub-card__poster-empty{width:100%;height:100%;background:#242424}',
             '.translationsub-card__body{padding:1em 1.1em;min-width:0;display:flex;flex-direction:column;flex:1;justify-content:flex-start}',
@@ -103,7 +103,7 @@
             '.translationsub-tmdb-v2__state--active,.translationsub-tmdb-v2__state--new-season{color:#d8c39a;opacity:1}',
             '.translationsub-tmdb-v2__state--ok{color:#b8b39a;opacity:1}',
             '.translationsub-tmdb-v2__state--warn{color:#d8b56a;opacity:1}',
-            '.translationsub-card__new{position:absolute;right:.7em;top:.7em;padding:.35em .7em;border-radius:5em;background:rgba(201,161,91,.2);color:#efd39d;border:1px solid rgba(239,211,157,.38);font-size:.7em;font-weight:600}',
+            '.translationsub-card__new{position:absolute;right:.7em;top:.7em;padding:.35em .7em;border-radius:5em;background:#d9822b;color:#241508;border:1px solid rgba(255,205,145,.28);font-size:.7em;font-weight:600}',
             '.translationsub-empty{padding:3em 1.5em;border-radius:.3em;background:rgba(0,0,0,.3);font-size:1.1em;line-height:1.5;font-weight:300}',
             '@supports(display:grid){.translationsub-list,.translationsub-layout--tv .translationsub-list,.translationsub-layout--desktop .translationsub-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.15em 1.25em;align-items:stretch}.translationsub-card{margin:0}.translationsub-empty{grid-column:1/-1}}',
 
@@ -148,9 +148,9 @@
             'body.glass--style .translationsub-card,body.glass--style .translationsub-toolbar__item,body.glass--style .translationsub-summary-v2__item,body.glass--style .translationsub-empty{background-color:rgba(70,70,70,.3)}',
             'body.glass--style.platform--browser .translationsub-card,body.glass--style.platform--nw .translationsub-card,body.glass--style.platform--apple .translationsub-card,body.glass--style.platform--apple_tv .translationsub-card{backdrop-filter:blur(1em)}',
 
-            /* Muted amber marks new episodes without the previous neon green. */
-            '.translationsub-state-badge{position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;border-radius:1em;background:#c9a15b;color:#2d2416;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
-            '.translationsub-state-menu-badge{margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;background:#c9a15b;color:#2d2416;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
+            /* Orange marks new episodes; progress keeps a quieter amber tone. */
+            '.translationsub-state-badge{position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;border-radius:1em;background:#d9822b;color:#241508;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
+            '.translationsub-state-menu-badge{margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;background:#d9822b;color:#241508;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
             '.translationsub-menu-item.focus .translationsub-state-menu-badge{background:#000;color:#fff}',
 
             /* Data-URI backgrounds are the legacy fallback; mask keeps currentColor where supported. */
@@ -167,7 +167,7 @@
             '.translationsub-notice{padding:0}',
             '.translationsub-notice .notice__img{background:#242424}',
             '.translationsub-notice .notice__img img{width:100%;height:100%;object-fit:contain;background:#242424}',
-            '.translationsub-notice .notice__time{padding:.25em .65em;border-radius:1em;background:rgba(201,161,91,.22);color:#f0d6a4;border:1px solid rgba(240,214,164,.34);font-weight:500;opacity:1}',
+            '.translationsub-notice .notice__time{padding:.25em .65em;border-radius:1em;background:#d9822b;color:#241508;border:1px solid rgba(255,205,145,.28);font-weight:600;opacity:1}',
             '.translationsub-notice__empty{opacity:.72}',
             '.translationsub-notice__empty .notice__img{position:relative}',
             '.translationsub-notice__empty .notice__img>*{display:none}',
