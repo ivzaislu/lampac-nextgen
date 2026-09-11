@@ -2,9 +2,6 @@
     'use strict';
 
     if (window.__TranslationSubPageStarted) return;
-    window.__TranslationSubPageStarted = true;
-
-    if (!window.Lampa || !Lampa.Component || typeof Lampa.Component.add !== 'function') return;
 
     function escapeHtml(value) {
         try {
@@ -15,7 +12,7 @@
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
+            .replace(/\"/g, '&quot;')
             .replace(/'/g, '&#039;');
     }
 
@@ -91,6 +88,17 @@
         var destroyed = false;
         var unsubscribeState = null;
         var hasSnapshot = false;
+        var latestSnapshot = null;
+
+        function pageActive() {
+            if (destroyed) return false;
+            try {
+                var active = Lampa.Activity.active();
+                return !!active && active.activity === self.activity;
+            } catch (e) {
+                return false;
+            }
+        }
 
         this.create = function () {
             scroll.minus();
@@ -104,11 +112,12 @@
         this.back = function () { Lampa.Activity.backward(); };
 
         this.start = function () {
-            if (Lampa.Activity.active().activity !== this.activity) return;
+            if (!pageActive()) return;
 
             Lampa.Controller.add('content', {
                 toggle: function () {
-                    Lampa.Controller.collectionSet(scroll.render(), html);
+                    if (!pageActive()) return;
+                    Lampa.Controller.collectionSet(scroll.render());
                     var focused = html.find('.selector.focus')[0] || html.find('.selector')[0];
                     if (focused) Lampa.Controller.collectionFocus(focused, scroll.render());
                 },
@@ -130,6 +139,8 @@
             if (!initialized) {
                 initialized = true;
                 this.initialize();
+            } else if (latestSnapshot) {
+                render(latestSnapshot);
             }
         };
 
@@ -139,18 +150,23 @@
                 try { unsubscribeState(); } catch (e) {}
             }
             unsubscribeState = null;
+            latestSnapshot = null;
             try { scroll.destroy(); } catch (e2) {}
             html.remove();
         };
 
         function focusAfterRender(subscriptionId) {
             setTimeout(function () {
-                if (destroyed) return;
+                if (!pageActive()) return;
                 try {
-                    Lampa.Controller.collectionSet(scroll.render(), html);
-                    var target = subscriptionId
-                        ? html.find('.translationsub-card[data-subscription-id="' + subscriptionId + '"]')[0]
-                        : null;
+                    Lampa.Controller.collectionSet(scroll.render());
+                    var target = null;
+                    if (subscriptionId) {
+                        html.find('.translationsub-card').each(function () {
+                            if (!target && String($(this).attr('data-subscription-id') || '') === String(subscriptionId))
+                                target = this;
+                        });
+                    }
                     if (!target) target = html.find('.selector')[0];
                     if (target) Lampa.Controller.collectionFocus(target, scroll.render());
                 } catch (e) {}
@@ -158,7 +174,7 @@
         }
 
         function render(snapshot) {
-            if (destroyed) return;
+            if (!pageActive()) return;
             snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
             var list = Array.isArray(snapshot.subscriptions) ? snapshot.subscriptions : [];
             var updateCount = snapshot.badge ? Number(snapshot.badge.count || 0) || 0 : 0;
@@ -245,6 +261,7 @@
                     window.TranslationSubUi.refresh();
             } catch (e2) {}
 
+            if (!pageActive()) return;
             Lampa.Controller.enable('content');
             focusAfterRender(focusedId);
         }
@@ -253,7 +270,9 @@
             if (destroyed || !snapshot || typeof snapshot !== 'object') return;
             var first = !hasSnapshot;
             hasSnapshot = true;
+            latestSnapshot = snapshot;
             try { self.activity.loader(false); } catch (e) {}
+            if (!pageActive()) return;
             render(snapshot);
             if (first) {
                 try { self.activity.toggle(); } catch (e2) {}
@@ -273,8 +292,11 @@
         this.initialize = function () {
             var badge = window.TranslationSubBadgeState;
             if (!bindState() || !badge || typeof badge.refresh !== 'function') {
-                render({ subscriptions: [], badge: { count: 0 } });
-                notify('TranslationSub state недоступен');
+                if (pageActive()) {
+                    render({ subscriptions: [], badge: { count: 0 } });
+                    try { self.activity.toggle(); } catch (e) {}
+                    notify('TranslationSub state недоступен');
+                }
                 return;
             }
 
@@ -284,13 +306,29 @@
 
             try { self.activity.loader(true); } catch (e) {}
             badge.refresh(function () {
-                if (destroyed || hasSnapshot) return;
+                if (destroyed || hasSnapshot || !pageActive()) return;
                 try { self.activity.loader(false); } catch (e) {}
                 render({ subscriptions: [], badge: { count: 0 } });
+                try { self.activity.toggle(); } catch (e2) {}
                 notify('Не удалось загрузить подписки');
             });
         };
     }
 
-    Lampa.Component.add('translationsub_list', SubscriptionPage);
+    function register() {
+        if (window.__TranslationSubPageStarted) return true;
+        if (!window.Lampa || !Lampa.Component || typeof Lampa.Component.add !== 'function') return false;
+
+        Lampa.Component.add('translationsub_list', SubscriptionPage);
+        window.__TranslationSubPageStarted = true;
+        return true;
+    }
+
+    if (!register()) {
+        var attempts = 0;
+        var wait = setInterval(function () {
+            attempts++;
+            if (register() || attempts > 80) clearInterval(wait);
+        }, 250);
+    }
 })();
