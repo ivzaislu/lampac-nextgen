@@ -92,37 +92,32 @@
         catch (e) { return false; }
     }
 
-    function restoreContentController() {
-        setTimeout(function () {
-            try {
-                if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function')
-                    Lampa.Controller.toggle('content');
-            } catch (e) {}
-        }, 0);
-    }
-
-    function showSelect(title, items, token) {
+    function showSelect(title, items, token, previousController) {
         items = Array.isArray(items) ? items : [];
         if (token !== dialogToken || !activeFull()) return;
         if (!items.length) return notify('Нечего показывать');
         if (!window.Lampa || !Lampa.Select || typeof Lampa.Select.show !== 'function') return notify(title);
 
-        Lampa.Select.show({
-            title: title,
-            items: items,
-            onSelect: function (item) {
-                restoreContentController();
-                if (item && typeof item.onclick === 'function') {
-                    setTimeout(function () {
-                        if (token === dialogToken) item.onclick();
-                    }, 0);
+        try {
+            Lampa.Select.show({
+                title: title,
+                items: items,
+                onSelect: function (item) {
+                    window.TranslationSubRuntime.restoreController(previousController, 'content');
+                    if (item && typeof item.onclick === 'function') {
+                        setTimeout(function () {
+                            if (token === dialogToken) item.onclick();
+                        }, 0);
+                    }
+                },
+                onBack: function () {
+                    dialogToken++;
+                    window.TranslationSubRuntime.restoreController(previousController, 'content');
                 }
-            },
-            onBack: function () {
-                dialogToken++;
-                restoreContentController();
-            }
-        });
+            });
+        } catch (e) {
+            window.TranslationSubRuntime.restoreController(previousController, 'content');
+        }
     }
 
     function api() {
@@ -203,6 +198,7 @@
         if (!client || typeof client.contentState !== 'function')
             return notify('TranslationSub API недоступен');
 
+        var previousController = window.TranslationSubRuntime.controllerName('content');
         var token = ++dialogToken;
         client.contentState(raw, function (state) {
             if (token !== dialogToken || !activeFull()) return;
@@ -213,7 +209,6 @@
                     notify('Выберите балансеры для опроса в настройках TranslationSub');
                 else if (state.reason === 'identity_unresolved')
                     notify('Не удалось определить карточку сериала');
-                restoreContentController();
                 return;
             }
 
@@ -222,9 +217,11 @@
                 notify(state.reason === 'sources_disabled'
                     ? 'Выберите балансеры для опроса в настройках TranslationSub'
                     : ('Озвучки для ' + Number(state.content && state.content.season || 1) + ' сезона пока не найдены'));
-                restoreContentController();
                 return;
             }
+
+            var currentController = window.TranslationSubRuntime.controllerName(previousController);
+            if (currentController !== previousController) return;
 
             var items = voices.map(function (voice) {
                 return {
@@ -238,10 +235,9 @@
                 };
             });
 
-            showSelect('Озвучки · ' + Number(state.content && state.content.season || 1) + ' сезон', items, token);
+            showSelect('Озвучки · ' + Number(state.content && state.content.season || 1) + ' сезон', items, token, previousController);
         }, function () {
             if (token === dialogToken) notify('Не удалось загрузить список озвучек');
-            restoreContentController();
         });
     }
 
