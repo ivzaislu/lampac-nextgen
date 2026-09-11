@@ -113,4 +113,7 @@ public class TranslationSubCommandResult
 
     [JsonProperty("subscriptionId")]
     public string SubscriptionId { get; set; }
+
+    [JsonProperty("snapshot")]
+    public TranslationSubSnapshot Snapshot { get; set; }
 }
