@@ -12,25 +12,40 @@
         return '';
     }
 
-    function openSubscriptionsPage() {
+    function closeAndRestore(previousController) {
         try {
             if (Lampa.Modal && typeof Lampa.Modal.close === 'function') Lampa.Modal.close();
         } catch (e) {}
-
-        try {
-            if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
-                window.TranslationSub.openSubscriptions();
-        } catch (e2) {}
+        window.TranslationSubRuntime.restoreController(previousController, 'head');
     }
 
-    function openUpdate(item) {
-        try {
-            if (window.TranslationSubCardSource && typeof window.TranslationSubCardSource.open === 'function') {
-                window.TranslationSubCardSource.open(item);
-                return;
-            }
-        } catch (e) {}
-        openSubscriptionsPage();
+    function openSubscriptionsPage(previousController) {
+        if (previousController) closeAndRestore(previousController);
+        else {
+            try {
+                if (Lampa.Modal && typeof Lampa.Modal.close === 'function') Lampa.Modal.close();
+            } catch (e) {}
+        }
+
+        setTimeout(function () {
+            try {
+                if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
+                    window.TranslationSub.openSubscriptions();
+            } catch (e2) {}
+        }, 0);
+    }
+
+    function openUpdate(item, previousController) {
+        closeAndRestore(previousController);
+        setTimeout(function () {
+            try {
+                if (window.TranslationSubCardSource && typeof window.TranslationSubCardSource.open === 'function') {
+                    window.TranslationSubCardSource.open(item);
+                    return;
+                }
+            } catch (e) {}
+            openSubscriptionsPage();
+        }, 0);
     }
 
     function addStyles() {
@@ -117,14 +132,7 @@
         return item;
     }
 
-    function closeModal() {
-        try {
-            if (Lampa.Modal && typeof Lampa.Modal.close === 'function') Lampa.Modal.close();
-        } catch (e) {}
-        try { Lampa.Controller.toggle('head'); } catch (e2) {}
-    }
-
-    function renderDrawer(updates) {
+    function renderDrawer(updates, previousController) {
         updates = Array.isArray(updates) ? updates : [];
 
         var html = $('<div class="translationsub-notice"></div>');
@@ -132,23 +140,29 @@
         else html.append(emptyCard());
 
         var first = html.find('.selector').first()[0];
-        Lampa.Modal.open({
-            title: 'Уведомления озвучек',
-            size: 'medium',
-            html: html,
-            select: first,
-            scroll_to_center: true,
-            buttons: [{ name: 'Все подписки на озвучки', onSelect: openSubscriptionsPage }],
-            buttons_position: 'inside',
-            onSelect: function (selected) {
-                var node = $(selected);
-                var index = parseInt(node.attr('data-translationsub-update'), 10);
-                if (isNaN(index) || !updates[index]) return;
-                try { Lampa.Modal.close(); } catch (e) {}
-                openUpdate(updates[index]);
-            },
-            onBack: closeModal
-        });
+        try {
+            Lampa.Modal.open({
+                title: 'Уведомления озвучек',
+                size: 'medium',
+                html: html,
+                select: first,
+                scroll_to_center: true,
+                buttons: [{
+                    name: 'Все подписки на озвучки',
+                    onSelect: function () { openSubscriptionsPage(previousController); }
+                }],
+                buttons_position: 'inside',
+                onSelect: function (selected) {
+                    var node = $(selected);
+                    var index = parseInt(node.attr('data-translationsub-update'), 10);
+                    if (isNaN(index) || !updates[index]) return;
+                    openUpdate(updates[index], previousController);
+                },
+                onBack: function () { closeAndRestore(previousController); }
+            });
+        } catch (e) {
+            window.TranslationSubRuntime.restoreController(previousController, 'head');
+        }
     }
 
     function openDrawer(preloadedUpdates) {
@@ -156,7 +170,9 @@
             openSubscriptionsPage();
             return;
         }
-        renderDrawer(Array.isArray(preloadedUpdates) ? preloadedUpdates : []);
+
+        var previousController = window.TranslationSubRuntime.controllerName('head');
+        renderDrawer(Array.isArray(preloadedUpdates) ? preloadedUpdates : [], previousController);
     }
 
     function start() {
