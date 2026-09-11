@@ -300,8 +300,6 @@
                 return;
             }
 
-            // subscribe() emits the current view synchronously, so hasSnapshot is
-            // already authoritative here and no public snapshot getter is needed.
             if (hasSnapshot) return;
 
             try { self.activity.loader(true); } catch (e) {}
@@ -316,19 +314,10 @@
     }
 
     function register() {
-        if (window.__TranslationSubPageStarted) return true;
-        if (!window.Lampa || !Lampa.Component || typeof Lampa.Component.add !== 'function') return false;
-
+        if (window.__TranslationSubPageStarted) return;
         Lampa.Component.add('translationsub_list', SubscriptionPage);
         window.__TranslationSubPageStarted = true;
-        return true;
     }
 
-    if (!register()) {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (register() || attempts > 80) clearInterval(wait);
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(register);
 })();
