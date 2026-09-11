@@ -3,15 +3,32 @@ name: TranslationSub Realtime Live Smoke
 on:
   push:
     branches:
-      - TranslationSub-clean-legacy-api
+      - TranslationSub-backend-first-refactor-work
+    paths:
+      - 'Modules/TranslationSub/ModInit.cs'
+      - 'Modules/TranslationSub/V2Controller.cs'
+      - 'Modules/TranslationSub/Services/SubscriptionStore.cs'
+      - 'Modules/TranslationSub/Services/TranslationSubscriptionService.cs'
+      - 'Modules/TranslationSub/Services/TranslationSubRealtimeService.cs'
+      - 'Modules/TranslationSub/Services/TimeCodeProgressService.cs'
+      - 'Modules/TranslationSub/Services/ProfileProgressStore.cs'
+      - 'Modules/TranslationSub/Models/TranslationSubscription.cs'
+      - 'Modules/TranslationSub/Models/SubscriptionProfileProgress.cs'
+      - 'Modules/Sync/TimeCode/**'
+      - 'scripts/ci/translationsub-realtime-live.mjs'
+      - '.github/workflows/translationsub-realtime-live.yml'
   workflow_dispatch:
+
+concurrency:
+  group: translationsub-realtime-live-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   realtime-live:
-    name: Live NWS + TimeCode realtime smoke
+    name: Live NWS + batching + TimeCode smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -65,7 +82,30 @@ jobs:
             port: 9118
           YAML
 
-      - name: Start Lampac and wait for TranslationSub
+          mkdir -p /tmp/lampac-runtime/database/translationsub
+          cat > /tmp/lampac-runtime/database/translationsub/subscriptions.json <<'JSON'
+          [
+            {
+              "Id": "ci-subscription",
+              "Uid": "ci@translationsub.test",
+              "ContentId": "ci-series",
+              "Title": "CI Series",
+              "OriginalTitle": "CI Series",
+              "IsSerial": true,
+              "Source": "multi",
+              "TranslationId": "ci-voice",
+              "TranslationName": "CI Voice",
+              "CurrentSeason": 1,
+              "LastSeason": 1,
+              "LastEpisode": 3,
+              "Sources": [],
+              "CreatedAt": "2026-01-01T00:00:00",
+              "TmdbNewSeasonAvailable": false
+            }
+          ]
+          JSON
+
+      - name: Start Lampac and wait for TranslationSub v2
         shell: bash
         run: |
           set -euo pipefail
@@ -78,14 +118,24 @@ jobs:
           ready=0
           for i in $(seq 1 120); do
             if curl --silent --show-error --fail --max-time 2 \
-              'http://127.0.0.1:9118/translationsub/user-settings?uid=ci%40translationsub.test' \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=ci%40translationsub.test' \
               -o /tmp/realtime-settings.json; then
-              ready=1
-              break
+              if python3 - <<'PY'
+          import json
+          try:
+              data = json.load(open('/tmp/realtime-settings.json', encoding='utf-8'))
+              raise SystemExit(0 if data.get('success') is True and isinstance(data.get('settings'), dict) else 1)
+          except Exception:
+              raise SystemExit(1)
+          PY
+              then
+                ready=1
+                break
+              fi
             fi
 
             if ! kill -0 "$(cat /tmp/lampac-realtime.pid)" 2>/dev/null; then
-              echo 'Lampac exited before TranslationSub became ready'
+              echo 'Lampac exited before TranslationSub v2 became ready'
               tail -n 400 /tmp/lampac-realtime.log || true
               exit 1
             fi
@@ -93,14 +143,16 @@ jobs:
           done
 
           if [ "$ready" != '1' ]; then
-            echo 'TranslationSub did not become ready'
+            echo 'TranslationSub v2 did not become ready'
+            cat /tmp/realtime-settings.json 2>/dev/null || true
             tail -n 400 /tmp/lampac-realtime.log || true
             exit 1
           fi
 
-      - name: Run live realtime smoke
+      - name: Run backend-first live realtime smoke
         env:
           LAMPAC_BASE: http://127.0.0.1:9118
+          TRANSLATIONSUB_STORE: /tmp/lampac-runtime/database/translationsub/subscriptions.json
         run: node scripts/ci/translationsub-realtime-live.mjs
 
       - name: Runtime log tail

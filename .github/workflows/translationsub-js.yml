@@ -1,15 +1,6 @@
-name: TranslationSub JS
+name: TranslationSub PR JS Audit
 
 on:
-  push:
-    branches:
-      - TranslationSub
-    paths:
-      - 'Modules/TranslationSub/**.js'
-      - 'Modules/TranslationSub/**/*.js'
-      - 'Modules/TranslationSub/PluginController.cs'
-      - 'scripts/ci/translationsub-js-audit.mjs'
-      - '.github/workflows/translationsub-js.yml'
   pull_request:
     paths:
       - 'Modules/TranslationSub/**.js'
@@ -24,7 +15,7 @@ permissions:
 
 jobs:
   audit:
-    name: Syntax and architecture audit
+    name: Syntax and thin-client architecture
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -46,5 +37,5 @@ jobs:
             node --check "$file"
           done < <(find Modules/TranslationSub -maxdepth 1 -type f -name 'translationsub*.js' -print0 | sort -z)
 
-      - name: Run TranslationSub architecture audit
+      - name: Run TranslationSub thin-client audit
         run: node scripts/ci/translationsub-js-audit.mjs
