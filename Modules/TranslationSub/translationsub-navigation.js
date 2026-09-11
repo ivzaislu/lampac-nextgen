@@ -156,36 +156,15 @@
     }
 
     function start() {
-        if (!window.Lampa) return;
         apply();
-
-        try {
-            if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') scheduleApply(0);
-                });
-            }
-        } catch (e) {}
 
         try {
             observer = new MutationObserver(function (mutations) {
                 if (relevantMutations(mutations || [])) scheduleApply(35);
             });
             observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-        } catch (e2) {}
+        } catch (e) {}
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
