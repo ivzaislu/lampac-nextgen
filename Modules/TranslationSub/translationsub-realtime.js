@@ -45,7 +45,6 @@
 
     function shouldConnect() {
         try { if (document.hidden) return false; } catch (e) {}
-        try { if (typeof navigator !== 'undefined' && navigator.onLine === false) return false; } catch (e2) {}
         return true;
     }
 
@@ -167,8 +166,6 @@
 
         if (message.method === 'Connected') {
             register();
-            // A successful socket handshake is also a recovery point for a failed
-            // initial HTTP snapshot, so refresh even on the first connection.
             scheduleRefresh();
             return;
         }
@@ -239,9 +236,12 @@
         } catch (e) {}
 
         try {
-            window.addEventListener('offline', disconnect);
+            // navigator.onLine is only a browser hint and can be false while a
+            // local Lampac server is still reachable. Do not tear down LAN NWS
+            // on `offline`; `online` remains a useful prompt to retry quickly.
             window.addEventListener('online', function () {
                 reconnectDelay = 2000;
+                clearReconnect();
                 connect();
             });
         } catch (e2) {}
