@@ -64,8 +64,10 @@
         log(text);
     }
 
+    // Geometry belongs to translationsub-bell-theme.js. Other layers only
+    // provide a stable SVG anchor for the canonical mask.
     function bellSvg() {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a2.4 2.4 0 0 0 2.35-2h-4.7A2.4 2.4 0 0 0 12 22Zm7-5-2-2v-5a5 5 0 0 0-4-4.9V4a1 1 0 0 0-2 0v1.1A5 5 0 0 0 7 10v5l-2 2v1h14v-1Z"/></svg>';
+        return '<svg viewBox="0 0 24 24" aria-hidden="true"></svg>';
     }
 
     function registerManifest() {
@@ -85,8 +87,7 @@
         if (document.getElementById('translationsub-core-style')) return;
         var style = document.createElement('style');
         style.id = 'translationsub-core-style';
-        style.textContent = '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}' +
-            '.translationsub-head>svg{width:1.8em;height:1.8em;display:block;fill:currentColor;flex:0 0 auto}';
+        style.textContent = '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}';
         (document.head || document.documentElement).appendChild(style);
     }
 
