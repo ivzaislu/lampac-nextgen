@@ -158,12 +158,6 @@
             });
             observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
         } catch (e2) {}
-
-        window.TranslationSubNavigation = {
-            refresh: function () { scheduleApply(0); },
-            openNotice: openNotice,
-            openSubscriptions: openSubscriptions
-        };
     }
 
     if (window.Lampa) start();
