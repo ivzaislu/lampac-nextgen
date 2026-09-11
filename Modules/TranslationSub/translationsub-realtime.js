@@ -123,8 +123,7 @@
             return;
         }
 
-        if (message.method === 'TranslationSubChanged')
-            scheduleRefresh();
+        if (message.method === 'TranslationSubChanged') scheduleRefresh();
     }
 
     function connect() {
@@ -151,37 +150,15 @@
     }
 
     function start() {
-        if (!window.Lampa) return;
         connect();
-
-        try {
-            if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (!event || event.type !== 'ready') return;
-                    if (!register()) connect();
-                });
-            }
-        } catch (e) {}
 
         try {
             document.addEventListener('visibilitychange', function () {
                 if (document.hidden) return;
                 if (!register()) connect();
             });
-        } catch (e2) {}
+        } catch (e) {}
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
