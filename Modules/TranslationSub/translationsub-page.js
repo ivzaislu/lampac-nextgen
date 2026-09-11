@@ -239,8 +239,10 @@
                 var card = $('<div class="translationsub-card selector' + (item.hasNewEpisodes ? ' translationsub-card--has-new' : '') + '" data-subscription-id="' + escapeHtml(id) + '">' +
                     '<div class="translationsub-card__poster">' + posterHtml + '</div>' +
                     '<div class="translationsub-card__body">' +
-                        '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
-                        '<div class="translationsub-card__voice">' + escapeHtml(voice) + '</div>' +
+                        '<div class="translationsub-card__heading">' +
+                            '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
+                            '<div class="translationsub-card__voice">' + escapeHtml(voice) + '</div>' +
+                        '</div>' +
                         '<div class="translationsub-card__meta">' + metaHtml(item) + '</div>' +
                     '</div>' +
                     (display.newBadge ? '<div class="translationsub-card__new">' + escapeHtml(display.newBadge) + '</div>' : '') +
