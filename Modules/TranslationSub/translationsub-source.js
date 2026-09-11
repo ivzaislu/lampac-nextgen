@@ -70,17 +70,8 @@
         } catch (e) {}
     }
 
-    function restoreContentController() {
-        setTimeout(function () {
-            try {
-                if (window.Lampa && Lampa.Controller && typeof Lampa.Controller.toggle === 'function')
-                    Lampa.Controller.toggle('content');
-            } catch (e) {}
-        }, 0);
-    }
-
-    function runAction(action) {
-        restoreContentController();
+    function runAction(action, previousController) {
+        window.TranslationSubRuntime.restoreController(previousController, 'content');
         if (!action || typeof action.onclick !== 'function') return;
         setTimeout(function () {
             try { action.onclick(); } catch (e) {}
@@ -96,6 +87,7 @@
         var id = String(item.id || '');
         var title = String(item.title || 'Подписка');
         var voice = String(item.translationName || 'Озвучка');
+        var previousController = window.TranslationSubRuntime.controllerName('content');
         var actions = [];
 
         if (display.newBadge) {
@@ -143,16 +135,16 @@
                 items: actions,
                 onSelect: function (action) {
                     menuOpen = false;
-                    runAction(action);
+                    runAction(action, previousController);
                 },
                 onBack: function () {
                     menuOpen = false;
-                    restoreContentController();
+                    window.TranslationSubRuntime.restoreController(previousController, 'content');
                 }
             });
         } catch (e) {
             menuOpen = false;
-            restoreContentController();
+            window.TranslationSubRuntime.restoreController(previousController, 'content');
         }
     }
 
