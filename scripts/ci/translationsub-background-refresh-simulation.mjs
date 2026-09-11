@@ -44,8 +44,8 @@ assert.match(v2ControllerSource,
 // and NWS invalidation. app-ready only renders the snapshot already in memory.
 assert.doesNotMatch(badgeSource, /setInterval\s*\(\s*refresh/);
 assert.match(badgeSource, /function\s+start\s*\(\)[\s\S]*refresh\(\)/);
-assert.match(badgeSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]{0,500}?render\(\)/);
-assert.doesNotMatch(badgeSource, /Lampa\.Listener\.follow\(['"]app['"][\s\S]{0,500}?refresh\(\)/);
+assert.match(badgeSource,
+  /Lampa\.Listener\.follow\(['"]app['"],\s*function\s*\(event\)\s*\{\s*if\s*\(!event\s*\|\|\s*event\.type\s*!==\s*['"]ready['"]\)\s*return;\s*render\(\);\s*\}\);/);
 assert.match(badgeSource, /visibilitychange[\s\S]*if\s*\(!document\.hidden\)\s*refresh\(\)/);
 assert.match(realtimeSource, /TranslationSubChanged/);
 assert.match(realtimeSource, /window\.TranslationSubBadgeState\.refresh\(\)/);
@@ -78,6 +78,8 @@ function jqueryStub() {
 const appListeners = [];
 const documentListeners = new Map();
 const network = [];
+const pendingSnapshots = [];
+let autoResolveSnapshots = true;
 const sandbox = {
   console, Promise, Date, Math,
   document: {
@@ -100,7 +102,8 @@ const sandbox = {
   TranslationSubApi: {
     snapshot(success) {
       network.push('snapshot');
-      success({ badge: { count: 0 }, subscriptions: [], updates: [] });
+      if (autoResolveSnapshots) success({ badge: { count: 0 }, subscriptions: [], updates: [] });
+      else pendingSnapshots.push(success);
     }
   }
 };
@@ -125,4 +128,16 @@ for (const callback of documentListeners.get('visibilitychange') || []) callback
 assert.deepEqual(network, ['snapshot', 'snapshot'],
   'foreground return must add exactly one snapshot read');
 
-console.log('TranslationSub refresh ownership: one startup read, server-driven state, no client polling.');
+// Concurrent consumers (page + drawer/realtime) share one in-flight GET.
+autoResolveSnapshots = false;
+let coalescedCallbacks = 0;
+sandbox.TranslationSubBadgeState.refresh(() => { coalescedCallbacks++; });
+sandbox.TranslationSubBadgeState.refresh(() => { coalescedCallbacks++; });
+assert.deepEqual(network, ['snapshot', 'snapshot', 'snapshot'],
+  'two concurrent refresh consumers must create only one network read');
+assert.equal(pendingSnapshots.length, 1, 'exactly one snapshot request must remain in flight');
+pendingSnapshots.shift()({ badge: { count: 1 }, subscriptions: [], updates: [{ id: 'new' }] });
+assert.equal(coalescedCallbacks, 2, 'all coalesced refresh consumers must be completed');
+assert.equal(sandbox.TranslationSubBadgeState.count(), 1, 'coalesced snapshot must update canonical state');
+
+console.log('TranslationSub refresh ownership: one startup read, coalesced state, no client polling.');
