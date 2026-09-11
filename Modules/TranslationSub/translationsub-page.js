@@ -89,6 +89,7 @@
         var unsubscribeState = null;
         var hasSnapshot = false;
         var latestSnapshot = null;
+        var checkBusy = false;
 
         function pageActive() {
             if (destroyed) return false;
@@ -189,6 +190,8 @@
             var toolbar = $('<div class="translationsub-toolbar"></div>');
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
             check.on('hover:enter', function () {
+                if (checkBusy) return;
+
                 var api = window.TranslationSubApi;
                 var badge = window.TranslationSubBadgeState;
                 if (!api || typeof api.check !== 'function' || !badge || typeof badge.applyCommand !== 'function') {
@@ -196,8 +199,10 @@
                     return;
                 }
 
+                checkBusy = true;
                 notify('Проверяю новые серии…');
                 api.check(function (result) {
+                    checkBusy = false;
                     var applied = badge.applyCommand(result);
                     if (!applied) {
                         notify('Не удалось проверить новые серии');
@@ -207,6 +212,7 @@
                     var count = Number(applied.count || 0) || 0;
                     notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
                 }, function () {
+                    checkBusy = false;
                     notify('Не удалось проверить новые серии');
                 });
             });
