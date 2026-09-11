@@ -20,6 +20,91 @@
         } catch (e) {}
     }
 
+    function createRuntime() {
+        if (window.TranslationSubRuntime && typeof window.TranslationSubRuntime.onReady === 'function')
+            return window.TranslationSubRuntime;
+
+        var queue = [];
+        var ready = false;
+        var listenerBound = false;
+        var waitTimer = null;
+        var attempts = 0;
+
+        function run(callback) {
+            try { callback(); }
+            catch (e) { log('module start failed', e); }
+        }
+
+        function flush() {
+            if (ready || !window.Lampa || !window.appready) return false;
+
+            ready = true;
+            if (waitTimer) clearInterval(waitTimer);
+            waitTimer = null;
+
+            var callbacks = queue.splice(0);
+            callbacks.forEach(run);
+            return true;
+        }
+
+        function bindAppReady() {
+            if (ready || listenerBound || !window.Lampa || !Lampa.Listener || typeof Lampa.Listener.follow !== 'function')
+                return false;
+
+            listenerBound = true;
+            Lampa.Listener.follow('app', function (event) {
+                if (event && event.type === 'ready') flush();
+            });
+            return true;
+        }
+
+        function waitForLampa() {
+            if (ready || waitTimer || flush()) return;
+            if (bindAppReady()) {
+                flush();
+                return;
+            }
+
+            waitTimer = setInterval(function () {
+                attempts++;
+
+                if (flush()) return;
+                if (bindAppReady()) {
+                    clearInterval(waitTimer);
+                    waitTimer = null;
+                    flush();
+                    return;
+                }
+
+                if (attempts > 80) {
+                    clearInterval(waitTimer);
+                    waitTimer = null;
+                    log('Lampa not found');
+                }
+            }, 250);
+        }
+
+        function onReady(callback) {
+            if (typeof callback !== 'function') return;
+
+            if (ready) {
+                run(callback);
+                return;
+            }
+
+            queue.push(callback);
+            if (!flush()) waitForLampa();
+        }
+
+        window.TranslationSubRuntime = {
+            onReady: onReady,
+            isReady: function () { return ready; }
+        };
+
+        waitForLampa();
+        return window.TranslationSubRuntime;
+    }
+
     function registerManifest() {
         try {
             if (!Lampa.Manifest) Lampa.Manifest = {};
@@ -39,7 +124,6 @@
     }
 
     function start() {
-        if (!window.Lampa) return false;
         registerManifest();
 
         window.TranslationSub = {
@@ -47,17 +131,7 @@
         };
 
         log('plugin core started', META.version);
-        return true;
     }
 
-    if (!start()) {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (start() || attempts > 80) {
-                clearInterval(wait);
-                if (attempts > 80 && !window.Lampa) log('Lampa not found');
-            }
-        }, 250);
-    }
+    createRuntime().onReady(start);
 })();
