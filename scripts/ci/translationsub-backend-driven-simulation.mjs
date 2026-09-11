@@ -122,13 +122,16 @@ assert.match(sourceClient, /item\.navigation/);
 assert.doesNotMatch(sourceClient, /function\s+tmdbId\s*\(/);
 assert.doesNotMatch(sourceClient, /item\.isSerial\s*!==\s*false/);
 
-// Mutation commands return the canonical profile snapshot. Thin clients apply
-// it directly instead of forcing a second GET immediately after a successful command.
+// Mutation commands return the canonical profile snapshot. BadgeState is the
+// only browser layer that knows how a command result carries that snapshot.
 assert.match(contentStateModel, /JsonProperty\("snapshot"\)[\s\S]{0,120}?TranslationSubSnapshot Snapshot/);
 assert.match(v2Controller, /Subscribe[\s\S]*?result\.Snapshot\s*=\s*TranslationSubSnapshotService\.Build\(uid, profileId\)/);
 assert.match(v2Controller, /Unsubscribe[\s\S]*?result\.Snapshot\s*=\s*TranslationSubSnapshotService\.Build\(uid, profileId\)/);
-assert.match(cardFlow, /result\s*&&\s*result\.snapshot[\s\S]{0,220}?badge\.applySnapshot\(result\.snapshot\)/);
-assert.match(sourceClient, /result\s*&&\s*result\.snapshot[\s\S]{0,220}?badge\.applySnapshot\(result\.snapshot\)/);
+assert.match(badge, /function\s+applyCommand\s*\(result\)[\s\S]{0,300}?result\.snapshot[\s\S]{0,300}?applySnapshot\(result\.snapshot\)/);
+assert.match(cardFlow, /badge\.applyCommand\(result\)/);
+assert.match(sourceClient, /badge\.applyCommand\(result\)/);
+assert.doesNotMatch(cardFlow, /result\.snapshot|badge\.applySnapshot\(/);
+assert.doesNotMatch(sourceClient, /result\.snapshot|badge\.applySnapshot\(/);
 
 // Manual refresh is a backend command returning the canonical snapshot directly.
 assert.match(v2Controller, /Route\("translationsub\/v2\/check"\)/);
