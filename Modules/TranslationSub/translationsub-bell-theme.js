@@ -7,11 +7,7 @@
     var unsubscribeState = null;
     var currentCount = 0;
 
-    /*
-     * Единая геометрия колокольчика TranslationSub.
-     * Этот же силуэт используется в карточке сериала: outline означает отсутствие
-     * состояния, filled — активную подписку / наличие новых серий.
-     */
+    /* One canonical bell geometry for full-card, header, menu, settings and empty state. */
     var BELL_BODY = 'M12 3.5a5.5 5.5 0 0 0-5.5 5.5v3.2c0 1.9-.7 3.5-2.1 4.8l-.9.8h17l-.9-.8c-1.4-1.3-2.1-2.9-2.1-4.8V9A5.5 5.5 0 0 0 12 3.5Z';
     var BELL_CLAPPER = 'M9.6 20h4.8c-.35 1.1-1.25 1.7-2.4 1.7S9.95 21.1 9.6 20Z';
 
@@ -59,12 +55,15 @@
                 'mask:' + filled + ' center/contain no-repeat!important;' +
             '}' +
             '.translationsub-menu-item .menu__ico svg{' +
-                'display:block!important;background:currentColor!important;fill:none!important;stroke:none!important;' +
+                'display:block!important;width:100%!important;height:100%!important;' +
+                'background:currentColor!important;fill:none!important;stroke:none!important;' +
                 '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
                 'mask:' + outline + ' center/contain no-repeat!important;' +
             '}' +
             '.translationsub-menu-item .menu__ico svg>*{display:none!important}' +
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
+                'width:2em!important;height:2em!important;transform:scale(1.35)!important;' +
+                'transform-origin:50% 50%!important;overflow:visible!important;' +
                 'background:currentColor!important;fill:none!important;stroke:none!important;' +
                 '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
                 'mask:' + outline + ' center/contain no-repeat!important;' +
@@ -137,9 +136,7 @@
         } catch (e2) {}
 
         window.TranslationSubBellTheme = {
-            refresh: updateHeadState,
-            bodyPath: BELL_BODY,
-            clapperPath: BELL_CLAPPER
+            refresh: updateHeadState
         };
     }
 
