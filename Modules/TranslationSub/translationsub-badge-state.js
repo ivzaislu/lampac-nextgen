@@ -21,8 +21,6 @@
         var style = document.createElement('style');
         style.id = 'translationsub-badge-state-style';
         style.textContent =
-            '.translationsub-head>.translationsub-badge{display:none!important}' +
-            '.translationsub-menu-item>.translationsub-menu-badge{display:none!important}' +
             '.translationsub-state-badge{' +
                 'position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;' +
                 'border-radius:1em;background:#e53935;color:#fff;font-size:.7em;font-weight:600;' +

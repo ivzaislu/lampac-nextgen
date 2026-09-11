@@ -43,7 +43,6 @@
         registerManifest();
 
         window.TranslationSub = {
-            version: META.version,
             openSubscriptions: openSubscriptionsPage
         };
 

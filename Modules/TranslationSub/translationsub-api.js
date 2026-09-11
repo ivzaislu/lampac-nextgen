@@ -79,7 +79,6 @@
 
         params = params || {};
         if (!params.uid) params.uid = uid();
-        if (!params.profile_id) params.profile_id = profileId();
 
         var qs = query(params);
         var url = host() + path + (qs ? (path.indexOf('?') === -1 ? '?' : '&') + qs : '');
@@ -120,6 +119,7 @@
 
     function snapshot(success, error) {
         request('GET', '/translationsub/v2/snapshot', {
+            profile_id: profileId(),
             _ts: Date.now ? Date.now() : new Date().getTime()
         }, null, success, error);
     }
@@ -136,7 +136,7 @@
     }
 
     function subscribe(card, voiceId, voiceName, success, error) {
-        request('POST', '/translationsub/v2/subscriptions', {}, {
+        request('POST', '/translationsub/v2/subscriptions', { profile_id: profileId() }, {
             card: card || {},
             voiceId: String(voiceId || ''),
             voiceName: String(voiceName || '')
@@ -145,11 +145,11 @@
 
     function unsubscribe(subscriptionId, success, error) {
         var id = encodeURIComponent(String(subscriptionId || ''));
-        request('POST', '/translationsub/v2/subscriptions/' + id + '/remove', {}, {}, success, error);
+        request('POST', '/translationsub/v2/subscriptions/' + id + '/remove', { profile_id: profileId() }, {}, success, error);
     }
 
     function check(success, error) {
-        request('POST', '/translationsub/v2/check', {}, {}, success, error);
+        request('POST', '/translationsub/v2/check', { profile_id: profileId() }, {}, success, error);
     }
 
     function settings(success, error) {

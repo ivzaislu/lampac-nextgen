@@ -10,10 +10,14 @@ function read(name) {
   return fs.readFileSync(path.join(moduleDir, name), 'utf8');
 }
 
+const coreSource = read('translationsub.js');
+const apiSource = read('translationsub-api.js');
 const badgeSource = read('translationsub-badge-state.js');
 const bellSource = read('translationsub-bell-theme.js');
 const navigationSource = read('translationsub-navigation.js');
+const noticeSource = read('translationsub-notice.js');
 const realtimeSource = read('translationsub-realtime.js');
+const sourceSource = read('translationsub-source.js');
 const uiSource = read('translationsub-ui.js');
 const v2ControllerSource = read('V2Controller.cs');
 const modInitSource = read('ModInit.cs');
@@ -39,6 +43,37 @@ assert.match(modInitSource, /Response\.OnCompleted/);
 assert.match(modInitSource, /PublishProfile\(uid, profileId, "timecode"\)/);
 assert.match(v2ControllerSource,
   /Route\("translationsub\/v2\/snapshot"\)[\s\S]*?TimeCodeProgressService\.SyncUser\(uid, profileId\)/);
+
+// The public browser surface stays intentionally small. Realtime is an internal
+// transport module; core exposes only the page-opening facade.
+assert.match(coreSource,
+  /window\.TranslationSub\s*=\s*\{\s*openSubscriptions\s*:\s*openSubscriptionsPage\s*\}/m);
+assert.doesNotMatch(coreSource, /\bversion\s*:\s*META\.version/);
+assert.doesNotMatch(realtimeSource,
+  /window\.TranslationSubRealtime\s*=|\bmanualClose\b|function\s+close\s*\(/);
+
+// Removed DOM compatibility markers/selectors must not creep back in.
+assert.doesNotMatch(badgeSource,
+  /translationsub-head>\.translationsub-badge|translationsub-menu-item>\.translationsub-menu-badge/);
+assert.doesNotMatch(sourceSource, /data-translationsub-card-source/);
+assert.doesNotMatch(noticeSource,
+  /data-translationsub-empty|translationsub-notice__empty \.notice__time/);
+
+// Profile identity is transported only for endpoints whose response/state is
+// profile-specific. Content-state and settings are user-wide/profile-independent.
+const profileParamCount = (apiSource.match(/profile_id\s*:\s*profileId\(\)/g) || []).length;
+assert.equal(profileParamCount, 4,
+  'profile_id must be sent only by snapshot/subscribe/unsubscribe/check');
+assert.doesNotMatch(apiSource, /if\s*\(!params\.profile_id\)/,
+  'generic API request must not attach profile_id to every endpoint');
+assert.match(apiSource, /function\s+snapshot[\s\S]{0,240}?profile_id\s*:\s*profileId\(\)/);
+assert.match(apiSource, /function\s+subscribe[\s\S]{0,240}?profile_id\s*:\s*profileId\(\)/);
+assert.match(apiSource, /function\s+unsubscribe[\s\S]{0,240}?profile_id\s*:\s*profileId\(\)/);
+assert.match(apiSource, /function\s+check[\s\S]{0,180}?profile_id\s*:\s*profileId\(\)/);
+assert.match(apiSource, /function\s+contentState[\s\S]{0,180}?v2\/content-state', \{\}/);
+assert.match(apiSource, /function\s+contentSummary[\s\S]{0,180}?v2\/content-state', \{\}/);
+assert.match(apiSource, /function\s+settings[\s\S]{0,160}?v2\/settings', \{\}/);
+assert.match(apiSource, /function\s+updateSettings[\s\S]{0,180}?v2\/settings', \{\}/);
 
 // State/network refresh is event driven: one startup read, foreground revalidate
 // and NWS invalidation. app-ready only renders the snapshot already in memory.

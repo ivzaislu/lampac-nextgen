@@ -51,8 +51,7 @@
             '.translationsub-notice .notice__footer{display:flex;gap:.3em!important;flex-wrap:nowrap!important;margin-top:.3em!important;white-space:nowrap!important;overflow:hidden!important}' +
             '.translationsub-notice .notice__footer>div{padding:.16em .34em!important;border-radius:.3em!important;background:rgba(255,255,255,.07)!important;font-size:.72em!important;opacity:.65!important;overflow:hidden!important;text-overflow:ellipsis!important}' +
             '.translationsub-notice .notice.focus .notice__footer>div{background:rgba(0,0,0,.07)!important}' +
-            '.translationsub-notice__empty{padding:1.1em 0;opacity:.72}' +
-            '.translationsub-notice__empty .notice__time{display:none!important}';
+            '.translationsub-notice__empty{padding:1.1em 0;opacity:.72}';
         (document.head || document.documentElement).appendChild(style);
     }
 
@@ -111,7 +110,6 @@
         }
 
         item.addClass('image--icon image--loaded translationsub-notice__empty');
-        item.attr('data-translationsub-empty', '1');
         item.find('.notice__time').remove();
         item.find('.notice__title').text('Новых серий пока нет');
         item.find('.notice__descr').text('Когда в выбранной озвучке появится продолжение, оно будет показано здесь.');

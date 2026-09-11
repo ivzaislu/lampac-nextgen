@@ -9,7 +9,6 @@
     var reconnectDelay = 2000;
     var pingTimer = null;
     var refreshTimer = null;
-    var manualClose = false;
     var everConnected = false;
 
     function storageGet(name, fallback) {
@@ -103,7 +102,7 @@
     }
 
     function scheduleReconnect() {
-        if (manualClose || reconnectTimer) return;
+        if (reconnectTimer) return;
         reconnectTimer = setTimeout(function () {
             reconnectTimer = null;
             connect();
@@ -129,7 +128,7 @@
     }
 
     function connect() {
-        if (manualClose || typeof WebSocket !== 'function') return;
+        if (typeof WebSocket !== 'function') return;
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
         var url = websocketUrl();
@@ -151,15 +150,6 @@
         };
     }
 
-    function close() {
-        manualClose = true;
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-        stopPing();
-        try { if (socket) socket.close(); } catch (e) {}
-        socket = null;
-    }
-
     function start() {
         if (!window.Lampa) return;
         connect();
@@ -179,15 +169,6 @@
                 if (!register()) connect();
             });
         } catch (e2) {}
-
-        window.TranslationSubRealtime = {
-            connect: connect,
-            register: register,
-            close: close,
-            connected: function () {
-                return !!(socket && socket.readyState === WebSocket.OPEN);
-            }
-        };
     }
 
     if (window.Lampa) start();

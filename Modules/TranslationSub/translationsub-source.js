@@ -173,7 +173,6 @@
             var item = byId[id];
             if (!item) return;
 
-            card.attr('data-translationsub-card-source', selectedSource());
             card.off('.translationsubSource');
 
             card.on('hover:enter.translationsubSource', function () {
