@@ -61,10 +61,9 @@
         var title = String(item.title || 'Сериал');
         var voice = String(item.translationName || 'Озвучка');
         var poster = posterUrl(item.poster || '');
-        var labels = Array.isArray(display.sourceLabels) ? display.sourceLabels : [];
 
         card.attr('data-translationsub-update', String(index));
-        card.addClass('image--poster');
+        card.addClass('image--poster translationsub-notice__item');
         card.find('.notice__title').text(title);
         card.find('.notice__time').text(String(display.noticeTime || ''));
 
@@ -72,12 +71,6 @@
         descr.empty();
         descr.append($('<div></div>').text(voice));
         if (display.noticeRange) descr.append($('<div></div>').text(String(display.noticeRange)));
-
-        if (labels.length) {
-            var footer = $('<div class="notice__footer"></div>');
-            labels.forEach(function (label) { footer.append($('<div></div>').text(String(label || ''))); });
-            descr.append(footer);
-        }
 
         var img = card.find('.notice__img img').first();
         if (poster && img.length) {
