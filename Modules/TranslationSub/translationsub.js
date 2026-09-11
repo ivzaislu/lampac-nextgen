@@ -103,12 +103,6 @@
                 return;
             }
         } catch (e) {}
-        try {
-            if (window.TranslationSubNotice && typeof window.TranslationSubNotice.open === 'function') {
-                window.TranslationSubNotice.open();
-                return;
-            }
-        } catch (e2) {}
         openSubscriptionsPage();
     }
 
@@ -123,61 +117,6 @@
         }
         button.off('hover:enter.translationsubCore');
         button.on('hover:enter.translationsubCore', openNoticeOrPage);
-    }
-
-    function refreshUpdates(done) {
-        done = typeof done === 'function' ? done : function () {};
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.refresh === 'function') {
-                window.TranslationSubBadgeState.refresh(done);
-                return;
-            }
-        } catch (e) {}
-
-        var api = window.TranslationSubApi;
-        if (api && typeof api.snapshot === 'function') {
-            api.snapshot(function (snapshot) {
-                done(snapshot && Array.isArray(snapshot.updates) ? snapshot.updates : []);
-            }, function () { done([]); });
-            return;
-        }
-
-        done([]);
-    }
-
-    function applySnapshot(snapshot) {
-        snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.applySnapshot === 'function')
-                return window.TranslationSubBadgeState.applySnapshot(snapshot);
-        } catch (e) {}
-        return Array.isArray(snapshot.updates) ? snapshot.updates.slice() : [];
-    }
-
-    function forceCheckUpdatesUI(done) {
-        done = typeof done === 'function' ? done : function () {};
-        var api = window.TranslationSubApi;
-        if (!api || typeof api.check !== 'function') {
-            notify('TranslationSub API недоступен');
-            done([]);
-            return;
-        }
-
-        notify('Проверяю новые серии…');
-        api.check(function (result) {
-            if (!result || result.success !== true || !result.snapshot) {
-                notify('Не удалось проверить новые серии');
-                done([]);
-                return;
-            }
-
-            var updates = applySnapshot(result.snapshot);
-            notify(updates.length ? ('С новыми сериями: ' + updates.length) : 'Новых серий нет');
-            done(updates);
-        }, function () {
-            notify('Не удалось проверить новые серии');
-            done([]);
-        });
     }
 
     function cardFlow() {
@@ -225,8 +164,6 @@
             uid: lampacUid,
             openForItem: openForItem,
             openSubscriptions: openSubscriptionsPage,
-            checkUpdates: refreshUpdates,
-            forceCheckUpdatesUI: forceCheckUpdatesUI,
             refresh: refresh
         };
 
