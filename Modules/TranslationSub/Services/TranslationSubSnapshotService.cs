@@ -42,9 +42,13 @@ public static class TranslationSubSnapshotService
         };
     }
 
-    static TranslationSubSubscriptionSnapshot ToSnapshot(TranslationSubscription sub)
+    static TranslationSubSubscriptionSnapshot ToSnapshot(TranslationSubProfileProjection projection)
     {
-        int watched = Math.Max(0, sub.CurrentEpisode.GetValueOrDefault(0));
+        var sub = projection?.Subscription;
+        if (sub == null)
+            return new TranslationSubSubscriptionSnapshot();
+
+        int watched = Math.Max(0, projection.WatchedEpisode);
         int available = Math.Max(0, sub.LastEpisode.GetValueOrDefault(0));
         bool hasNew = available > watched;
         int season = Math.Max(1, sub.LastSeason ?? sub.CurrentSeason ?? 1);
