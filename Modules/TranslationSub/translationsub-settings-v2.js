@@ -371,7 +371,7 @@
             );
             addServerSelect(
                 'endedRefreshDays',
-                KEYS.endedRefreshHours,
+                KEYS.endedRefreshDays,
                 'Перепроверка завершённых сериалов',
                 'Как часто TMDB проверяется на неожиданное продолжение.'
             );
