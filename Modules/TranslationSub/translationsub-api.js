@@ -4,6 +4,8 @@
     if (window.__TranslationSubApiStarted) return;
     window.__TranslationSubApiStarted = true;
 
+    var REQUEST_TIMEOUT = 30000;
+
     function storageGet(name, fallback) {
         try {
             if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.get === 'function')
@@ -49,7 +51,8 @@
             var scripts = document.getElementsByTagName('script');
             for (var i = scripts.length - 1; i >= 0; i--) {
                 var src = scripts[i].src || '';
-                if (src.indexOf('/translationsub.js') !== -1 && typeof URL === 'function')
+                var isPlugin = src.indexOf('/translationsub.js') !== -1 || src.indexOf('/translationsub/plugin.js') !== -1;
+                if (isPlugin && typeof URL === 'function')
                     return new URL(src, window.location.href).origin;
             }
             return window.location.origin || '';
@@ -91,28 +94,68 @@
             options.body = JSON.stringify(body);
 
         if (typeof fetch === 'function') {
+            var settled = false;
+            var controller = typeof AbortController === 'function' ? new AbortController() : null;
+            if (controller) options.signal = controller.signal;
+
+            var timeout = setTimeout(function () {
+                if (settled) return;
+                if (controller) {
+                    try { controller.abort(); } catch (e) {}
+                }
+                settled = true;
+                error(new Error('Request timeout'));
+            }, REQUEST_TIMEOUT);
+
             fetch(url, options)
                 .then(function (response) {
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     return response.text();
                 })
-                .then(function (text) { success(parseJson(text, {})); })
-                .catch(error);
+                .then(function (text) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+                    success(parseJson(text, {}));
+                })
+                .catch(function (reason) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+                    error(reason);
+                });
             return;
         }
 
         try {
             var xhr = new XMLHttpRequest();
+            var xhrSettled = false;
+
+            function xhrSuccess(data) {
+                if (xhrSettled) return;
+                xhrSettled = true;
+                success(data);
+            }
+
+            function xhrError(reason) {
+                if (xhrSettled) return;
+                xhrSettled = true;
+                error(reason);
+            }
+
             xhr.open(method, url, true);
+            xhr.timeout = REQUEST_TIMEOUT;
             xhr.setRequestHeader('Content-Type', 'application/json; charset=utf-8');
             xhr.setRequestHeader('Cache-Control', 'no-cache');
             xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
+                if (xhr.readyState !== 4 || xhrSettled) return;
                 if (xhr.status >= 200 && xhr.status < 300)
-                    success(parseJson(xhr.responseText, {}));
+                    xhrSuccess(parseJson(xhr.responseText, {}));
                 else
-                    error(new Error('HTTP ' + xhr.status));
+                    xhrError(new Error('HTTP ' + xhr.status));
             };
+            xhr.onerror = function () { xhrError(new Error('Network error')); };
+            xhr.ontimeout = function () { xhrError(new Error('Request timeout')); };
             xhr.send(options.body || null);
         } catch (e2) { error(e2); }
     }
