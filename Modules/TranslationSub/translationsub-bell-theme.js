@@ -118,33 +118,10 @@
             });
         } catch (e) {}
 
-        try {
-            if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') {
-                        bindState();
-                        setTimeout(updateHeadState, 0);
-                    }
-                });
-            }
-        } catch (e2) {}
-
         window.TranslationSubBellTheme = {
             refresh: updateHeadState
         };
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
