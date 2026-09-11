@@ -3,6 +3,11 @@ using System.Collections.Generic;
 
 namespace TranslationSub.Models;
 
+/// <summary>
+/// Shared user subscription metadata. Profile-specific watched progress is kept
+/// exclusively in SubscriptionProfileProgress/ProfileProgressStore and is never
+/// persisted on this shared object.
+/// </summary>
 public class TranslationSubscription
 {
     public string Id { get; set; }
@@ -20,10 +25,8 @@ public class TranslationSubscription
     public string TranslationId { get; set; }
     public string TranslationName { get; set; }
     public int? CurrentSeason { get; set; }
-    public int? CurrentEpisode { get; set; }
     public int? LastSeason { get; set; }
     public int? LastEpisode { get; set; }
-    public bool Notified { get; set; }
     public List<TranslationSubscriptionSource> Sources { get; set; } = new();
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime? LastCheckedAt { get; set; }
