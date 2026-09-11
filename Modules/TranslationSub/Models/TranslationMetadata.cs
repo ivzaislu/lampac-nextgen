@@ -26,7 +26,6 @@ public sealed class LampacSourceOption
 internal sealed class LampacVoiceMetadata
 {
     public string Source { get; init; }
-    public string SourceName { get; init; }
     public string VoiceId { get; init; }
     public string VoiceName { get; init; }
     public int Season { get; init; }

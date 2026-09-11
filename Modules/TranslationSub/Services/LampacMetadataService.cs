@@ -53,9 +53,7 @@ public static class LampacMetadataService
                     translation_id = SourceVoiceId(x.VoiceId, x.VoiceName, x.Source),
                     season = x.Season,
                     episode = episodes.DefaultIfEmpty(query.IsSerial ? 0 : 1).Max(),
-                    Episodes = episodes,
-                    KpId = query.KpId > 0 ? query.KpId.ToString() : null,
-                    ImdbId = query.ImdbId
+                    Episodes = episodes
                 };
             })
             .ToList();
@@ -68,29 +66,6 @@ public static class LampacMetadataService
                 query.Season,
                 query.IsSerial);
         }
-
-        var sourceNames = metadata
-            .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Source))
-            .GroupBy(x => x.Source, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => g.Select(x => x.SourceName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? g.Key,
-                StringComparer.OrdinalIgnoreCase);
-
-        var blocks = raw
-            .GroupBy(x => x.source ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new TranslationSourceBlock
-            {
-                Source = group.Key,
-                Name = sourceNames.TryGetValue(group.Key, out string name) ? name : group.Key,
-                Translations = group
-                    .OrderBy(x => x.season)
-                    .ThenBy(x => x.translation, StringComparer.OrdinalIgnoreCase)
-                    .ToList()
-            })
-            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(x => x.Source, StringComparer.OrdinalIgnoreCase)
-            .ToList();
 
         var combined = raw
             .GroupBy(x => new
@@ -119,10 +94,7 @@ public static class LampacMetadataService
                     {
                         Source = x.source,
                         TranslationId = x.translation_id,
-                        TranslationName = x.translation,
-                        Season = x.season,
-                        Episode = x.episode,
-                        Episodes = x.Episodes?.ToList() ?? new List<int>()
+                        TranslationName = x.translation
                     })
                     .OrderBy(x => x.Source, StringComparer.OrdinalIgnoreCase)
                     .ToList();
@@ -135,8 +107,6 @@ public static class LampacMetadataService
                     season = group.Key.season,
                     episode = episodes.DefaultIfEmpty(group.Max(x => x.episode)).Max(),
                     Episodes = episodes,
-                    KpId = best.KpId,
-                    ImdbId = best.ImdbId,
                     Sources = sources
                 };
             })
@@ -146,15 +116,7 @@ public static class LampacMetadataService
 
         return new TranslationVariantsResponse
         {
-            Source = "multi",
-            Seasons = combined
-                .Where(x => x.season > 0)
-                .Select(x => x.season)
-                .Distinct()
-                .OrderBy(x => x)
-                .ToList(),
-            Translations = combined,
-            Items = blocks
+            Translations = combined
         };
     }
 

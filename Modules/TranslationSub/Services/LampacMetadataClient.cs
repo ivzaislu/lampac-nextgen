@@ -126,7 +126,6 @@ internal static class LampacMetadataClient
             .Select(group => new LampacVoiceMetadata
             {
                 Source = source.Id,
-                SourceName = source.Name,
                 VoiceId = group.Key.voice,
                 VoiceName = group.Select(x => x.VoiceName).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)),
                 Season = group.Key.season,
