@@ -54,16 +54,6 @@
         return uid;
     }
 
-    function notify(text) {
-        try {
-            if (window.Lampa && Lampa.Noty && typeof Lampa.Noty.show === 'function') {
-                Lampa.Noty.show(text);
-                return;
-            }
-        } catch (e) {}
-        log(text);
-    }
-
     // Geometry belongs to translationsub-bell-theme.js. Other layers only
     // provide a stable SVG anchor for the canonical mask.
     function bellSvg() {
@@ -124,15 +114,6 @@
         catch (e) { return null; }
     }
 
-    function openForItem(object) {
-        var flow = cardFlow();
-        if (flow && typeof flow.open === 'function') {
-            flow.open(object);
-            return;
-        }
-        notify('Модуль озвучек ещё инициализируется');
-    }
-
     function refresh() {
         injectHeadButton();
         try {
@@ -162,7 +143,6 @@
         window.TranslationSub = {
             version: META.version,
             uid: lampacUid,
-            openForItem: openForItem,
             openSubscriptions: openSubscriptionsPage,
             refresh: refresh
         };
