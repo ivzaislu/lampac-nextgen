@@ -81,11 +81,15 @@ public class TranslationSubV2Controller : BaseController
         }
 
         uid = ResolveUid(uid ?? body.Value<string>("uid"));
+        string profileId = ResolveProfileId();
         var intent = body.ToObject<TranslationSubSubscribeIntent>();
         var result = await TranslationSubCommandService.SubscribeAsync(uid, intent, HttpContext);
 
         if (result.Success)
-            TimeCodeProgressService.SyncUser(uid, ResolveProfileId());
+        {
+            TimeCodeProgressService.SyncUser(uid, profileId);
+            result.Snapshot = TranslationSubSnapshotService.Build(uid, profileId);
+        }
 
         return ContentTo(JsonConvert.SerializeObject(result));
     }
@@ -98,8 +102,16 @@ public class TranslationSubV2Controller : BaseController
     public ActionResult Unsubscribe(string id, string uid = null)
     {
         uid = ResolveUid(uid);
-        return ContentTo(JsonConvert.SerializeObject(
-            TranslationSubCommandService.Unsubscribe(uid, id)));
+        string profileId = ResolveProfileId();
+        var result = TranslationSubCommandService.Unsubscribe(uid, id);
+
+        if (result.Success)
+        {
+            TimeCodeProgressService.SyncUser(uid, profileId);
+            result.Snapshot = TranslationSubSnapshotService.Build(uid, profileId);
+        }
+
+        return ContentTo(JsonConvert.SerializeObject(result));
     }
 
     [HttpPost]
