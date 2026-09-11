@@ -112,11 +112,16 @@ public static class SubscriptionStore
         lock (locker)
         {
             var list = LoadUnsafe();
-            var before = SharedStateByUid(list);
+            string beforePersisted = PersistedState(list);
+            var beforeShared = SharedStateByUid(list);
             action(list);
-            var after = SharedStateByUid(list);
+
+            if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
+                return;
+
+            var afterShared = SharedStateByUid(list);
             SaveUnsafe(list);
-            changedUids = ChangedUids(before, after);
+            changedUids = ChangedUids(beforeShared, afterShared);
         }
 
         PublishSharedChanges(changedUids);
@@ -138,13 +143,17 @@ public static class SubscriptionStore
         lock (locker)
         {
             var list = LoadUnsafe();
-            var before = SharedStateByUid(list);
+            string beforePersisted = PersistedState(list);
+            var beforeShared = SharedStateByUid(list);
             if (!action(list))
                 return false;
 
-            var after = SharedStateByUid(list);
+            if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
+                return false;
+
+            var afterShared = SharedStateByUid(list);
             SaveUnsafe(list);
-            changedUids = ChangedUids(before, after);
+            changedUids = ChangedUids(beforeShared, afterShared);
         }
 
         PublishSharedChanges(changedUids);
