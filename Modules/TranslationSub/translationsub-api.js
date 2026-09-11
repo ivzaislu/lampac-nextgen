@@ -15,12 +15,28 @@
         } catch (e2) { return fallback; }
     }
 
-    function uid() {
+    function storageSet(name, value) {
         try {
-            if (window.TranslationSub && typeof window.TranslationSub.uid === 'function')
-                return String(window.TranslationSub.uid() || '');
+            if (window.Lampa && Lampa.Storage && typeof Lampa.Storage.set === 'function') {
+                Lampa.Storage.set(name, value);
+                return;
+            }
         } catch (e) {}
-        return String(storageGet('lampac_unic_id', '') || '');
+        try { localStorage.setItem(name, value); } catch (e2) {}
+    }
+
+    function uid() {
+        var value = String(storageGet('lampac_unic_id', '') || '');
+        if (value) return value;
+
+        try {
+            if (window.Lampa && Lampa.Utils && typeof Lampa.Utils.uid === 'function')
+                value = String(Lampa.Utils.uid(8) || '').toLowerCase();
+        } catch (e) {}
+        if (!value) value = Math.random().toString(36).slice(2, 10).toLowerCase();
+
+        storageSet('lampac_unic_id', value);
+        return value;
     }
 
     function profileId() {
@@ -145,7 +161,6 @@
     }
 
     window.TranslationSubApi = {
-        request: request,
         snapshot: snapshot,
         contentState: contentState,
         contentSummary: contentSummary,
