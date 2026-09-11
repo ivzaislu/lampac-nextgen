@@ -12,12 +12,52 @@
         loading: false,
         waiters: [],
         drawerOpening: false,
-        listeners: []
+        listeners: [],
+        snapshotProfileId: null,
+        snapshotGeneratedAt: 0
     };
 
     function textCount(count) {
         count = Number(count) || 0;
         return count > 99 ? '99+' : String(count);
+    }
+
+    function currentProfileId() {
+        try {
+            var api = window.TranslationSubApi;
+            if (api && typeof api.profileId === 'function') return String(api.profileId() || '0');
+        } catch (e) {}
+        return '0';
+    }
+
+    function snapshotProfileId(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object') return '';
+        var value = snapshot.profileId;
+        if (value === undefined || value === null) value = snapshot.ProfileId;
+        return value === undefined || value === null ? '' : String(value || '0');
+    }
+
+    function snapshotGeneratedAt(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object') return 0;
+        var value = snapshot.generatedAt;
+        if (value === undefined || value === null) value = snapshot.GeneratedAt;
+        if (value === undefined || value === null || value === '') return 0;
+        var stamp = Date.parse(String(value));
+        return isNaN(stamp) ? 0 : stamp;
+    }
+
+    function canCommitSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== 'object') return false;
+
+        var currentProfile = currentProfileId();
+        var profile = snapshotProfileId(snapshot) || currentProfile;
+        if (profile !== currentProfile) return false;
+
+        var generatedAt = snapshotGeneratedAt(snapshot);
+        if (state.snapshotProfileId === profile && generatedAt && state.snapshotGeneratedAt && generatedAt < state.snapshotGeneratedAt)
+            return false;
+
+        return true;
     }
 
     function render() {
@@ -79,7 +119,16 @@
     }
 
     function commitSnapshot(snapshot) {
-        snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+        if (!canCommitSnapshot(snapshot)) return null;
+
+        var profile = snapshotProfileId(snapshot) || currentProfileId();
+        var generatedAt = snapshotGeneratedAt(snapshot);
+        if (state.snapshotProfileId !== profile) {
+            state.snapshotProfileId = profile;
+            state.snapshotGeneratedAt = 0;
+        }
+        if (generatedAt) state.snapshotGeneratedAt = Math.max(state.snapshotGeneratedAt, generatedAt);
+
         var updates = Array.isArray(snapshot.updates) ? snapshot.updates : [];
         var badge = snapshot.badge && typeof snapshot.badge === 'object' ? snapshot.badge : {};
         var count = Number(badge.count);
@@ -101,9 +150,12 @@
     }
 
     function applySnapshot(snapshot) {
-        state.requestSeq++;
         var updates = commitSnapshot(snapshot);
+        if (!updates) return false;
+
+        state.requestSeq++;
         if (state.loading) finishRefresh(updates);
+        return true;
     }
 
     function applyCommand(result) {
@@ -113,9 +165,7 @@
         return view();
     }
 
-    function refresh(done) {
-        done = typeof done === 'function' ? done : function () {};
-        state.waiters.push(done);
+    function startRefresh() {
         if (state.loading) return;
 
         var api = window.TranslationSubApi;
@@ -126,15 +176,37 @@
         }
 
         state.loading = true;
+        var requestedProfile = currentProfileId();
         var seq = ++state.requestSeq;
         api.snapshot(function (snapshot) {
             if (seq !== state.requestSeq) return;
-            finishRefresh(commitSnapshot(snapshot));
+
+            if (requestedProfile !== currentProfileId()) {
+                state.loading = false;
+                startRefresh();
+                return;
+            }
+
+            var updates = commitSnapshot(snapshot);
+            finishRefresh(updates || state.updates.slice());
         }, function () {
             if (seq !== state.requestSeq) return;
+
+            if (requestedProfile !== currentProfileId()) {
+                state.loading = false;
+                startRefresh();
+                return;
+            }
+
             render();
             finishRefresh(state.updates.slice());
         });
+    }
+
+    function refresh(done) {
+        done = typeof done === 'function' ? done : function () {};
+        state.waiters.push(done);
+        startRefresh();
     }
 
     function openDrawerSynced() {
