@@ -26,12 +26,16 @@ public class TranslationSubSettingsController : BaseController
     async public Task<ActionResult> GetSettings(string uid = null)
     {
         uid = ResolveUid(uid);
+        var settings = TranslationSettingsStore.Get(uid);
         var options = await LampacMetadataService.AvailableSourcesAsync(uid).ConfigureAwait(false);
-        var json = JObject.FromObject(TranslationSettingsStore.Get(uid));
-        json["availableSources"] = JArray.FromObject(options.Select(x => x.id));
-        json["availableSourceItems"] = JArray.FromObject(options);
-        json["schema"] = JObject.FromObject(TranslationSettingsStore.UiSchema());
-        return ContentTo(json.ToString(Formatting.None));
+
+        return ContentTo(JsonConvert.SerializeObject(new
+        {
+            success = true,
+            settings,
+            schema = TranslationSettingsStore.UiSchema(),
+            availableSourceItems = options
+        }));
     }
 
     // Dynamic Lampac module routing is built around GET/POST endpoints.
@@ -95,7 +99,6 @@ public class TranslationSubSettingsController : BaseController
             success = true,
             settings,
             schema = TranslationSettingsStore.UiSchema(),
-            availableSources = options.Select(x => x.id).ToList(),
             availableSourceItems = options
         }));
     }

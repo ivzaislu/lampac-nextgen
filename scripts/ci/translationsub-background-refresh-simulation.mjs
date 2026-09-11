@@ -17,9 +17,11 @@ const bellSource = read('translationsub-bell-theme.js');
 const navigationSource = read('translationsub-navigation.js');
 const noticeSource = read('translationsub-notice.js');
 const realtimeSource = read('translationsub-realtime.js');
+const settingsSource = read('translationsub-settings-v2.js');
 const sourceSource = read('translationsub-source.js');
 const uiSource = read('translationsub-ui.js');
 const v2ControllerSource = read('V2Controller.cs');
+const settingsControllerSource = read('SettingsController.cs');
 const modInitSource = read('ModInit.cs');
 const pluginControllerSource = read('PluginController.cs');
 
@@ -74,6 +76,20 @@ assert.match(apiSource, /function\s+contentState[\s\S]{0,180}?v2\/content-state'
 assert.match(apiSource, /function\s+contentSummary[\s\S]{0,180}?v2\/content-state', \{\}/);
 assert.match(apiSource, /function\s+settings[\s\S]{0,160}?v2\/settings', \{\}/);
 assert.match(apiSource, /function\s+updateSettings[\s\S]{0,180}?v2\/settings', \{\}/);
+
+// Settings GET/POST share one canonical response envelope. The duplicate list of
+// source ids and the old root-settings response shape are not compatibility APIs.
+assert.doesNotMatch(settingsControllerSource, /\bavailableSources\b/);
+assert.equal((settingsControllerSource.match(/success\s*=\s*true/g) || []).length, 2,
+  'both settings GET and POST must return the canonical success envelope');
+assert.equal((settingsControllerSource.match(/availableSourceItems\s*=\s*options/g) || []).length, 2,
+  'both settings GET and POST must expose the same source item collection');
+assert.doesNotMatch(settingsSource,
+  /function\s+canonicalSettings\s*\(|data\.AvailableSourceItems|settings\.availableSourceItems|settings\.AvailableSourceItems/);
+assert.match(settingsSource,
+  /var\s+settings\s*=\s*data\.settings\s*&&\s*typeof\s+data\.settings\s*===\s*['"]object['"]\s*\?\s*data\.settings\s*:\s*\{\}/);
+assert.match(settingsSource, /availableItems\s*=\s*normalizeItems\(data\.availableSourceItems\s*\|\|\s*\[\]\)/);
+assert.doesNotMatch(settingsSource, /item\.Id|item\.Name/);
 
 // State/network refresh is event driven: one startup read, foreground revalidate
 // and NWS invalidation. app-ready only renders the snapshot already in memory.

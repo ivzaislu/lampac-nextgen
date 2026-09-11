@@ -94,8 +94,8 @@
         var seen = {};
         return value.map(function (item) {
             item = item || {};
-            var id = String(item.id || item.Id || '').trim();
-            var name = String(item.name || item.Name || id).trim();
+            var id = String(item.id || '').trim();
+            var name = String(item.name || id).trim();
             return { id: id, name: name || id };
         }).filter(function (item) {
             if (!item.id || seen[item.id]) return false;
@@ -134,11 +134,6 @@
         return sourceList(result);
     }
 
-    function canonicalSettings(data) {
-        if (data && data.settings && typeof data.settings === 'object') return data.settings;
-        return data || {};
-    }
-
     function schemaField(name) {
         var field = serverSchema && serverSchema[name];
         return field && typeof field === 'object' ? field : null;
@@ -157,13 +152,11 @@
 
     function applyCanonicalSettings(data) {
         data = data || {};
-        var settings = canonicalSettings(data);
-        serverSchema = data.schema && typeof data.schema === 'object'
-            ? data.schema
-            : (settings.schema && typeof settings.schema === 'object' ? settings.schema : serverSchema);
-        serverReady = !!(serverSchema && Object.keys(serverSchema).length);
+        var settings = data.settings && typeof data.settings === 'object' ? data.settings : {};
+        serverSchema = data.schema && typeof data.schema === 'object' ? data.schema : {};
+        serverReady = !!Object.keys(serverSchema).length;
         selectedSources = sourceList(pick(settings, 'Sources', 'sources', []));
-        availableItems = normalizeItems(data.availableSourceItems || data.AvailableSourceItems || settings.availableSourceItems || settings.AvailableSourceItems || []);
+        availableItems = normalizeItems(data.availableSourceItems || []);
 
         var interval = pick(settings, 'CheckIntervalHours', 'checkIntervalHours', null);
         var smart = pick(settings, 'UseTmdbSchedule', 'useTmdbSchedule', null);
