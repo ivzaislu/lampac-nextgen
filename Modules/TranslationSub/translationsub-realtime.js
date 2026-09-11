@@ -9,7 +9,7 @@
     var reconnectDelay = 2000;
     var pingTimer = null;
     var refreshTimer = null;
-    var everConnected = false;
+    var registeredProfileId = null;
 
     function storageGet(name, fallback) {
         try {
@@ -34,6 +34,19 @@
 
     function api() {
         return window.TranslationSubApi || null;
+    }
+
+    function currentProfileId() {
+        var client = api();
+        if (!client || typeof client.profileId !== 'function') return '0';
+        try { return String(client.profileId() || '0'); }
+        catch (e) { return '0'; }
+    }
+
+    function shouldConnect() {
+        try { if (document.hidden) return false; } catch (e) {}
+        try { if (typeof navigator !== 'undefined' && navigator.onLine === false) return false; } catch (e2) {}
+        return true;
     }
 
     function connectionId() {
@@ -73,7 +86,11 @@
         if (!client || typeof client.uid !== 'function' || typeof client.profileId !== 'function') return false;
         var uid = String(client.uid() || '');
         if (!uid) return false;
-        return send('TranslationSubRegister', [uid, String(client.profileId() || '0')]);
+
+        var profileId = currentProfileId();
+        if (!send('TranslationSubRegister', [uid, profileId])) return false;
+        registeredProfileId = profileId;
+        return true;
     }
 
     function refreshSnapshot() {
@@ -101,13 +118,45 @@
         pingTimer = null;
     }
 
+    function clearReconnect() {
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+
     function scheduleReconnect() {
-        if (reconnectTimer) return;
+        if (!shouldConnect() || reconnectTimer) return;
         reconnectTimer = setTimeout(function () {
             reconnectTimer = null;
             connect();
         }, reconnectDelay);
         reconnectDelay = Math.min(30000, Math.round(reconnectDelay * 1.7));
+    }
+
+    function disconnect() {
+        clearReconnect();
+        stopPing();
+        registeredProfileId = null;
+
+        var current = socket;
+        socket = null;
+        if (!current) return;
+
+        try {
+            if (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)
+                current.close();
+        } catch (e) {}
+    }
+
+    function syncProfile() {
+        var profileId = currentProfileId();
+        if (registeredProfileId === profileId) return;
+
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            if (register()) scheduleRefresh();
+            return;
+        }
+
+        if (shouldConnect()) connect();
     }
 
     function onMessage(event) {
@@ -118,8 +167,9 @@
 
         if (message.method === 'Connected') {
             register();
-            if (everConnected) scheduleRefresh();
-            everConnected = true;
+            // A successful socket handshake is also a recovery point for a failed
+            // initial HTTP snapshot, so refresh even on the first connection.
+            scheduleRefresh();
             return;
         }
 
@@ -127,37 +177,74 @@
     }
 
     function connect() {
-        if (typeof WebSocket !== 'function') return;
+        if (!shouldConnect() || typeof WebSocket !== 'function') return;
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
         var url = websocketUrl();
         if (!url) return;
 
-        try { socket = new WebSocket(url); }
+        var current;
+        try { current = new WebSocket(url); }
         catch (e) { scheduleReconnect(); return; }
 
-        socket.onopen = function () {
+        socket = current;
+        current.onopen = function () {
+            if (socket !== current) return;
             reconnectDelay = 2000;
             startPing();
         };
-        socket.onmessage = onMessage;
-        socket.onerror = function () {};
-        socket.onclose = function () {
+        current.onmessage = function (event) {
+            if (socket === current) onMessage(event);
+        };
+        current.onerror = function () {};
+        current.onclose = function () {
+            if (socket !== current) return;
             stopPing();
             socket = null;
+            registeredProfileId = null;
             scheduleReconnect();
         };
     }
 
+    function bindProfileChanges() {
+        try {
+            if (Lampa.Storage && Lampa.Storage.listener && typeof Lampa.Storage.listener.follow === 'function') {
+                Lampa.Storage.listener.follow('change', function (event) {
+                    if (event && event.name === 'lampac_profile_id') syncProfile();
+                });
+            }
+        } catch (e) {}
+
+        try {
+            if (Lampa.Account && Lampa.Account.listener && typeof Lampa.Account.listener.follow === 'function') {
+                Lampa.Account.listener.follow('profile_select', syncProfile);
+                Lampa.Account.listener.follow('profile_check', syncProfile);
+            }
+        } catch (e2) {}
+    }
+
     function start() {
+        bindProfileChanges();
         connect();
 
         try {
             document.addEventListener('visibilitychange', function () {
-                if (document.hidden) return;
-                if (!register()) connect();
+                if (document.hidden) {
+                    disconnect();
+                    return;
+                }
+                reconnectDelay = 2000;
+                connect();
             });
         } catch (e) {}
+
+        try {
+            window.addEventListener('offline', disconnect);
+            window.addEventListener('online', function () {
+                reconnectDelay = 2000;
+                connect();
+            });
+        } catch (e2) {}
     }
 
     window.TranslationSubRuntime.onReady(start);
