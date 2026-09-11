@@ -15,12 +15,15 @@
         newSeasonMode: 'translationsub_new_season_mode'
     };
 
-    var added = false;
     var serverReady = false;
     var serverSchema = {};
     var availableItems = [];
     var selectedSources = [];
     var sourceParamKeys = {};
+    var settingsLoadSeq = 0;
+    var reloadTimer = null;
+    var syncInFlight = false;
+    var pendingSettingsBody = null;
 
     function storageGet(name, fallback) {
         try {
@@ -188,10 +191,7 @@
         } catch (e2) {}
     }
 
-    function syncServerSettings() {
-        var api = window.TranslationSubApi;
-        if (!api || typeof api.updateSettings !== 'function' || !serverReady) return;
-
+    function buildSettingsBody() {
         selectedSources = availableItems.length ? currentSelectionFromTriggers() : selectedSources.slice();
         var body = { sources: selectedSources.slice() };
         var interval = intOrNull(KEYS.interval);
@@ -205,17 +205,51 @@
         if (tmdbHours !== null) body.tmdbRefreshHours = tmdbHours;
         if (endedDays !== null) body.endedRefreshDays = endedDays;
         if (seasonMode !== null && seasonMode !== '') body.newSeasonMode = String(seasonMode);
+        return body;
+    }
+
+    function flushServerSettings() {
+        if (syncInFlight || !pendingSettingsBody || !serverReady) return;
+
+        var api = window.TranslationSubApi;
+        if (!api || typeof api.updateSettings !== 'function') return;
+
+        var body = pendingSettingsBody;
+        pendingSettingsBody = null;
+        syncInFlight = true;
 
         api.updateSettings(body, function (response) {
+            syncInFlight = false;
+
             if (!response || response.success !== true) {
                 notify('Не удалось сохранить настройки TranslationSub');
+                if (pendingSettingsBody) flushServerSettings();
+                else scheduleServerReload(1000);
                 return;
             }
+
+            // Do not apply an older canonical response over a newer local edit.
+            // The queued body was captured at onChange time and is sent next.
+            if (pendingSettingsBody) {
+                flushServerSettings();
+                return;
+            }
+
             applyCanonicalSettings(response);
+            rebuildSettings();
             refreshPlugin();
         }, function () {
+            syncInFlight = false;
             notify('Не удалось сохранить настройки TranslationSub');
+            if (pendingSettingsBody) flushServerSettings();
+            else scheduleServerReload(1000);
         });
+    }
+
+    function syncServerSettings() {
+        if (!serverReady) return;
+        pendingSettingsBody = buildSettingsBody();
+        flushServerSettings();
     }
 
     function openBalancersSettings() {
@@ -266,18 +300,23 @@
     }
 
     function rebuildSettings() {
-        if (added || !window.Lampa || !Lampa.SettingsApi) return;
-        added = true;
+        if (!window.Lampa || !Lampa.SettingsApi) return;
 
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(ROOT); } catch (e) {}
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(BALANCERS); } catch (e2) {}
+        if (!serverReady) {
+            try {
+                if (typeof Lampa.SettingsApi.removeComponent === 'function') Lampa.SettingsApi.removeComponent(BALANCERS);
+            } catch (e3) {}
+        }
 
         Lampa.SettingsApi.addComponent({ component: ROOT, name: 'Подписки на озвучки', icon: settingsBellSvg() });
 
         if (serverReady) {
             Lampa.SettingsApi.addComponent({ component: BALANCERS, name: 'Балансеры для опроса', icon: '' });
 
-            var activeCount = selectedSources.filter(function (id) { return availableIdSet()[id]; }).length;
+            var available = availableIdSet();
+            var activeCount = selectedSources.filter(function (id) { return available[id]; }).length;
             Lampa.SettingsApi.addParam({
                 component: ROOT,
                 param: { name: 'translationsub_open_balancers', type: 'button', 'default': '' },
@@ -351,19 +390,33 @@
         }
     }
 
+    function scheduleServerReload(delay) {
+        clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(function () {
+            reloadTimer = null;
+            loadServerSettings();
+        }, typeof delay === 'number' ? delay : 15000);
+    }
+
     function loadServerSettings() {
         var api = window.TranslationSubApi;
         if (!api || typeof api.settings !== 'function') return false;
 
+        var seq = ++settingsLoadSeq;
         api.settings(function (data) {
+            if (seq !== settingsLoadSeq) return;
+            clearTimeout(reloadTimer);
+            reloadTimer = null;
             applyCanonicalSettings(data);
             rebuildSettings();
         }, function () {
+            if (seq !== settingsLoadSeq) return;
             serverReady = false;
             serverSchema = {};
             availableItems = [];
             selectedSources = [];
             rebuildSettings();
+            scheduleServerReload(15000);
         });
         return true;
     }
