@@ -7,6 +7,16 @@
     var observer = null;
     var applyTimer = null;
 
+    function openNotice() {
+        try {
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.open === 'function') {
+                window.TranslationSubBadgeState.open();
+                return;
+            }
+        } catch (e) {}
+        openSubscriptions();
+    }
+
     function openSubscriptions() {
         try {
             if (window.TranslationSub && typeof window.TranslationSub.openSubscriptions === 'function')
@@ -14,8 +24,28 @@
         } catch (e) {}
     }
 
-    function menuIcon() {
+    function iconAnchor() {
         return '<svg viewBox="0 0 24 24" aria-hidden="true"></svg>';
+    }
+
+    function ensureHeadButton() {
+        if (typeof $ !== 'function') return;
+        var row = $('.head__actions').first();
+        if (!row.length) return;
+
+        $('.translationsub-head').each(function () {
+            if (!$.contains(row[0], this)) $(this).remove();
+        });
+
+        var button = row.find('.translationsub-head').first();
+        if (!button.length) {
+            button = $('<div class="head__action selector translationsub-head" title="Уведомления озвучек">' + iconAnchor() + '</div>');
+            row.append(button);
+        }
+
+        button.attr('title', 'Уведомления озвучек');
+        button.off('hover:enter.translationsubNavigation');
+        button.on('hover:enter.translationsubNavigation', openNotice);
     }
 
     function mainMenuList() {
@@ -51,7 +81,7 @@
         var item = menu.find('.translationsub-menu-item').first();
         if (!item.length) {
             item = $('<li class="menu__item selector translationsub-menu-item" data-action="translationsub">' +
-                '<div class="menu__ico">' + menuIcon() + '</div>' +
+                '<div class="menu__ico">' + iconAnchor() + '</div>' +
                 '<div class="menu__text">Озвучки</div>' +
             '</li>');
 
@@ -62,17 +92,19 @@
             else menu.append(item);
         }
 
-        item.find('.menu__text').first().text('Озвучки');
+        var text = item.find('.menu__text').first();
+        if (text.text() !== 'Озвучки') text.text('Озвучки');
         item.off('hover:enter.translationsubNavigation');
         item.on('hover:enter.translationsubNavigation', openSubscriptions);
     }
 
     function apply() {
+        ensureHeadButton();
         ensureMenuItem();
 
         try {
-            if (window.TranslationSub && typeof window.TranslationSub.refresh === 'function')
-                window.TranslationSub.refresh();
+            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.render === 'function')
+                window.TranslationSubBadgeState.render();
         } catch (e) {}
 
         try {
@@ -129,6 +161,7 @@
 
         window.TranslationSubNavigation = {
             refresh: function () { scheduleApply(0); },
+            openNotice: openNotice,
             openSubscriptions: openSubscriptions
         };
     }
