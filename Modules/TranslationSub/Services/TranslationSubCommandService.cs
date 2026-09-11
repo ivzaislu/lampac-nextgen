@@ -111,10 +111,8 @@ public static class TranslationSubCommandService
                 TranslationId = variant.translation_id,
                 TranslationName = variant.translation,
                 CurrentSeason = season,
-                CurrentEpisode = 0,
                 LastSeason = season,
                 LastEpisode = latestEpisode,
-                Notified = latestEpisode <= 0,
                 Sources = sources,
                 CreatedAt = DateTime.Now,
                 LastCheckedAt = DateTime.Now
