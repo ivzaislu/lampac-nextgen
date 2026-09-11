@@ -132,27 +132,12 @@
         return window.TranslationSubRuntime;
     }
 
-    function registerManifest() {
-        try {
-            if (!Lampa.Manifest) Lampa.Manifest = {};
-            var plugins = Lampa.Manifest.plugins;
-            if (Array.isArray(plugins)) {
-                if (!plugins.some(function (plugin) { return plugin && plugin.component === META.component; })) plugins.push(META);
-                return;
-            }
-            if (!plugins || typeof plugins !== 'object') plugins = Lampa.Manifest.plugins = {};
-            plugins[META.component] = META;
-        } catch (e) { log('manifest registration failed', e); }
-    }
-
     function openSubscriptionsPage() {
         if (!window.Lampa || !Lampa.Activity || typeof Lampa.Activity.push !== 'function') return;
         Lampa.Activity.push({ url: '', title: META.name, component: 'translationsub_list', page: 1 });
     }
 
     function start() {
-        registerManifest();
-
         window.TranslationSub = {
             openSubscriptions: openSubscriptionsPage
         };
