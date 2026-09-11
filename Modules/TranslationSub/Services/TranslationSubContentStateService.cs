@@ -47,7 +47,11 @@ public static class TranslationSubContentStateService
 
         result.Eligible = true;
 
-        var subscriptions = TranslationSubProjectionService.ForProfile(uid, profileId);
+        // Subscription identity is shared user metadata. Profile progress is not
+        // needed to answer whether a voice subscription exists for this content.
+        var subscriptions = SubscriptionStore.Load()
+            .Where(x => x != null && string.Equals(x.Uid, uid, StringComparison.Ordinal))
+            .ToList();
         bool anySubscription = subscriptions.Any(x => SameContent(x, content));
         result.Button = new TranslationSubContentButtonState
         {
