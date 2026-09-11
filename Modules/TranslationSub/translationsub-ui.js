@@ -174,7 +174,7 @@
     function start() {
         injectStyles();
         bindLampa();
-        window.TranslationSubUi = { refresh: refresh, mode: layoutMode, posterUrl: posterUrl };
+        window.TranslationSubUi = { refresh: refresh, posterUrl: posterUrl };
         refresh();
         try {
             window.addEventListener('resize', refresh);

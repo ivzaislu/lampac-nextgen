@@ -212,13 +212,12 @@
                 var id = String(item.id || '');
                 var title = String(item.title || 'Без названия');
                 var voice = String(item.translationName || 'Озвучка');
-                var newCount = Number(item.newCount || 0) || 0;
                 var poster = posterUrl(item.poster || '');
                 var posterHtml = poster
                     ? '<img src="' + escapeHtml(poster) + '" alt="">'
                     : '<div class="translationsub-card__poster-empty"></div>';
 
-                var card = $('<div class="translationsub-card selector' + (item.hasNewEpisodes ? ' translationsub-card--has-new' : '') + '" data-subscription-id="' + escapeHtml(id) + '" data-translationsub-new-count="' + newCount + '">' +
+                var card = $('<div class="translationsub-card selector' + (item.hasNewEpisodes ? ' translationsub-card--has-new' : '') + '" data-subscription-id="' + escapeHtml(id) + '">' +
                     '<div class="translationsub-card__poster">' + posterHtml + '</div>' +
                     '<div class="translationsub-card__body">' +
                         '<div class="translationsub-card__title">' + escapeHtml(title) + '</div>' +
