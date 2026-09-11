@@ -15,8 +15,8 @@ namespace TranslationSub;
 
 /// <summary>
 /// Canonical server-owned TranslationSub settings API. The Lampa client may
-/// mirror values into its Settings UI, but policy and selected balancers are
-/// persisted and normalized only on the backend.
+/// mirror values into its Settings UI, but policy, defaults, valid options and
+/// selected balancers are persisted and normalized only on the backend.
 /// </summary>
 public class TranslationSubSettingsController : BaseController
 {
@@ -30,6 +30,7 @@ public class TranslationSubSettingsController : BaseController
         var json = JObject.FromObject(TranslationSettingsStore.Get(uid));
         json["availableSources"] = JArray.FromObject(options.Select(x => x.id));
         json["availableSourceItems"] = JArray.FromObject(options);
+        json["schema"] = JObject.FromObject(TranslationSettingsStore.UiSchema());
         return ContentTo(json.ToString(Formatting.None));
     }
 
@@ -60,17 +61,17 @@ public class TranslationSubSettingsController : BaseController
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("{\"success\":false,\"error\":\"uid_required\"}");
 
-        int interval = body?.Value<int?>("checkIntervalHours") ?? 1;
-        bool? useTmdbSchedule = body?["useTmdbSchedule"]?.Type == JTokenType.Null
-            ? null
-            : body?.Value<bool?>("useTmdbSchedule");
-        int? tmdbRefreshHours = body?.Value<int?>("tmdbRefreshHours");
-        int? endedRefreshDays = body?.Value<int?>("endedRefreshDays");
-        string newSeasonMode = body?.Value<string>("newSeasonMode");
-        var sources = new List<string>();
+        var current = TranslationSettingsStore.Get(uid);
+        int interval = body?.Value<int?>("checkIntervalHours") ?? current.CheckIntervalHours;
+        bool useTmdbSchedule = body?.Value<bool?>("useTmdbSchedule") ?? current.UseTmdbSchedule;
+        int tmdbRefreshHours = body?.Value<int?>("tmdbRefreshHours") ?? current.TmdbRefreshHours;
+        int endedRefreshDays = body?.Value<int?>("endedRefreshDays") ?? current.EndedRefreshDays;
+        string newSeasonMode = body?.Value<string>("newSeasonMode") ?? current.NewSeasonMode;
+        var sources = current.Sources?.ToList() ?? new List<string>();
 
         if (body?["sources"] is JArray arr)
         {
+            sources = new List<string>();
             foreach (var item in arr)
             {
                 string value = TranslationSettingsStore.NormalizeSourceId(item?.ToString());
@@ -93,6 +94,7 @@ public class TranslationSubSettingsController : BaseController
         {
             success = true,
             settings,
+            schema = TranslationSettingsStore.UiSchema(),
             availableSources = options.Select(x => x.id).ToList(),
             availableSourceItems = options
         }));
