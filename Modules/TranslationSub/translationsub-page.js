@@ -26,15 +26,11 @@
     }
 
     function posterUrl(path) {
-        path = String(path || '');
-        if (!path) return '';
-        if (/^https?:\/\//i.test(path)) return path;
-
         try {
-            if (Lampa.Api && typeof Lampa.Api.img === 'function') return Lampa.Api.img(path, 'w300');
+            if (window.TranslationSubUi && typeof window.TranslationSubUi.posterUrl === 'function')
+                return window.TranslationSubUi.posterUrl(path);
         } catch (e) {}
-
-        return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
+        return '';
     }
 
     function metaHtml(item) {
@@ -87,32 +83,6 @@
         return body + '</div>';
     }
 
-    function loadSnapshot(success, error) {
-        success = typeof success === 'function' ? success : function () {};
-        error = typeof error === 'function' ? error : function () {};
-
-        try {
-            if (window.TranslationSubBadgeState
-                && typeof window.TranslationSubBadgeState.refresh === 'function'
-                && typeof window.TranslationSubBadgeState.snapshot === 'function') {
-                window.TranslationSubBadgeState.refresh(function () {
-                    var snapshot = window.TranslationSubBadgeState.snapshot();
-                    if (snapshot && typeof snapshot === 'object') success(snapshot);
-                    else error();
-                });
-                return;
-            }
-        } catch (e) {}
-
-        var api = window.TranslationSubApi;
-        if (api && typeof api.snapshot === 'function') {
-            api.snapshot(success, error);
-            return;
-        }
-
-        error();
-    }
-
     function applySnapshot(snapshot) {
         try {
             if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.applySnapshot === 'function')
@@ -127,8 +97,8 @@
         var self = this;
         var initialized = false;
         var destroyed = false;
-        var requestVersion = 0;
-        var reloadRef = null;
+        var unsubscribeState = null;
+        var hasSnapshot = false;
 
         this.create = function () {
             scroll.minus();
@@ -143,11 +113,6 @@
 
         this.start = function () {
             if (Lampa.Activity.active().activity !== this.activity) return;
-
-            if (!initialized) {
-                initialized = true;
-                this.initialize();
-            }
 
             Lampa.Controller.add('content', {
                 toggle: function () {
@@ -169,13 +134,20 @@
             });
 
             Lampa.Controller.toggle('content');
+
+            if (!initialized) {
+                initialized = true;
+                this.initialize();
+            }
         };
 
         this.destroy = function () {
             destroyed = true;
-            requestVersion++;
-            if (window.TranslationSubPageRefresh === reloadRef) window.TranslationSubPageRefresh = null;
-            try { scroll.destroy(); } catch (e) {}
+            if (typeof unsubscribeState === 'function') {
+                try { unsubscribeState(); } catch (e) {}
+            }
+            unsubscribeState = null;
+            try { scroll.destroy(); } catch (e2) {}
             html.remove();
         };
 
@@ -223,7 +195,6 @@
                     }
 
                     var next = applySnapshot(result.snapshot);
-                    render(next);
                     var count = next && next.badge ? Number(next.badge.count || 0) || 0 : 0;
                     notify(count ? ('С новыми сериями: ' + count) : 'Новых серий нет');
                 }, function () {
@@ -286,32 +257,41 @@
             focusAfterRender(focusedId);
         }
 
-        function load(done) {
-            done = typeof done === 'function' ? done : function () {};
-            if (destroyed) return;
-            var version = ++requestVersion;
-            try { self.activity.loader(true); } catch (e) {}
-
-            loadSnapshot(function (snapshot) {
-                if (destroyed || version !== requestVersion) return;
-                try { self.activity.loader(false); } catch (e) {}
-                render(snapshot);
-                try { self.activity.toggle(); } catch (e2) {}
-                done(snapshot);
-            }, function () {
-                if (destroyed || version !== requestVersion) return;
-                try { self.activity.loader(false); } catch (e) {}
-                render({ subscriptions: [], badge: { count: 0 } });
-                try { self.activity.toggle(); } catch (e2) {}
-                notify('Не удалось загрузить подписки');
-            });
+        function consumeSnapshot(snapshot) {
+            if (destroyed || !snapshot || typeof snapshot !== 'object') return;
+            hasSnapshot = true;
+            try { self.activity.loader(false); } catch (e) {}
+            render(snapshot);
+            try { self.activity.toggle(); } catch (e2) {}
         }
 
-        reloadRef = load;
-        window.TranslationSubPageRefresh = reloadRef;
+        function bindState() {
+            var badge = window.TranslationSubBadgeState;
+            if (!badge || typeof badge.subscribe !== 'function') return false;
+
+            unsubscribeState = badge.subscribe(function (value) {
+                if (value && value.snapshot) consumeSnapshot(value.snapshot);
+            });
+            return true;
+        }
 
         this.initialize = function () {
-            load();
+            var badge = window.TranslationSubBadgeState;
+            if (!bindState() || !badge || typeof badge.refresh !== 'function') {
+                render({ subscriptions: [], badge: { count: 0 } });
+                notify('TranslationSub state недоступен');
+                return;
+            }
+
+            if (hasSnapshot || (typeof badge.snapshot === 'function' && badge.snapshot())) return;
+
+            try { self.activity.loader(true); } catch (e) {}
+            badge.refresh(function () {
+                if (destroyed || hasSnapshot) return;
+                try { self.activity.loader(false); } catch (e) {}
+                render({ subscriptions: [], badge: { count: 0 } });
+                notify('Не удалось загрузить подписки');
+            });
         };
     }
 
