@@ -49,9 +49,6 @@
             '</div>';
         }
 
-        if (display.source)
-            body += '<div class="translationsub-meta-v2__source">' + escapeHtml(display.source) + '</div>';
-
         if (display.tmdbFacts || display.tmdbNext || (schedule && schedule.text)) {
             var title = display.tmdbTitle ? ' title="' + escapeHtml(display.tmdbTitle) + '"' : '';
             body += '<div class="translationsub-tmdb-v2"' + title + '>';
