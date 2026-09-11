@@ -101,7 +101,7 @@ catch (err) { error(`Combined TranslationSub bundle syntax error: ${err.message}
 if (observerCount !== 1) error(`Expected exactly one global MutationObserver, found ${observerCount}`);
 if (componentRegistrationCount !== 1) error(`translationsub_list must be registered exactly once, found ${componentRegistrationCount}`);
 if (globalSelectOverrides !== 0) error(`Global Lampa.Select.show override found ${globalSelectOverrides} time(s)`);
-if (/\b(?:enabledSources|refreshSources|TranslationSubPageRefresh)\b/.test(bundle))
+if (/\b(?:enabledSources|refreshSources|TranslationSubPageRefresh|checkUpdates|forceCheckUpdatesUI)\b/.test(bundle))
   error('Obsolete client compatibility hook returned');
 if (/translationsub-(?:layout-v3|mobile-button|polish|tmdb-ui)-style/.test(bundle))
   error('Removed presentation patch style owner returned');
@@ -122,12 +122,16 @@ if (!api.includes("'/translationsub/v2/subscriptions/' + id + '/remove'"))
   error('Thin API client is missing canonical POST unsubscribe command route');
 
 const core = read('translationsub.js');
-for (const symbol of ['injectFullButton', 'registerComponent', 'SubscriptionComponent', 'schedulePolling', 'addSettings', 'checkIntervalMinutes']) {
+for (const symbol of [
+  'injectFullButton', 'registerComponent', 'SubscriptionComponent', 'schedulePolling',
+  'addSettings', 'checkIntervalMinutes', 'refreshUpdates', 'forceCheckUpdatesUI', 'applySnapshot'
+]) {
   if (core.includes(symbol)) error(`translationsub.js still contains obsolete owner: ${symbol}`);
 }
-if (!core.includes('api.check(') || !core.includes('applySnapshot'))
-  error('Core manual check must consume the snapshot returned by v2/check');
+if (/api\.check|TranslationSubApi\.check/.test(core))
+  error('Core must not own manual subscription checks');
 if (/<path\b/i.test(core)) error('Core must not own bell SVG geometry');
+if (!core.includes('injectHeadButton')) error('Core must remain the single header action owner');
 
 const ui = read('translationsub-ui.js');
 if (!ui.includes('translationsub-layout--mobile') || !ui.includes('translationsub-layout--tv'))
@@ -188,6 +192,10 @@ if (/Lampa\.Select\.show\s*=/.test(navigation)) error('Navigation must not monke
 if (/repairTimer|15000/.test(navigation)) error('Navigation must not use periodic DOM repair polling');
 if (/function\s+injectStyles\s*\(/.test(navigation)) error('Navigation must not own bell/icon styling');
 if (/<path\b/i.test(navigation)) error('Navigation must not own bell SVG geometry');
+if (/TranslationSubNotice|function\s+openNotice\s*\(|function\s+bindHead\s*\(/.test(navigation))
+  error('Navigation must not duplicate notice/header ownership');
+if (!navigation.includes('TranslationSub.openSubscriptions'))
+  error('Navigation menu must delegate subscriptions opening to core');
 
 const notice = read('translationsub-notice.js');
 if (/new\s+MutationObserver/.test(notice)) error('Notice drawer must not own a global MutationObserver');
@@ -205,6 +213,12 @@ if (!notice.includes('TranslationSubCardSource.open'))
   error('Notice drawer must delegate item navigation to CardSource');
 if (/image\.tmdb\.org|Lampa\.Api\.img|Lampa\.TMDB\.image/.test(notice))
   error('Notice drawer must use the shared poster presentation helper');
+if (/\blastUpdates\b|function\s+loadUpdates\s*\(|function\s+refresh\s*\(|TranslationSubBadgeState\.refresh/.test(notice))
+  error('Notice drawer must not own snapshot state or refresh');
+if (!/TranslationSubBadgeState[\s\S]{0,180}?updates/.test(notice))
+  error('Notice drawer may only read cached updates from BadgeState when opened directly');
+if (!/window\.TranslationSubNotice\s*=\s*\{\s*open\s*:\s*openDrawer\s*\}/m.test(notice))
+  error('Notice public surface must expose only open()');
 
 const badge = read('translationsub-badge-state.js');
 if (/new\s+MutationObserver/.test(badge)) error('Badge state must not own a global MutationObserver');
