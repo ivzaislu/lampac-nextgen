@@ -174,11 +174,7 @@
             if (!item) return;
 
             card.off('.translationsubSource');
-
-            card.on('hover:enter.translationsubSource', function () {
-                openCard(item);
-            });
-
+            card.on('hover:enter.translationsubSource', function () { openCard(item); });
             card.on('hover:long.translationsubSource', function (event) {
                 try { if (event && typeof event.stopPropagation === 'function') event.stopPropagation(); } catch (e) {}
                 showActions(item);
@@ -193,17 +189,5 @@
         };
     }
 
-    if (window.Lampa) start();
-    else {
-        var attempts = 0;
-        var wait = setInterval(function () {
-            attempts++;
-            if (window.Lampa) {
-                clearInterval(wait);
-                start();
-            } else if (attempts > 80) {
-                clearInterval(wait);
-            }
-        }, 250);
-    }
+    window.TranslationSubRuntime.onReady(start);
 })();
