@@ -6,7 +6,6 @@
 
     var ROOT = 'translationsub_settings';
     var BALANCERS = 'translationsub_balancers';
-    var SOURCES_KEY = 'translationsub_sources';
     var KEYS = {
         interval: 'translationsub_interval_hours',
         cardSource: 'translationsub_card_source',
@@ -17,6 +16,8 @@
     };
 
     var added = false;
+    var serverReady = false;
+    var serverSchema = {};
     var availableItems = [];
     var selectedSources = [];
     var sourceParamKeys = {};
@@ -49,19 +50,25 @@
         return !!fallback;
     }
 
-    function intSetting(name, fallback) {
-        var value = parseInt(storageGet(name, String(fallback)), 10);
-        return isNaN(value) ? fallback : value;
+    function boolOrNull(name) {
+        var value = storageGet(name, null);
+        if (value === null || value === undefined || value === '') return null;
+        if (value === true || value === 1 || value === '1' || value === 'true') return true;
+        if (value === false || value === 0 || value === '0' || value === 'false') return false;
+        return null;
+    }
+
+    function intOrNull(name) {
+        var raw = storageGet(name, null);
+        if (raw === null || raw === undefined || raw === '') return null;
+        var value = parseInt(raw, 10);
+        return isNaN(value) ? null : value;
     }
 
     function sourceList(value) {
-        if (typeof value === 'string') {
-            try { value = JSON.parse(value); }
-            catch (e) { value = value ? value.split(',') : []; }
-        }
         if (!Array.isArray(value)) return [];
         var seen = {};
-        return value.map(function (item) { return String(item || '').trim().toLowerCase(); })
+        return value.map(function (item) { return String(item || '').trim(); })
             .filter(function (item) {
                 if (!item || seen[item]) return false;
                 seen[item] = true;
@@ -87,7 +94,7 @@
         var seen = {};
         return value.map(function (item) {
             item = item || {};
-            var id = String(item.id || item.Id || '').trim().toLowerCase();
+            var id = String(item.id || item.Id || '').trim();
             var name = String(item.name || item.Name || id).trim();
             return { id: id, name: name || id };
         }).filter(function (item) {
@@ -108,15 +115,6 @@
             '<path d="M28.2 25.4H8.8c1.9-2.1 3-4.5 3-7.3v-3.2a6.7 6.7 0 0 1 13.4 0v3.2c0 2.8 1.1 5.2 3 7.3Z" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>' +
             '<path d="M15.2 29.1a3.7 3.7 0 0 0 6.6 0" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>' +
         '</svg>';
-    }
-
-    function hourValues() {
-        var values = {};
-        for (var i = 1; i <= 24; i++) {
-            var suffix = i === 1 || i === 21 ? 'час' : ((i >= 2 && i <= 4) || (i >= 22 && i <= 24) ? 'часа' : 'часов');
-            values[String(i)] = i + ' ' + suffix;
-        }
-        return values;
     }
 
     function availableIdSet() {
@@ -142,12 +140,31 @@
         return data || {};
     }
 
+    function schemaField(name) {
+        var field = serverSchema && serverSchema[name];
+        return field && typeof field === 'object' ? field : null;
+    }
+
+    function schemaValues(name) {
+        var field = schemaField(name);
+        var values = field && field.values;
+        return values && typeof values === 'object' && !Array.isArray(values) ? values : null;
+    }
+
+    function schemaDefault(name) {
+        var field = schemaField(name);
+        return field && field.defaultValue !== undefined ? field.defaultValue : null;
+    }
+
     function applyCanonicalSettings(data) {
         data = data || {};
         var settings = canonicalSettings(data);
+        serverSchema = data.schema && typeof data.schema === 'object'
+            ? data.schema
+            : (settings.schema && typeof settings.schema === 'object' ? settings.schema : serverSchema);
+        serverReady = !!(serverSchema && Object.keys(serverSchema).length);
         selectedSources = sourceList(pick(settings, 'Sources', 'sources', []));
-        availableItems = normalizeItems(data.availableSourceItems || data.AvailableSourceItems || settings.availableSourceItems || settings.AvailableSourceItems || availableItems);
-        storageSet(SOURCES_KEY, selectedSources);
+        availableItems = normalizeItems(data.availableSourceItems || data.AvailableSourceItems || settings.availableSourceItems || settings.AvailableSourceItems || []);
 
         var interval = pick(settings, 'CheckIntervalHours', 'checkIntervalHours', null);
         var smart = pick(settings, 'UseTmdbSchedule', 'useTmdbSchedule', null);
@@ -158,7 +175,7 @@
         if (smart !== null) storageSet(KEYS.smartTmdb, !!smart);
         if (tmdbHours !== null) storageSet(KEYS.tmdbRefreshHours, String(tmdbHours));
         if (endedDays !== null) storageSet(KEYS.endedRefreshDays, String(endedDays));
-        if (seasonMode) storageSet(KEYS.newSeasonMode, String(seasonMode));
+        if (seasonMode !== null) storageSet(KEYS.newSeasonMode, String(seasonMode));
 
         availableItems.forEach(function (item) {
             var key = sourceParamKeys[item.id] || sourceParamKey(item.id);
@@ -179,18 +196,23 @@
 
     function syncServerSettings() {
         var api = window.TranslationSubApi;
-        if (!api || typeof api.updateSettings !== 'function') return;
+        if (!api || typeof api.updateSettings !== 'function' || !serverReady) return;
 
         selectedSources = availableItems.length ? currentSelectionFromTriggers() : selectedSources.slice();
+        var body = { sources: selectedSources.slice() };
+        var interval = intOrNull(KEYS.interval);
+        var smart = boolOrNull(KEYS.smartTmdb);
+        var tmdbHours = intOrNull(KEYS.tmdbRefreshHours);
+        var endedDays = intOrNull(KEYS.endedRefreshDays);
+        var seasonMode = storageGet(KEYS.newSeasonMode, null);
 
-        api.updateSettings({
-            checkIntervalHours: intSetting(KEYS.interval, 1),
-            sources: selectedSources,
-            useTmdbSchedule: settingBool(KEYS.smartTmdb, true),
-            tmdbRefreshHours: intSetting(KEYS.tmdbRefreshHours, 24),
-            endedRefreshDays: intSetting(KEYS.endedRefreshDays, 7),
-            newSeasonMode: String(storageGet(KEYS.newSeasonMode, 'auto') || 'auto')
-        }, function (response) {
+        if (interval !== null) body.checkIntervalHours = interval;
+        if (smart !== null) body.useTmdbSchedule = smart;
+        if (tmdbHours !== null) body.tmdbRefreshHours = tmdbHours;
+        if (endedDays !== null) body.endedRefreshDays = endedDays;
+        if (seasonMode !== null && seasonMode !== '') body.newSeasonMode = String(seasonMode);
+
+        api.updateSettings(body, function (response) {
             if (!response || response.success !== true) {
                 notify('Не удалось сохранить настройки TranslationSub');
                 return;
@@ -236,6 +258,19 @@
         });
     }
 
+    function addServerSelect(schemaName, storageKey, name, description) {
+        var values = schemaValues(schemaName);
+        var defaultValue = schemaDefault(schemaName);
+        if (!values || defaultValue === null) return;
+
+        Lampa.SettingsApi.addParam({
+            component: ROOT,
+            param: { name: storageKey, type: 'select', values: values, 'default': String(defaultValue) },
+            field: { name: name, description: description },
+            onChange: syncServerSettings
+        });
+    }
+
     function rebuildSettings() {
         if (added || !window.Lampa || !Lampa.SettingsApi) return;
         added = true;
@@ -244,84 +279,82 @@
         try { if (typeof Lampa.SettingsApi.removeParams === 'function') Lampa.SettingsApi.removeParams(BALANCERS); } catch (e2) {}
 
         Lampa.SettingsApi.addComponent({ component: ROOT, name: 'Подписки на озвучки', icon: settingsBellSvg() });
-        Lampa.SettingsApi.addComponent({ component: BALANCERS, name: 'Балансеры для опроса', icon: '' });
 
-        var activeCount = selectedSources.filter(function (id) { return availableIdSet()[id]; }).length;
-        Lampa.SettingsApi.addParam({
-            component: ROOT,
-            param: { name: 'translationsub_open_balancers', type: 'button', 'default': '' },
-            field: {
-                name: 'Балансеры для опроса',
-                description: availableItems.length
-                    ? 'Активно выбрано: ' + activeCount + ' из ' + availableItems.length
-                    : 'Lampac не вернул доступных online-балансеров'
-            },
-            onChange: openBalancersSettings
-        });
+        if (serverReady) {
+            Lampa.SettingsApi.addComponent({ component: BALANCERS, name: 'Балансеры для опроса', icon: '' });
 
-        Lampa.SettingsApi.addParam({
-            component: ROOT,
-            param: { name: KEYS.interval, type: 'select', values: hourValues(), 'default': '1' },
-            field: { name: 'Интервал активного опроса', description: 'Как часто проверять выбранные балансеры после выхода серии по TMDB.' },
-            onChange: syncServerSettings
-        });
+            var activeCount = selectedSources.filter(function (id) { return availableIdSet()[id]; }).length;
+            Lampa.SettingsApi.addParam({
+                component: ROOT,
+                param: { name: 'translationsub_open_balancers', type: 'button', 'default': '' },
+                field: {
+                    name: 'Балансеры для опроса',
+                    description: availableItems.length
+                        ? 'Активно выбрано: ' + activeCount + ' из ' + availableItems.length
+                        : 'Lampac не вернул доступных online-балансеров'
+                },
+                onChange: openBalancersSettings
+            });
 
-        Lampa.SettingsApi.addParam({
-            component: ROOT,
-            param: { name: KEYS.smartTmdb, type: 'trigger', values: '', 'default': true },
-            field: { name: 'Умное расписание TMDB', description: 'Не опрашивать балансеры до фактического выхода серии или сезона.' },
-            onChange: syncServerSettings
-        });
+            addServerSelect(
+                'checkIntervalHours',
+                KEYS.interval,
+                'Интервал активного опроса',
+                'Как часто проверять выбранные балансеры после выхода серии по TMDB.'
+            );
 
-        Lampa.SettingsApi.addParam({
-            component: ROOT,
-            param: {
-                name: KEYS.tmdbRefreshHours,
-                type: 'select',
-                values: { '6': '6 часов', '12': '12 часов', '24': '24 часа', '48': '2 дня', '72': '3 дня', '168': '7 дней' },
-                'default': '24'
-            },
-            field: { name: 'Обновление расписания TMDB', description: 'Как часто перепроверять расписание активных сериалов.' },
-            onChange: syncServerSettings
-        });
+            var smartDefault = schemaDefault('useTmdbSchedule');
+            if (smartDefault !== null) {
+                Lampa.SettingsApi.addParam({
+                    component: ROOT,
+                    param: { name: KEYS.smartTmdb, type: 'trigger', values: '', 'default': !!smartDefault },
+                    field: { name: 'Умное расписание TMDB', description: 'Не опрашивать балансеры до фактического выхода серии или сезона.' },
+                    onChange: syncServerSettings
+                });
+            }
 
-        Lampa.SettingsApi.addParam({
-            component: ROOT,
-            param: {
-                name: KEYS.endedRefreshDays,
-                type: 'select',
-                values: { '7': '7 дней', '14': '14 дней', '30': '30 дней', '60': '60 дней' },
-                'default': '7'
-            },
-            field: { name: 'Перепроверка завершённых сериалов', description: 'Как часто TMDB проверяется на неожиданное продолжение.' },
-            onChange: syncServerSettings
-        });
+            addServerSelect(
+                'tmdbRefreshHours',
+                KEYS.tmdbRefreshHours,
+                'Обновление расписания TMDB',
+                'Как часто перепроверять расписание активных сериалов.'
+            );
+            addServerSelect(
+                'endedRefreshDays',
+                KEYS.endedRefreshDays,
+                'Перепроверка завершённых сериалов',
+                'Как часто TMDB проверяется на неожиданное продолжение.'
+            );
+            addServerSelect(
+                'newSeasonMode',
+                KEYS.newSeasonMode,
+                'Когда начинается новый сезон',
+                'Поведение подписки после появления следующего сезона.'
+            );
+        } else {
+            Lampa.SettingsApi.addParam({
+                component: ROOT,
+                param: { name: 'translationsub_server_settings_unavailable', type: 'title', 'default': '' },
+                field: { name: 'Серверные настройки временно недоступны' }
+            });
+        }
 
-        Lampa.SettingsApi.addParam({
-            component: ROOT,
-            param: {
-                name: KEYS.newSeasonMode,
-                type: 'select',
-                values: { auto: 'Автоматически продолжать', notify: 'Только показать новый сезон', off: 'Не отслеживать новые сезоны' },
-                'default': 'auto'
-            },
-            field: { name: 'Когда начинается новый сезон', description: 'Поведение подписки после появления следующего сезона.' },
-            onChange: syncServerSettings
-        });
-
+        // This preference changes only which Lampa card provider opens from the UI;
+        // it is intentionally local and is not a TranslationSub domain policy.
         Lampa.SettingsApi.addParam({
             component: ROOT,
             param: { name: KEYS.cardSource, type: 'select', values: { tmdb: 'TMDB', cub: 'CUB' }, 'default': 'tmdb' },
             field: { name: 'Источник карточки', description: 'Источник карточки Lampa при открытии сериала из подписок.' }
         });
 
-        Lampa.SettingsApi.addParam({
-            component: BALANCERS,
-            param: { name: 'translationsub_balancers_title', type: 'title', 'default': '' },
-            field: { name: 'Доступные в Lampac балансеры' }
-        });
-
-        availableItems.forEach(addBalancer);
+        if (serverReady) {
+            Lampa.SettingsApi.addParam({
+                component: BALANCERS,
+                param: { name: 'translationsub_balancers_title', type: 'title', 'default': '' },
+                field: { name: 'Доступные в Lampac балансеры' }
+            });
+            availableItems.forEach(addBalancer);
+        }
     }
 
     function loadServerSettings() {
@@ -332,8 +365,10 @@
             applyCanonicalSettings(data);
             rebuildSettings();
         }, function () {
+            serverReady = false;
+            serverSchema = {};
             availableItems = [];
-            selectedSources = sourceList(storageGet(SOURCES_KEY, []));
+            selectedSources = [];
             rebuildSettings();
         });
         return true;
