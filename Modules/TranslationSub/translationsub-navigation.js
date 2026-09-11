@@ -125,10 +125,25 @@
         return element.is(selector) || element.find(selector).length > 0;
     }
 
+    function mutationInsideOwnUi(mutation) {
+        if (!mutation || !mutation.target || typeof $ !== 'function') return false;
+        try {
+            return $(mutation.target).closest('.translationsub-head,.translationsub-menu-item').length > 0;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function relevantMutations(mutations) {
         if (typeof $ !== 'function') return true;
         for (var i = 0; i < mutations.length; i++) {
             var mutation = mutations[i];
+
+            // Badge text/icon updates happen inside our own head/menu nodes. They
+            // must not schedule another apply(), otherwise our render can feed
+            // the observer that called it.
+            if (mutationInsideOwnUi(mutation)) continue;
+
             if ($(mutation.target).closest('.head,.menu').length) return true;
             for (var j = 0; j < mutation.addedNodes.length; j++) {
                 if (relevantNode(mutation.addedNodes[j])) return true;
