@@ -201,13 +201,10 @@
 
             var focusedId = String(html.find('.translationsub-card.focus').attr('data-subscription-id') || '');
             html.empty();
-            html.append('<div class="translationsub-page__title">Подписки на озвучки</div>');
-            html.append('<div class="translationsub-page__subtitle">Прогресс просмотра синхронизируется с Lampac TimeCode</div>');
 
             var summary = $('<div class="translationsub-summary-v2"></div>');
             summary.append('<div class="translationsub-summary-v2__item"><span class="translationsub-summary-v2__dot"></span><span>Подписок <b>' + list.length + '</b></span></div>');
             summary.append('<div class="translationsub-summary-v2__item translationsub-summary-v2__item--new"><span class="translationsub-summary-v2__dot"></span><span>С новыми сериями <b>' + updateCount + '</b></span></div>');
-            html.append(summary);
 
             var toolbar = $('<div class="translationsub-toolbar"></div>');
             var check = $('<div class="translationsub-toolbar__item selector"><span>Проверить новые серии</span></div>');
@@ -234,7 +231,11 @@
                 });
             });
             toolbar.append(check);
-            html.append(toolbar);
+
+            var top = $('<div class="translationsub-page__top"></div>');
+            top.append(toolbar);
+            top.append(summary);
+            html.append(top);
 
             var container = $('<div class="translationsub-list"></div>');
             if (!list.length) {
