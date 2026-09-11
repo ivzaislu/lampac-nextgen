@@ -5,6 +5,8 @@
     window.__TranslationSubUiV2Started = true;
 
     var lampaBound = false;
+    var BELL_BODY = 'M12 3.5a5.5 5.5 0 0 0-5.5 5.5v3.2c0 1.9-.7 3.5-2.1 4.8l-.9.8h17l-.9-.8c-1.4-1.3-2.1-2.9-2.1-4.8V9A5.5 5.5 0 0 0 12 3.5Z';
+    var BELL_CLAPPER = 'M9.6 20h4.8c-.35 1.1-1.25 1.7-2.4 1.7S9.95 21.1 9.6 20Z';
 
     function layoutMode() {
         try {
@@ -40,12 +42,26 @@
         return path.charAt(0) === '/' ? 'https://image.tmdb.org/t/p/w300' + path : path;
     }
 
+    function maskSvg(filled) {
+        return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+            '<path d="' + BELL_BODY + '" fill="' + (filled ? 'white' : 'none') + '" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>' +
+            '<path d="' + BELL_CLAPPER + '" fill="white"/>' +
+        '</svg>';
+    }
+
+    function maskUrl(filled) {
+        return 'url("data:image/svg+xml,' + encodeURIComponent(maskSvg(filled)) + '")';
+    }
+
     function injectStyles() {
         if (document.getElementById('translationsub-ui-v2-style')) return;
 
+        var outline = maskUrl(false);
+        var filled = maskUrl(true);
         var style = document.createElement('style');
         style.id = 'translationsub-ui-v2-style';
         style.textContent =
+            /* Subscription page and responsive layout. */
             '.translationsub-page{width:100%!important;max-width:112em!important;padding:1.35em 1.55em 5em!important;box-sizing:border-box}' +
             '.translationsub-page__top{display:flex!important;align-items:center!important;gap:.7em!important;flex-wrap:wrap!important;margin:0 0 1.05em!important}' +
             '.translationsub-page__top .translationsub-toolbar,.translationsub-page__top .translationsub-summary-v2{margin:0!important}' +
@@ -131,7 +147,89 @@
                 '.translationsub-layout--mobile .translationsub-card__body{padding:.65em!important}' +
                 '.translationsub-layout--mobile .translationsub-meta-v2__row{flex-wrap:wrap!important}' +
                 '.translationsub-layout--mobile .translationsub-card__title{font-size:1em!important}' +
-            '}';
+            '}' +
+
+            /* Badge presentation. */
+            '.translationsub-state-badge{' +
+                'position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;' +
+                'border-radius:1em;background:#e53935;color:#fff;font-size:.7em;font-weight:600;' +
+                'display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none;' +
+            '}' +
+            '.translationsub-state-menu-badge{' +
+                'margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;' +
+                'background:#e45e2c;color:#fff;font-size:.7em;font-weight:700;display:flex;' +
+                'align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none;' +
+            '}' +
+
+            /* Canonical bell/icon presentation. */
+            '.translationsub-head{position:relative;display:flex;align-items:center;justify-content:center}' +
+            '.translationsub-full-button:before{display:none!important}' +
+            '.translationsub-full-button>.translationsub-full-button__bell{' +
+                'display:block!important;width:1.55em!important;height:1.55em!important;flex:0 0 1.55em!important;' +
+                'background:currentColor!important;fill:none!important;stroke:none!important;' +
+                '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
+                'mask:' + outline + ' center/contain no-repeat!important;' +
+            '}' +
+            '.translationsub-full-button>.translationsub-full-button__bell>*{display:none!important}' +
+            '.translationsub-full-button--subscribed>.translationsub-full-button__bell{' +
+                'transform:none!important;' +
+                '-webkit-mask:' + filled + ' center/contain no-repeat!important;' +
+                'mask:' + filled + ' center/contain no-repeat!important;' +
+            '}' +
+            '.translationsub-head>svg{' +
+                'display:block!important;width:1.8em!important;height:1.8em!important;' +
+                'background:currentColor!important;fill:none!important;stroke:none!important;' +
+                '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
+                'mask:' + outline + ' center/contain no-repeat!important;' +
+            '}' +
+            '.translationsub-head>svg>*{display:none!important}' +
+            '.translationsub-head.translationsub-head--has-updates>svg{' +
+                '-webkit-mask:' + filled + ' center/contain no-repeat!important;' +
+                'mask:' + filled + ' center/contain no-repeat!important;' +
+            '}' +
+            '.translationsub-menu-item .menu__ico svg{' +
+                'display:block!important;width:100%!important;height:100%!important;' +
+                'background:currentColor!important;fill:none!important;stroke:none!important;' +
+                '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
+                'mask:' + outline + ' center/contain no-repeat!important;' +
+            '}' +
+            '.translationsub-menu-item .menu__ico svg>*{display:none!important}' +
+            '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
+                'width:2em!important;height:2em!important;transform:scale(1.35)!important;' +
+                'transform-origin:50% 50%!important;overflow:visible!important;' +
+                'background:currentColor!important;fill:none!important;stroke:none!important;' +
+                '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
+                'mask:' + outline + ' center/contain no-repeat!important;' +
+            '}' +
+            '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell>*{display:none!important}' +
+            '.translationsub-notice__empty .notice__img{position:relative!important}' +
+            '.translationsub-notice__empty .notice__img>*{display:none!important}' +
+            '.translationsub-notice__empty .notice__img:before{' +
+                'content:"";display:block;width:3.5em;height:3.5em;margin:auto;background:currentColor;' +
+                '-webkit-mask:' + outline + ' center/contain no-repeat;' +
+                'mask:' + outline + ' center/contain no-repeat;' +
+            '}' +
+
+            /* Notice drawer presentation. */
+            '.translationsub-notice{padding:0!important}' +
+            '.translationsub-notice .notice{margin:0 0 .45em!important;padding:.65em!important;min-height:4.7em!important;border-radius:.55em!important}' +
+            '.translationsub-notice .notice:last-child{margin-bottom:0!important}' +
+            '.translationsub-notice .notice__left{width:3.15em!important;min-width:3.15em!important}' +
+            '.translationsub-notice .notice__img{width:3.15em!important;height:4.55em!important;border-radius:.38em!important}' +
+            '.translationsub-notice .notice__body{padding-left:.72em!important;min-width:0!important}' +
+            '.translationsub-notice .notice__title{font-size:1em!important;line-height:1.2!important;font-weight:650!important}' +
+            '.translationsub-notice .notice__time{font-size:.72em!important;opacity:.55!important;margin-left:.55em!important}' +
+            '.translationsub-notice .notice__descr{font-size:.82em!important;line-height:1.3!important;opacity:.8!important;margin-top:.22em!important}' +
+            '.translationsub-notice .notice__footer{display:flex;gap:.3em!important;flex-wrap:nowrap!important;margin-top:.3em!important;white-space:nowrap!important;overflow:hidden!important}' +
+            '.translationsub-notice .notice__footer>div{padding:.16em .34em!important;border-radius:.3em!important;background:rgba(255,255,255,.07)!important;font-size:.72em!important;opacity:.65!important;overflow:hidden!important;text-overflow:ellipsis!important}' +
+            '.translationsub-notice .notice.focus .notice__footer>div{background:rgba(0,0,0,.07)!important}' +
+            '.translationsub-notice__empty{padding:1.1em 0;opacity:.72}' +
+
+            /* Full-card button presentation. */
+            '.translationsub-full-button{position:relative}' +
+            '.translationsub-full-button[data-translationsub-card-flow="1"]{gap:.55em}' +
+            '.translationsub-full-button[data-translationsub-card-flow="1"] span{white-space:nowrap}';
+
         (document.head || document.documentElement).appendChild(style);
     }
 
