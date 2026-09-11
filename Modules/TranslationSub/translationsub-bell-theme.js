@@ -4,7 +4,8 @@
     if (window.__TranslationSubBellThemeStarted) return;
     window.__TranslationSubBellThemeStarted = true;
 
-    var syncTimer = null;
+    var unsubscribeState = null;
+    var currentCount = 0;
 
     /*
      * Единая геометрия колокольчика TranslationSub.
@@ -33,7 +34,6 @@
         var style = document.createElement('style');
         style.id = 'translationsub-bell-theme-style';
         style.textContent =
-            /* Карточка сериала: возвращаем реальный SVG и задаём единую маску. */
             '.translationsub-full-button:before{display:none!important}' +
             '.translationsub-full-button>.translationsub-full-button__bell{' +
                 'display:block!important;width:1.55em!important;height:1.55em!important;flex:0 0 1.55em!important;' +
@@ -47,8 +47,6 @@
                 '-webkit-mask:' + filled + ' center/contain no-repeat!important;' +
                 'mask:' + filled + ' center/contain no-repeat!important;' +
             '}' +
-
-            /* Верхняя панель: outline без новых серий, filled при count > 0. */
             '.translationsub-head>svg{' +
                 'display:block!important;width:1.8em!important;height:1.8em!important;' +
                 'background:currentColor!important;fill:none!important;stroke:none!important;' +
@@ -60,24 +58,18 @@
                 '-webkit-mask:' + filled + ' center/contain no-repeat!important;' +
                 'mask:' + filled + ' center/contain no-repeat!important;' +
             '}' +
-
-            /* Левое меню. */
             '.translationsub-menu-item .menu__ico svg{' +
                 'display:block!important;background:currentColor!important;fill:none!important;stroke:none!important;' +
                 '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
                 'mask:' + outline + ' center/contain no-repeat!important;' +
             '}' +
             '.translationsub-menu-item .menu__ico svg>*{display:none!important}' +
-
-            /* Раздел настроек. Размер остаётся настроенным отдельно, меняется только силуэт. */
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{' +
                 'background:currentColor!important;fill:none!important;stroke:none!important;' +
                 '-webkit-mask:' + outline + ' center/contain no-repeat!important;' +
                 'mask:' + outline + ' center/contain no-repeat!important;' +
             '}' +
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell>*{display:none!important}' +
-
-            /* Пустая шторка уведомлений — вместо стороннего bell-plus тот же outline. */
             '.translationsub-notice__empty .notice__img{position:relative!important}' +
             '.translationsub-notice__empty .notice__img>*{display:none!important}' +
             '.translationsub-notice__empty .notice__img:before{' +
@@ -89,39 +81,57 @@
         (document.head || document.documentElement).appendChild(style);
     }
 
-    function updateHeadState() {
-        var count = 0;
-        try {
-            if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.count === 'function')
-                count = Number(window.TranslationSubBadgeState.count()) || 0;
-        } catch (e) {}
+    function updateHeadState(next) {
+        if (next && typeof next === 'object' && next.count !== undefined)
+            currentCount = Math.max(0, Number(next.count) || 0);
+        else {
+            try {
+                if (window.TranslationSubBadgeState && typeof window.TranslationSubBadgeState.count === 'function')
+                    currentCount = Math.max(0, Number(window.TranslationSubBadgeState.count()) || 0);
+            } catch (e) {}
+        }
 
         var nodes = document.querySelectorAll ? document.querySelectorAll('.translationsub-head') : [];
         for (var i = 0; i < nodes.length; i++) {
-            if (count > 0) nodes[i].classList.add('translationsub-head--has-updates');
+            if (currentCount > 0) nodes[i].classList.add('translationsub-head--has-updates');
             else nodes[i].classList.remove('translationsub-head--has-updates');
-            nodes[i].setAttribute('data-translationsub-updates', String(count));
+            nodes[i].setAttribute('data-translationsub-updates', String(currentCount));
+        }
+    }
+
+    function bindState() {
+        if (unsubscribeState) return true;
+        try {
+            var badge = window.TranslationSubBadgeState;
+            if (!badge || typeof badge.subscribe !== 'function') return false;
+            unsubscribeState = badge.subscribe(updateHeadState);
+            return true;
+        } catch (e) {
+            return false;
         }
     }
 
     function start() {
         injectStyles();
+        bindState();
         updateHeadState();
-
-        /* Только визуальная синхронизация, сетевых запросов здесь нет. */
-        if (syncTimer) clearInterval(syncTimer);
-        syncTimer = setInterval(updateHeadState, 750);
 
         try {
             document.addEventListener('visibilitychange', function () {
-                if (!document.hidden) updateHeadState();
+                if (!document.hidden) {
+                    bindState();
+                    updateHeadState();
+                }
             });
         } catch (e) {}
 
         try {
             if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('app', function (event) {
-                    if (event && event.type === 'ready') setTimeout(updateHeadState, 0);
+                    if (event && event.type === 'ready') {
+                        bindState();
+                        setTimeout(updateHeadState, 0);
+                    }
                 });
             }
         } catch (e2) {}
