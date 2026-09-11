@@ -9,6 +9,8 @@
         updates: [],
         snapshot: null,
         requestSeq: 0,
+        loading: false,
+        waiters: [],
         drawerOpening: false,
         listeners: []
     };
@@ -97,7 +99,7 @@
         };
     }
 
-    function applySnapshot(snapshot) {
+    function commitSnapshot(snapshot) {
         snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
         var updates = Array.isArray(snapshot.updates) ? snapshot.updates : [];
         var badge = snapshot.badge && typeof snapshot.badge === 'object' ? snapshot.badge : {};
@@ -111,30 +113,44 @@
         return updates.slice();
     }
 
+    function finishRefresh(updates) {
+        state.loading = false;
+        var waiters = state.waiters.splice(0);
+        waiters.forEach(function (done) {
+            try { done(updates.slice()); } catch (e) {}
+        });
+    }
+
+    function applySnapshot(snapshot) {
+        // A command snapshot is newer than any outstanding GET. Invalidate that
+        // read and resolve its waiters from the authoritative command result.
+        state.requestSeq++;
+        var updates = commitSnapshot(snapshot);
+        if (state.loading) finishRefresh(updates);
+        return updates;
+    }
+
     function refresh(done) {
         done = typeof done === 'function' ? done : function () {};
-        var seq = ++state.requestSeq;
-        var api = window.TranslationSubApi;
+        state.waiters.push(done);
+        if (state.loading) return;
 
+        var api = window.TranslationSubApi;
         if (!api || typeof api.snapshot !== 'function') {
             render();
-            done(state.updates.slice());
+            finishRefresh(state.updates.slice());
             return;
         }
 
+        state.loading = true;
+        var seq = ++state.requestSeq;
         api.snapshot(function (snapshot) {
-            if (seq !== state.requestSeq) {
-                done(state.updates.slice());
-                return;
-            }
-            done(applySnapshot(snapshot));
+            if (seq !== state.requestSeq) return;
+            finishRefresh(commitSnapshot(snapshot));
         }, function () {
-            if (seq !== state.requestSeq) {
-                done(state.updates.slice());
-                return;
-            }
+            if (seq !== state.requestSeq) return;
             render();
-            done(state.updates.slice());
+            finishRefresh(state.updates.slice());
         });
     }
 
@@ -164,8 +180,6 @@
             if (window.Lampa && Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
                 Lampa.Listener.follow('app', function (event) {
                     if (!event || event.type !== 'ready') return;
-                    // Startup already fetched the canonical snapshot. app-ready only
-                    // re-renders it into DOM that may not have existed yet.
                     render();
                 });
             }
