@@ -9,7 +9,8 @@
         updates: [],
         snapshot: null,
         requestSeq: 0,
-        drawerOpening: false
+        drawerOpening: false,
+        listeners: []
     };
 
     function injectStyles() {
@@ -69,6 +70,33 @@
         });
     }
 
+    function view() {
+        return {
+            count: Number(state.count) || 0,
+            updates: state.updates.slice(),
+            snapshot: state.snapshot
+        };
+    }
+
+    function emit() {
+        var current = view();
+        state.listeners.slice().forEach(function (listener) {
+            try { listener(current); } catch (e) {}
+        });
+    }
+
+    function subscribe(listener) {
+        if (typeof listener !== 'function') return function () {};
+        if (state.listeners.indexOf(listener) === -1) state.listeners.push(listener);
+
+        try { listener(view()); } catch (e) {}
+
+        return function () {
+            var index = state.listeners.indexOf(listener);
+            if (index !== -1) state.listeners.splice(index, 1);
+        };
+    }
+
     function applySnapshot(snapshot) {
         snapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
         var updates = Array.isArray(snapshot.updates) ? snapshot.updates : [];
@@ -79,6 +107,7 @@
         state.updates = updates;
         state.count = isNaN(count) ? updates.length : Math.max(0, count);
         render();
+        emit();
         return updates.slice();
     }
 
@@ -156,6 +185,7 @@
         window.TranslationSubBadgeState = {
             refresh: refresh,
             applySnapshot: applySnapshot,
+            subscribe: subscribe,
             render: render,
             open: openDrawerSynced,
             count: function () { return state.count; },
