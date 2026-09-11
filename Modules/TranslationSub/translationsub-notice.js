@@ -81,12 +81,18 @@
         var style = document.createElement('style');
         style.id = 'translationsub-notice-style';
         style.textContent =
-            '.translationsub-notice .notice{margin-bottom:.55em}' +
-            '.translationsub-notice .notice:last-child{margin-bottom:0}' +
-            '.translationsub-notice .notice__descr{line-height:1.45}' +
-            '.translationsub-notice .notice__footer{display:flex;gap:.45em;flex-wrap:wrap;margin-top:.42em}' +
-            '.translationsub-notice .notice__footer>div{padding:.22em .45em;border-radius:.35em;background:rgba(255,255,255,.08);font-size:.84em;opacity:.78}' +
-            '.translationsub-notice .notice.focus .notice__footer>div{background:rgba(0,0,0,.08)}' +
+            '.translationsub-notice{padding:0!important}' +
+            '.translationsub-notice .notice{margin:0 0 .45em!important;padding:.65em!important;min-height:4.7em!important;border-radius:.55em!important}' +
+            '.translationsub-notice .notice:last-child{margin-bottom:0!important}' +
+            '.translationsub-notice .notice__left{width:3.15em!important;min-width:3.15em!important}' +
+            '.translationsub-notice .notice__img{width:3.15em!important;height:4.55em!important;border-radius:.38em!important}' +
+            '.translationsub-notice .notice__body{padding-left:.72em!important;min-width:0!important}' +
+            '.translationsub-notice .notice__title{font-size:1em!important;line-height:1.2!important;font-weight:650!important}' +
+            '.translationsub-notice .notice__time{font-size:.72em!important;opacity:.55!important;margin-left:.55em!important}' +
+            '.translationsub-notice .notice__descr{font-size:.82em!important;line-height:1.3!important;opacity:.8!important;margin-top:.22em!important}' +
+            '.translationsub-notice .notice__footer{display:flex;gap:.3em!important;flex-wrap:nowrap!important;margin-top:.3em!important;white-space:nowrap!important;overflow:hidden!important}' +
+            '.translationsub-notice .notice__footer>div{padding:.16em .34em!important;border-radius:.3em!important;background:rgba(255,255,255,.07)!important;font-size:.72em!important;opacity:.65!important;overflow:hidden!important;text-overflow:ellipsis!important}' +
+            '.translationsub-notice .notice.focus .notice__footer>div{background:rgba(0,0,0,.07)!important}' +
             '.translationsub-notice__empty{padding:1.1em 0;opacity:.72}' +
             '.translationsub-notice__empty .notice__time{display:none!important}';
         (document.head || document.documentElement).appendChild(style);
