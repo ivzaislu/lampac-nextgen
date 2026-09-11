@@ -40,6 +40,7 @@
     function metaHtml(item) {
         item = item || {};
         var display = item.display && typeof item.display === 'object' ? item.display : {};
+        var schedule = item.schedule && typeof item.schedule === 'object' ? item.schedule : null;
         var progress = Math.max(0, Math.min(100, Number(item.progressPercent || 0) || 0));
         var body = '<div class="translationsub-meta-v2">' +
             '<div class="translationsub-meta-v2__row">' +
@@ -58,13 +59,29 @@
         if (display.source)
             body += '<div class="translationsub-meta-v2__source">' + escapeHtml(display.source) + '</div>';
 
-        if (item.schedule && item.schedule.text) {
-            var type = String(item.schedule.type || 'plain').replace(/[^a-z0-9-]/gi, '');
-            body += '<div class="translationsub-tmdb-v2">' +
-                '<div class="translationsub-tmdb-v2__state translationsub-tmdb-v2__state--' + type + '">' +
-                    escapeHtml(item.schedule.text) +
-                '</div>' +
-            '</div>';
+        if (display.tmdbFacts || display.tmdbNext || (schedule && schedule.text)) {
+            var title = display.tmdbTitle ? ' title="' + escapeHtml(display.tmdbTitle) + '"' : '';
+            body += '<div class="translationsub-tmdb-v2"' + title + '>';
+
+            if (display.tmdbFacts || display.tmdbNext) {
+                var facts = [];
+                if (display.tmdbFacts)
+                    facts.push('<span class="translationsub-tmdb-v2__air">' + escapeHtml(display.tmdbFacts) + '</span>');
+                if (display.tmdbNext)
+                    facts.push('<span class="translationsub-tmdb-v2__next">' + escapeHtml(display.tmdbNext) + '</span>');
+                body += '<div class="translationsub-tmdb-v2__facts">' +
+                    facts.join('<span class="translationsub-tmdb-v2__sep">•</span>') +
+                '</div>';
+            }
+
+            if (schedule && schedule.text) {
+                var type = String(schedule.type || 'plain').replace(/[^a-z0-9-]/gi, '');
+                body += '<div class="translationsub-tmdb-v2__state translationsub-tmdb-v2__state--' + type + '">' +
+                    escapeHtml(schedule.text) +
+                '</div>';
+            }
+
+            body += '</div>';
         }
 
         return body + '</div>';
