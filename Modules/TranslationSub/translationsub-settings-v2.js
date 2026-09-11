@@ -244,6 +244,9 @@
 
     function syncServerSettings() {
         if (!serverReady) return;
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+        settingsLoadSeq++;
         pendingSettingsBody = buildSettingsBody();
         flushServerSettings();
     }
@@ -368,7 +371,7 @@
             );
             addServerSelect(
                 'endedRefreshDays',
-                KEYS.endedRefreshDays,
+                KEYS.endedRefreshHours,
                 'Перепроверка завершённых сериалов',
                 'Как часто TMDB проверяется на неожиданное продолжение.'
             );
