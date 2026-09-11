@@ -21,6 +21,7 @@ const settingsStore = read('Modules/TranslationSub/Services/TranslationSettingsS
 const realtimeService = read('Modules/TranslationSub/Services/TranslationSubRealtimeService.cs');
 const subscriptionStore = read('Modules/TranslationSub/Services/SubscriptionStore.cs');
 const subscriptionModel = read('Modules/TranslationSub/Models/TranslationSubscription.cs');
+const contentStateModel = read('Modules/TranslationSub/Models/TranslationSubContentState.cs');
 const profileProgressModel = read('Modules/TranslationSub/Models/SubscriptionProfileProgress.cs');
 const profileProgressStore = read('Modules/TranslationSub/Services/ProfileProgressStore.cs');
 const progressService = read('Modules/TranslationSub/Services/TimeCodeProgressService.cs');
@@ -120,6 +121,14 @@ for (const obsolete of ['sameContent', 'latestAiredSeason', 'normalizeVoice', 'f
 assert.match(sourceClient, /item\.navigation/);
 assert.doesNotMatch(sourceClient, /function\s+tmdbId\s*\(/);
 assert.doesNotMatch(sourceClient, /item\.isSerial\s*!==\s*false/);
+
+// Mutation commands return the canonical profile snapshot. Thin clients apply
+// it directly instead of forcing a second GET immediately after a successful command.
+assert.match(contentStateModel, /JsonProperty\("snapshot"\)[\s\S]{0,120}?TranslationSubSnapshot Snapshot/);
+assert.match(v2Controller, /Subscribe[\s\S]*?result\.Snapshot\s*=\s*TranslationSubSnapshotService\.Build\(uid, profileId\)/);
+assert.match(v2Controller, /Unsubscribe[\s\S]*?result\.Snapshot\s*=\s*TranslationSubSnapshotService\.Build\(uid, profileId\)/);
+assert.match(cardFlow, /result\s*&&\s*result\.snapshot[\s\S]{0,220}?badge\.applySnapshot\(result\.snapshot\)/);
+assert.match(sourceClient, /result\s*&&\s*result\.snapshot[\s\S]{0,220}?badge\.applySnapshot\(result\.snapshot\)/);
 
 // Manual refresh is a backend command returning the canonical snapshot directly.
 assert.match(v2Controller, /Route\("translationsub\/v2\/check"\)/);
