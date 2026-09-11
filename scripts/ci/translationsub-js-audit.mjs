@@ -132,6 +132,16 @@ if (/new\s+MutationObserver/.test(badge)) error('Badge state must not own a glob
 if (/setInterval\s*\(\s*refresh/.test(badge)) error('Badge state must not poll in background');
 if (!badge.includes('api.snapshot')) error('Badge state must consume canonical backend snapshot');
 if (!badge.includes('applySnapshot')) error('Badge state must accept authoritative command snapshots');
+if (!/function\s+subscribe\s*\(/.test(badge) || !badge.includes('subscribe: subscribe'))
+  error('Badge state must expose observable snapshot updates');
+if (!/function\s+emit\s*\(/.test(badge) || !/applySnapshot[\s\S]{0,900}?emit\(\)/.test(badge))
+  error('Badge state must notify subscribers when authoritative snapshot changes');
+
+const bell = read('translationsub-bell-theme.js');
+if (/setInterval\s*\(\s*updateHeadState/.test(bell) || /750\s*\)/.test(bell))
+  error('Bell theme must not poll badge state');
+if (!bell.includes('badge.subscribe(updateHeadState)'))
+  error('Bell theme must subscribe to observable badge state');
 
 const source = read('translationsub-source.js');
 if (!source.includes('hover:long.translationsubSource')) error('Subscriptions page long-press menu is missing');
