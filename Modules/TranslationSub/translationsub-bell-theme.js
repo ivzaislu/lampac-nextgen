@@ -89,7 +89,6 @@
         for (var i = 0; i < nodes.length; i++) {
             if (currentCount > 0) nodes[i].classList.add('translationsub-head--has-updates');
             else nodes[i].classList.remove('translationsub-head--has-updates');
-            nodes[i].setAttribute('data-translationsub-updates', String(currentCount));
         }
     }
 

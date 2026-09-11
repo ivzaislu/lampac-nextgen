@@ -16,15 +16,20 @@ const modInit = read('Modules/TranslationSub/ModInit.cs');
 const v2Controller = read('Modules/TranslationSub/V2Controller.cs');
 const settingsController = read('Modules/TranslationSub/SettingsController.cs');
 const badge = read('Modules/TranslationSub/translationsub-badge-state.js');
+const bellTheme = read('Modules/TranslationSub/translationsub-bell-theme.js');
 const apiClient = read('Modules/TranslationSub/translationsub-api.js');
 const settingsStore = read('Modules/TranslationSub/Services/TranslationSettingsStore.cs');
 const realtimeService = read('Modules/TranslationSub/Services/TranslationSubRealtimeService.cs');
 const subscriptionStore = read('Modules/TranslationSub/Services/SubscriptionStore.cs');
 const subscriptionModel = read('Modules/TranslationSub/Models/TranslationSubscription.cs');
 const contentStateModel = read('Modules/TranslationSub/Models/TranslationSubContentState.cs');
+const variantModel = read('Modules/TranslationSub/Models/TranslationVariant.cs');
+const metadataModel = read('Modules/TranslationSub/Models/TranslationMetadata.cs');
 const profileProgressModel = read('Modules/TranslationSub/Models/SubscriptionProfileProgress.cs');
 const profileProgressStore = read('Modules/TranslationSub/Services/ProfileProgressStore.cs');
 const progressService = read('Modules/TranslationSub/Services/TimeCodeProgressService.cs');
+const metadataService = read('Modules/TranslationSub/Services/LampacMetadataService.cs');
+const metadataClient = read('Modules/TranslationSub/Services/LampacMetadataClient.cs');
 const projectionService = read('Modules/TranslationSub/Services/TranslationSubProjectionService.cs');
 const subscriptionService = read('Modules/TranslationSub/Services/TranslationSubscriptionService.cs');
 const snapshotService = read('Modules/TranslationSub/Services/TranslationSubSnapshotService.cs');
@@ -102,6 +107,31 @@ assert.match(contentStateService, /FindExisting/);
 assert.match(commandService, /ContentIdentityService\.ResolveAsync/);
 assert.match(commandService, /LampacMetadataService\.GetVariants/);
 assert.match(commandService, /SubscriptionStore\.Mutate/);
+
+// The internal metadata aggregate serves backend consumers only. Legacy /variants
+// response decoration must not grow back around the canonical Translations list.
+assert.doesNotMatch(variantModel,
+  /TranslationSourceBlock|public\s+string\s+Id\s*\{|public\s+string\s+Name\s*\{|public\s+string\s+KpId\s*\{|public\s+string\s+ImdbId\s*\{/);
+const variantsResponse = (variantModel.match(/public class TranslationVariantsResponse[\s\S]*?\n}/) || [''])[0];
+assert.ok(variantsResponse, 'TranslationVariantsResponse model could not be isolated');
+assert.match(variantsResponse, /List<TranslationVariant>\s+Translations/);
+assert.doesNotMatch(variantsResponse, /\bSource\b|\bSeasons\b|\bItems\b/);
+assert.doesNotMatch(variantModel,
+  /public\s+int\s+Season\s*\{|public\s+int\s+Episode\s*\{|public\s+List<int>\s+Episodes\s*\{\s*get;\s*set;\s*\}\s*=\s*new\(\);\s*\n}\s*\n\s*public class TranslationVariantsResponse/);
+assert.doesNotMatch(metadataModel, /\bSourceName\b/);
+assert.doesNotMatch(metadataClient, /\bSourceName\s*=/);
+assert.doesNotMatch(metadataService, /\bsourceNames\b|\bblocks\b|TranslationSourceBlock|\bSeasons\s*=|\bItems\s*=/);
+
+// Available source discovery is synchronous registry state; do not keep a fake
+// async uid-accepting wrapper around it.
+assert.doesNotMatch(metadataService, /AvailableSourcesAsync|Task\.FromResult<IReadOnlyList<LampacSourceOption>>/);
+assert.equal((settingsController.match(/LampacSourceRegistry\.AvailableSources\(\)/g) || []).length, 2,
+  'settings GET and POST must read available sources directly from the registry');
+assert.doesNotMatch(settingsController, /AvailableSourcesAsync/);
+
+// Bell state is represented by the canonical class + BadgeState; no duplicate
+// count should be mirrored into a dead DOM data attribute.
+assert.doesNotMatch(bellTheme, /data-translationsub-updates/);
 
 // Content/voice state is shared user metadata. Card state must never couple
 // itself back to profile-local watched progress or touch the TimeCode DB.

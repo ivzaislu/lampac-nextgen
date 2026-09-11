@@ -23,11 +23,11 @@ public class TranslationSubSettingsController : BaseController
     [HttpGet]
     [AllowAnonymous]
     [Route("translationsub/v2/settings")]
-    async public Task<ActionResult> GetSettings(string uid = null)
+    public ActionResult GetSettings(string uid = null)
     {
         uid = ResolveUid(uid);
         var settings = TranslationSettingsStore.Get(uid);
-        var options = await LampacMetadataService.AvailableSourcesAsync(uid).ConfigureAwait(false);
+        var options = LampacSourceRegistry.AvailableSources();
 
         return ContentTo(JsonConvert.SerializeObject(new
         {
@@ -93,7 +93,7 @@ public class TranslationSubSettingsController : BaseController
             endedRefreshDays,
             newSeasonMode);
 
-        var options = await LampacMetadataService.AvailableSourcesAsync(uid).ConfigureAwait(false);
+        var options = LampacSourceRegistry.AvailableSources();
         return ContentTo(JsonConvert.SerializeObject(new
         {
             success = true,
