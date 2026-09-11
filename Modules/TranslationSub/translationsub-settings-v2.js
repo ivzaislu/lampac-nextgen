@@ -110,11 +110,10 @@
         return 'translationsub_source_' + id.replace(/[^a-z0-9]+/gi, '_') + '_' + Math.abs(hash);
     }
 
+    // Geometry is owned by translationsub-bell-theme.js; settings only supplies
+    // the native-size SVG anchor that the canonical mask is applied to.
     function settingsBellSvg() {
-        return '<svg class="translationsub-settings-bell" width="37" height="37" viewBox="0 0 37 37" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
-            '<path d="M28.2 25.4H8.8c1.9-2.1 3-4.5 3-7.3v-3.2a6.7 6.7 0 0 1 13.4 0v3.2c0 2.8 1.1 5.2 3 7.3Z" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<path d="M15.2 29.1a3.7 3.7 0 0 0 6.6 0" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>' +
-        '</svg>';
+        return '<svg class="translationsub-settings-bell" width="37" height="37" viewBox="0 0 37 37" aria-hidden="true"></svg>';
     }
 
     function availableIdSet() {
