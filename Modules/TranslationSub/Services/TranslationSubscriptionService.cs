@@ -206,8 +206,6 @@ public static class TranslationSubscriptionService
                         if (smartTmdb && expectedAired > 0 && current.LastEpisode.GetValueOrDefault(0) > expectedAired)
                             current.LastEpisode = expectedAired;
 
-                        current.Notified = current.LastEpisode.GetValueOrDefault(0)
-                            <= current.CurrentEpisode.GetValueOrDefault(0);
                         current.LastCheckedAt = now;
                         current.ScheduleState = ResolveAfterCheckState(current, tmdb, settings, expectedAired, now);
                     });
@@ -554,10 +552,8 @@ public static class TranslationSubscriptionService
                 TranslationId = sub.TranslationId,
                 TranslationName = sub.TranslationName,
                 CurrentSeason = newSeason,
-                CurrentEpisode = 0,
                 LastSeason = newSeason,
                 LastEpisode = 0,
-                Notified = true,
                 Sources = sub.Sources?.Select(x => new TranslationSubscriptionSource
                 {
                     Source = x.Source,
