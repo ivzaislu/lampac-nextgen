@@ -69,7 +69,7 @@
             '.translationsub-summary-v2__item{display:flex;align-items:center;gap:.5em;padding:.45em .75em;border-radius:1em;background:rgba(0,0,0,.3);font-size:.9em;line-height:1.3}',
             '.translationsub-summary-v2__item b{font-weight:600}',
             '.translationsub-summary-v2__dot{width:.6em;height:.6em;border-radius:100%;background:#fff;opacity:.7}',
-            '.translationsub-summary-v2__item--new .translationsub-summary-v2__dot{background:#57F570;opacity:1}',
+            '.translationsub-summary-v2__item--new .translationsub-summary-v2__dot{background:#c9a15b;opacity:1}',
             '.translationsub-toolbar{display:flex;gap:.75em;flex-wrap:wrap}',
             '.translationsub-toolbar__item{min-height:2.8em;box-sizing:border-box;padding:.55em 1em;border-radius:1em;background:rgba(0,0,0,.3);font-size:1em;display:flex;align-items:center;transition:background-color .2s,color .2s}',
             '.translationsub-toolbar__item.focus{background:#fff;color:#000}',
@@ -79,9 +79,9 @@
             '.translationsub-card{display:flex;align-items:stretch;min-height:11.2em;margin:0 0 1.15em;border-radius:1em;background:rgba(0,0,0,.3);overflow:hidden;position:relative;transition:box-shadow .2s,background-color .2s;transform:translateZ(0)}',
             '.translationsub-card.focus{box-shadow:0 0 0 .3em #fff;z-index:3}',
             '.translationsub-card.hover{box-shadow:0 0 0 .3em rgba(255,255,255,.5)}',
-            '.translationsub-card__poster{width:7.5em;min-width:7.5em;position:relative;background:#3E3E3E;overflow:hidden}',
-            '.translationsub-card__poster img{width:100%;height:100%;object-fit:cover;display:block}',
-            '.translationsub-card__poster-empty{width:100%;height:100%;background:#3E3E3E}',
+            '.translationsub-card__poster{width:7.5em;min-width:7.5em;height:11.25em;flex:0 0 7.5em;align-self:flex-start;position:relative;background:#242424;overflow:hidden;display:flex;align-items:center;justify-content:center}',
+            '.translationsub-card__poster img{width:100%;height:100%;object-fit:contain;display:block;background:#242424}',
+            '.translationsub-card__poster-empty{width:100%;height:100%;background:#242424}',
             '.translationsub-card__body{padding:1em 1.1em;min-width:0;display:flex;flex-direction:column;flex:1;justify-content:flex-start}',
             '.translationsub-card__title{font-size:1.3em;line-height:1.2;font-weight:400;padding-right:5.5em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
             '.translationsub-card__voice{display:inline-flex;align-self:flex-start;margin-top:.45em;padding:.3em .6em;border-radius:1em;background:rgba(0,0,0,.3);font-size:.85em;font-weight:400;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -91,7 +91,7 @@
             '.translationsub-meta-v2__season{font-weight:600;flex:0 0 auto;font-size:1.02em}',
             '.translationsub-meta-v2__pill{padding:.22em .5em;border-radius:1em;background:rgba(255,255,255,.1);opacity:.8;white-space:nowrap}',
             '.translationsub-progress-v2{height:.3em;margin:.05em 0;border-radius:1em;background:rgba(255,255,255,.1);overflow:hidden}',
-            '.translationsub-progress-v2>i{display:block;height:100%;border-radius:inherit;background:#57F570}',
+            '.translationsub-progress-v2>i{display:block;height:100%;border-radius:inherit;background:#c9a15b}',
             '.translationsub-meta-v2__next{font-size:.95em;line-height:1.3;font-weight:400;color:#d8c39a}',
             '.translationsub-meta-v2__ok{font-size:.93em;line-height:1.3;opacity:.6}',
             '.translationsub-meta-v2__source{font-size:.84em;line-height:1.25;opacity:.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}',
@@ -101,9 +101,9 @@
             '.translationsub-tmdb-v2__sep{opacity:.45}',
             '.translationsub-tmdb-v2__state{margin-top:.2em;font-size:.96em;line-height:1.25;font-weight:400;opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
             '.translationsub-tmdb-v2__state--active,.translationsub-tmdb-v2__state--new-season{color:#d8c39a;opacity:1}',
-            '.translationsub-tmdb-v2__state--ok{color:#9bce54;opacity:1}',
-            '.translationsub-tmdb-v2__state--warn{color:#FFD028;opacity:1}',
-            '.translationsub-card__new{position:absolute;right:.7em;top:.7em;padding:.35em .7em;border-radius:5em;background:#57F570;color:#17491C;font-size:.7em;font-weight:600}',
+            '.translationsub-tmdb-v2__state--ok{color:#b8b39a;opacity:1}',
+            '.translationsub-tmdb-v2__state--warn{color:#d8b56a;opacity:1}',
+            '.translationsub-card__new{position:absolute;right:.7em;top:.7em;padding:.35em .7em;border-radius:5em;background:rgba(201,161,91,.2);color:#efd39d;border:1px solid rgba(239,211,157,.38);font-size:.7em;font-weight:600}',
             '.translationsub-empty{padding:3em 1.5em;border-radius:.3em;background:rgba(0,0,0,.3);font-size:1.1em;line-height:1.5;font-weight:300}',
             '@supports(display:grid){.translationsub-list,.translationsub-layout--tv .translationsub-list,.translationsub-layout--desktop .translationsub-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.15em 1.25em;align-items:stretch}.translationsub-card{margin:0}.translationsub-empty{grid-column:1/-1}}',
 
@@ -113,7 +113,7 @@
             /* TV keeps the same focus language instead of a separate white-card state. */
             '.translationsub-layout--tv{width:100%;padding:1.5em 1.5em 5em}',
             '.translationsub-layout--tv .translationsub-card{min-height:11.4em}',
-            '.translationsub-layout--tv .translationsub-card__poster{width:7.35em;min-width:7.35em}',
+            '.translationsub-layout--tv .translationsub-card__poster{width:7.35em;min-width:7.35em;height:11.025em;flex-basis:7.35em}',
             '.translationsub-layout--tv .translationsub-card__body{padding:1em 1.1em}',
 
             /* Mobile follows Lampa compact spacing and one-column flow. */
@@ -125,7 +125,7 @@
             '.translationsub-layout--mobile .translationsub-summary-v2__item{font-size:.82em;padding:.4em .65em}',
             '.translationsub-layout--mobile .translationsub-list{grid-template-columns:1fr;gap:.9em}',
             '.translationsub-layout--mobile .translationsub-card{min-height:10.8em}',
-            '.translationsub-layout--mobile .translationsub-card__poster{width:6.2em;min-width:6.2em}',
+            '.translationsub-layout--mobile .translationsub-card__poster{width:6.2em;min-width:6.2em;height:9.3em;flex-basis:6.2em}',
             '.translationsub-layout--mobile .translationsub-card__body{padding:.8em .85em}',
             '.translationsub-layout--mobile .translationsub-card__title{font-size:1.08em;padding-right:4.8em}',
             '.translationsub-layout--mobile .translationsub-card__voice{font-size:.76em;margin-top:.35em}',
@@ -136,7 +136,7 @@
             '.translationsub-layout--mobile .translationsub-card__new{right:.55em;top:.55em;font-size:.64em}',
             '.translationsub-full-button--mobile>span,.translationsub-full-button--mobile .translationsub-full-button__progress{display:none!important}',
             '.translationsub-full-button--mobile{touch-action:manipulation;-webkit-tap-highlight-color:transparent}',
-            '@media(max-width:390px){.translationsub-layout--mobile .translationsub-card__poster{width:5.6em;min-width:5.6em}.translationsub-layout--mobile .translationsub-card__body{padding:.7em}.translationsub-layout--mobile .translationsub-meta-v2__row{flex-wrap:wrap}.translationsub-layout--mobile .translationsub-card__title{font-size:1em}}',
+            '@media(max-width:390px){.translationsub-layout--mobile .translationsub-card__poster{width:5.6em;min-width:5.6em;height:8.4em;flex-basis:5.6em}.translationsub-layout--mobile .translationsub-card__body{padding:.7em}.translationsub-layout--mobile .translationsub-meta-v2__row{flex-wrap:wrap}.translationsub-layout--mobile .translationsub-card__title{font-size:1em}}',
 
             /* Native Lampa light layout uses squarer media and controls. */
             'body.light--version .translationsub-card{border-radius:0}',
@@ -148,9 +148,9 @@
             'body.glass--style .translationsub-card,body.glass--style .translationsub-toolbar__item,body.glass--style .translationsub-summary-v2__item,body.glass--style .translationsub-empty{background-color:rgba(70,70,70,.3)}',
             'body.glass--style.platform--browser .translationsub-card,body.glass--style.platform--nw .translationsub-card,body.glass--style.platform--apple .translationsub-card,body.glass--style.platform--apple_tv .translationsub-card{backdrop-filter:blur(1em)}',
 
-            /* Badges use the same green cue as Lampa new-episode markers. */
-            '.translationsub-state-badge{position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;border-radius:1em;background:#57F570;color:#17491C;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
-            '.translationsub-state-menu-badge{margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;background:#57F570;color:#17491C;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
+            /* Muted amber marks new episodes without the previous neon green. */
+            '.translationsub-state-badge{position:absolute;right:-.25em;top:-.25em;min-width:1.5em;height:1.5em;padding:0 .3em;border-radius:1em;background:#c9a15b;color:#2d2416;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
+            '.translationsub-state-menu-badge{margin-left:auto;min-width:1.65em;height:1.65em;padding:0 .38em;border-radius:1em;background:#c9a15b;color:#2d2416;font-size:.7em;font-weight:600;display:flex;align-items:center;justify-content:center;box-sizing:border-box;pointer-events:none}',
             '.translationsub-menu-item.focus .translationsub-state-menu-badge{background:#000;color:#fff}',
 
             /* Data-URI backgrounds are the legacy fallback; mask keeps currentColor where supported. */
@@ -163,8 +163,11 @@
             '.translationsub-menu-item .menu__ico svg{display:block;width:100%;height:100%;background:' + outline + ' center/contain no-repeat;fill:none;stroke:none}',
             '.settings-folder[data-component="translationsub_settings"] .translationsub-settings-bell{width:2em;height:2em;transform:scale(1.35);transform-origin:50% 50%;overflow:visible;background:' + outline + ' center/contain no-repeat;fill:none;stroke:none}',
 
-            /* Notice cards now inherit Lampa notice spacing, typography and focus. */
+            /* Notice cards inherit Lampa spacing but keep TranslationSub poster/status semantics. */
             '.translationsub-notice{padding:0}',
+            '.translationsub-notice .notice__img{background:#242424}',
+            '.translationsub-notice .notice__img img{width:100%;height:100%;object-fit:contain;background:#242424}',
+            '.translationsub-notice .notice__time{padding:.25em .65em;border-radius:1em;background:rgba(201,161,91,.22);color:#f0d6a4;border:1px solid rgba(240,214,164,.34);font-weight:500;opacity:1}',
             '.translationsub-notice__empty{opacity:.72}',
             '.translationsub-notice__empty .notice__img{position:relative}',
             '.translationsub-notice__empty .notice__img>*{display:none}',
