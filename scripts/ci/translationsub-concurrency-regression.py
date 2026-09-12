@@ -3,7 +3,6 @@ import json
 import os
 import sqlite3
 import sys
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -135,11 +134,18 @@ def card():
     }
 
 
-def subscribe(uid):
+def content_state(uid):
+    return request("POST", f"/translationsub/v2/content-state?uid={q(uid)}", {
+        "card": card(),
+        "includeVoices": True,
+    })
+
+
+def subscribe(uid, voice_id, voice_name):
     return request("POST", f"/translationsub/v2/subscriptions?uid={q(uid)}", {
         "card": card(),
-        "voiceId": "ci-voice",
-        "voiceName": "CI Voice",
+        "voiceId": voice_id,
+        "voiceName": voice_name,
     })
 
 
@@ -249,16 +255,35 @@ def same_user_settings_race(source):
 
 
 def concurrent_subscribe(source):
-    print("4. duplicate concurrent subscribe is idempotent per uid", flush=True)
+    print("4. concurrent metadata reads return the same canonical voice", flush=True)
     for uid in SUB_USERS:
         body = require_ok(set_settings(uid, source, 6), f"subscription settings {uid}")
         assert body.get("success") is True, body
 
+    voice_ids = set()
+    voice_names = set()
+    calls = [lambda uid=uid: content_state(uid) for uid in SUB_USERS for _ in range(4)]
+    for result in parallel(calls, workers=24):
+        body = require_ok(result, "concurrent content-state")
+        assert body.get("eligible") is True, body
+        voices = body.get("voices") or []
+        assert len(voices) == 1, body
+        voice = voices[0]
+        assert voice.get("latestEpisode") == 3, voice
+        voice_ids.add(voice.get("id"))
+        voice_names.add(voice.get("name"))
+
+    assert len(voice_ids) == 1 and None not in voice_ids, voice_ids
+    assert voice_names == {"CI Voice"}, voice_names
+    voice_id = next(iter(voice_ids))
+    voice_name = next(iter(voice_names))
+
+    print(f"5. duplicate concurrent subscribe is idempotent per uid; voice={voice_id}", flush=True)
     calls = []
     labels = []
     for uid in SUB_USERS:
         for _ in range(6):
-            calls.append(lambda uid=uid: subscribe(uid))
+            calls.append(lambda uid=uid: subscribe(uid, voice_id, voice_name))
             labels.append(uid)
 
     ids_by_uid = {uid: set() for uid in SUB_USERS}
@@ -287,7 +312,7 @@ def concurrent_subscribe(source):
 
 
 def mixed_check_snapshot_settings(source):
-    print("5. checks, snapshots and settings run concurrently without lost subscriptions", flush=True)
+    print("6. checks, snapshots and settings run concurrently without lost subscriptions", flush=True)
     calls = []
     kinds = []
     for uid in SUB_USERS:
@@ -320,7 +345,7 @@ def mixed_check_snapshot_settings(source):
 
 
 def concurrent_remove(subscription_ids):
-    print("6. concurrent remove has exactly one winner per subscription", flush=True)
+    print("7. concurrent remove has exactly one winner per subscription", flush=True)
     for uid, subscription_id in subscription_ids.items():
         calls = [lambda uid=uid, sid=subscription_id: remove(uid, sid) for _ in range(6)]
         results = parallel(calls, workers=6)
@@ -345,7 +370,7 @@ def concurrent_remove(subscription_ids):
 
 
 def final_invariants(source):
-    print("7. final SQLite invariants", flush=True)
+    print("8. final SQLite invariants", flush=True)
     assert_db_integrity()
     legacy = DB.parent / "translationsub"
     for name in ("settings.json", "subscriptions.json", "profile-progress.json"):
@@ -370,7 +395,6 @@ def final_invariants(source):
 def run_suite():
     source = selected_source()
     print(f"TranslationSub concurrency source={source}", flush=True)
-    # Create the DB before deliberately taking an external writer lock.
     require_ok(set_settings(LOCK_UID, source, 4), "database bootstrap")
     assert_db_integrity()
 
