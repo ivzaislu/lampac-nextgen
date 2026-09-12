@@ -1,7 +1,6 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using TranslationSub.Models;
@@ -10,9 +9,7 @@ namespace TranslationSub.Services;
 
 public static class SubscriptionStore
 {
-    static readonly object locker = new();
     static readonly AsyncLocal<MutationBatch> ambientBatch = new();
-    static string path => "database/translationsub/subscriptions.json";
 
     sealed class MutationBatch
     {
@@ -46,31 +43,148 @@ public static class SubscriptionStore
 
     static List<TranslationSubscription> LoadUnsafe()
     {
-        if (!File.Exists(path))
-            return new List<TranslationSubscription>();
+        using var connection = TranslationSubDatabase.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT id, uid, content_id, title, original_title, kp_id, imdb_id, tmdb_id,
+       poster, year, is_serial, source, translation_id, translation_name,
+       current_season, last_season, last_episode, sources_json, created_at,
+       last_checked_at, tmdb_status, tmdb_last_season, tmdb_last_episode,
+       tmdb_last_air_date, tmdb_next_season, tmdb_next_episode, tmdb_next_air_date,
+       tmdb_target_season_episodes, tmdb_last_synced_at, schedule_state,
+       tmdb_new_season_available
+FROM subscriptions
+ORDER BY rowid;";
 
+        var result = new List<TranslationSubscription>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new TranslationSubscription
+            {
+                Id = reader.GetString(reader.GetOrdinal("id")),
+                Uid = reader.GetString(reader.GetOrdinal("uid")),
+                ContentId = TranslationSubDatabase.ReadNullableString(reader, "content_id"),
+                Title = TranslationSubDatabase.ReadNullableString(reader, "title"),
+                OriginalTitle = TranslationSubDatabase.ReadNullableString(reader, "original_title"),
+                KpId = TranslationSubDatabase.ReadNullableString(reader, "kp_id"),
+                ImdbId = TranslationSubDatabase.ReadNullableString(reader, "imdb_id"),
+                TmdbId = TranslationSubDatabase.ReadNullableString(reader, "tmdb_id"),
+                Poster = TranslationSubDatabase.ReadNullableString(reader, "poster"),
+                Year = TranslationSubDatabase.ReadNullableInt(reader, "year"),
+                IsSerial = reader.GetInt32(reader.GetOrdinal("is_serial")) != 0,
+                Source = TranslationSubDatabase.ReadNullableString(reader, "source"),
+                TranslationId = TranslationSubDatabase.ReadNullableString(reader, "translation_id"),
+                TranslationName = TranslationSubDatabase.ReadNullableString(reader, "translation_name"),
+                CurrentSeason = TranslationSubDatabase.ReadNullableInt(reader, "current_season"),
+                LastSeason = TranslationSubDatabase.ReadNullableInt(reader, "last_season"),
+                LastEpisode = TranslationSubDatabase.ReadNullableInt(reader, "last_episode"),
+                Sources = ReadSources(reader.GetString(reader.GetOrdinal("sources_json"))),
+                CreatedAt = TranslationSubDatabase.ReadDateTime(reader, "created_at", DateTime.Now),
+                LastCheckedAt = TranslationSubDatabase.ReadNullableDateTime(reader, "last_checked_at"),
+                TmdbStatus = TranslationSubDatabase.ReadNullableString(reader, "tmdb_status"),
+                TmdbLastSeason = TranslationSubDatabase.ReadNullableInt(reader, "tmdb_last_season"),
+                TmdbLastEpisode = TranslationSubDatabase.ReadNullableInt(reader, "tmdb_last_episode"),
+                TmdbLastAirDate = TranslationSubDatabase.ReadNullableDateTime(reader, "tmdb_last_air_date"),
+                TmdbNextSeason = TranslationSubDatabase.ReadNullableInt(reader, "tmdb_next_season"),
+                TmdbNextEpisode = TranslationSubDatabase.ReadNullableInt(reader, "tmdb_next_episode"),
+                TmdbNextAirDate = TranslationSubDatabase.ReadNullableDateTime(reader, "tmdb_next_air_date"),
+                TmdbTargetSeasonEpisodes = TranslationSubDatabase.ReadNullableInt(reader, "tmdb_target_season_episodes"),
+                TmdbLastSyncedAt = TranslationSubDatabase.ReadNullableDateTime(reader, "tmdb_last_synced_at"),
+                ScheduleState = TranslationSubDatabase.ReadNullableString(reader, "schedule_state"),
+                TmdbNewSeasonAvailable = reader.GetInt32(reader.GetOrdinal("tmdb_new_season_available")) != 0
+            });
+        }
+
+        return result;
+    }
+
+    static List<TranslationSubscriptionSource> ReadSources(string json)
+    {
         try
         {
-            return JsonConvert.DeserializeObject<List<TranslationSubscription>>(File.ReadAllText(path))
-                ?? new List<TranslationSubscription>();
+            return JsonConvert.DeserializeObject<List<TranslationSubscriptionSource>>(json ?? "[]")
+                ?? new List<TranslationSubscriptionSource>();
         }
         catch
         {
-            return new List<TranslationSubscription>();
+            return new List<TranslationSubscriptionSource>();
         }
     }
 
     static void SaveUnsafe(List<TranslationSubscription> list)
     {
-        string dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(dir))
-            Directory.CreateDirectory(dir);
+        using var connection = TranslationSubDatabase.Open();
+        using var transaction = connection.BeginTransaction();
 
-        string json = JsonConvert.SerializeObject(list ?? new List<TranslationSubscription>(), Formatting.Indented);
-        string temp = path + ".tmp";
+        using (var clear = connection.CreateCommand())
+        {
+            clear.Transaction = transaction;
+            clear.CommandText = "DELETE FROM subscriptions;";
+            clear.ExecuteNonQuery();
+        }
 
-        File.WriteAllText(temp, json);
-        File.Move(temp, path, true);
+        foreach (var item in list ?? new List<TranslationSubscription>())
+        {
+            if (item == null || string.IsNullOrWhiteSpace(item.Id))
+                continue;
+
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"
+INSERT INTO subscriptions (
+    id, uid, content_id, title, original_title, kp_id, imdb_id, tmdb_id,
+    poster, year, is_serial, source, translation_id, translation_name,
+    current_season, last_season, last_episode, sources_json, created_at,
+    last_checked_at, tmdb_status, tmdb_last_season, tmdb_last_episode,
+    tmdb_last_air_date, tmdb_next_season, tmdb_next_episode, tmdb_next_air_date,
+    tmdb_target_season_episodes, tmdb_last_synced_at, schedule_state,
+    tmdb_new_season_available
+) VALUES (
+    $id, $uid, $content_id, $title, $original_title, $kp_id, $imdb_id, $tmdb_id,
+    $poster, $year, $is_serial, $source, $translation_id, $translation_name,
+    $current_season, $last_season, $last_episode, $sources_json, $created_at,
+    $last_checked_at, $tmdb_status, $tmdb_last_season, $tmdb_last_episode,
+    $tmdb_last_air_date, $tmdb_next_season, $tmdb_next_episode, $tmdb_next_air_date,
+    $tmdb_target_season_episodes, $tmdb_last_synced_at, $schedule_state,
+    $tmdb_new_season_available
+);";
+
+            command.Parameters.AddWithValue("$id", item.Id);
+            command.Parameters.AddWithValue("$uid", (object)item.Uid ?? DBNull.Value);
+            command.Parameters.AddWithValue("$content_id", (object)item.ContentId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$title", (object)item.Title ?? DBNull.Value);
+            command.Parameters.AddWithValue("$original_title", (object)item.OriginalTitle ?? DBNull.Value);
+            command.Parameters.AddWithValue("$kp_id", (object)item.KpId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$imdb_id", (object)item.ImdbId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_id", (object)item.TmdbId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$poster", (object)item.Poster ?? DBNull.Value);
+            command.Parameters.AddWithValue("$year", (object)item.Year ?? DBNull.Value);
+            command.Parameters.AddWithValue("$is_serial", item.IsSerial ? 1 : 0);
+            command.Parameters.AddWithValue("$source", (object)item.Source ?? DBNull.Value);
+            command.Parameters.AddWithValue("$translation_id", (object)item.TranslationId ?? DBNull.Value);
+            command.Parameters.AddWithValue("$translation_name", (object)item.TranslationName ?? DBNull.Value);
+            command.Parameters.AddWithValue("$current_season", (object)item.CurrentSeason ?? DBNull.Value);
+            command.Parameters.AddWithValue("$last_season", (object)item.LastSeason ?? DBNull.Value);
+            command.Parameters.AddWithValue("$last_episode", (object)item.LastEpisode ?? DBNull.Value);
+            command.Parameters.AddWithValue("$sources_json", JsonConvert.SerializeObject(item.Sources ?? new List<TranslationSubscriptionSource>()));
+            command.Parameters.AddWithValue("$created_at", TranslationSubDatabase.DateTimeText(item.CreatedAt));
+            command.Parameters.AddWithValue("$last_checked_at", TranslationSubDatabase.DateTimeValue(item.LastCheckedAt));
+            command.Parameters.AddWithValue("$tmdb_status", (object)item.TmdbStatus ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_last_season", (object)item.TmdbLastSeason ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_last_episode", (object)item.TmdbLastEpisode ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_last_air_date", TranslationSubDatabase.DateTimeValue(item.TmdbLastAirDate));
+            command.Parameters.AddWithValue("$tmdb_next_season", (object)item.TmdbNextSeason ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_next_episode", (object)item.TmdbNextEpisode ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_next_air_date", TranslationSubDatabase.DateTimeValue(item.TmdbNextAirDate));
+            command.Parameters.AddWithValue("$tmdb_target_season_episodes", (object)item.TmdbTargetSeasonEpisodes ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_last_synced_at", TranslationSubDatabase.DateTimeValue(item.TmdbLastSyncedAt));
+            command.Parameters.AddWithValue("$schedule_state", (object)item.ScheduleState ?? DBNull.Value);
+            command.Parameters.AddWithValue("$tmdb_new_season_available", item.TmdbNewSeasonAvailable ? 1 : 0);
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
     }
 
     static string PersistedState(IEnumerable<TranslationSubscription> list)
@@ -92,7 +206,7 @@ public static class SubscriptionStore
 
     public static List<TranslationSubscription> Load()
     {
-        lock (locker)
+        lock (TranslationSubDatabase.SyncRoot)
             return LoadUnsafe();
     }
 
@@ -109,7 +223,7 @@ public static class SubscriptionStore
         }
 
         string[] changedUids;
-        lock (locker)
+        lock (TranslationSubDatabase.SyncRoot)
         {
             var list = LoadUnsafe();
             string beforePersisted = PersistedState(list);
@@ -140,7 +254,7 @@ public static class SubscriptionStore
         }
 
         string[] changedUids;
-        lock (locker)
+        lock (TranslationSubDatabase.SyncRoot)
         {
             var list = LoadUnsafe();
             string beforePersisted = PersistedState(list);
@@ -166,7 +280,7 @@ public static class SubscriptionStore
             return;
 
         string[] changedUids;
-        lock (locker)
+        lock (TranslationSubDatabase.SyncRoot)
         {
             var list = LoadUnsafe();
             string beforePersisted = PersistedState(list);
