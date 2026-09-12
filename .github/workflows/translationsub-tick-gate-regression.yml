@@ -1,0 +1,168 @@
+name: TranslationSub Tick Gate Timeout Regression
+
+on:
+  push:
+    branches:
+      - TranslationSub-final
+    paths:
+      - 'Modules/TranslationSub/V2Controller.cs'
+      - 'Modules/TranslationSub/Services/TmdbScheduleService.cs'
+      - 'Modules/TranslationSub/Services/TranslationSubscriptionService.cs'
+      - 'Modules/TranslationSub/Services/TranslationSubDatabase.cs'
+      - 'Modules/TranslationSub/Services/TranslationSettingsStore.cs'
+      - 'scripts/ci/translationsub-tick-gate-regression.py'
+      - '.github/workflows/translationsub-tick-gate-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-tick-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tick-gate-regression:
+    name: Background tick + manual check under TMDB outage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-tickgate
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-tickgate \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-tickgate/Core.dll
+          test -f /tmp/lampac-tickgate/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-tickgate/module/Sync/TimeCode/manifest.json
+
+          cat > /tmp/lampac-tickgate/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          serilog: true
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+              - TimeCode
+          listen:
+            port: 9118
+          YAML
+
+          cat > /tmp/lampac-tickgate/init.conf <<'JSON'
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://127.0.0.1:9124/tmdb",
+              "tmdb_apikey": "ci-tick-gate-key"
+            }
+          }
+          JSON
+
+      - name: Start slow TMDB fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/translationsub-tick-gate-regression.py serve > /tmp/translationsub-tick-gate-fixture.log 2>&1 &
+          echo $! > /tmp/translationsub-tick-gate-fixture.pid
+
+          ready=0
+          for i in $(seq 1 30); do
+            if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9124/health' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != '1' ]; then
+            cat /tmp/translationsub-tick-gate-fixture.log || true
+            exit 1
+          fi
+
+      - name: Start Lampac and wait for TranslationSub
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-tickgate
+            exec dotnet Core.dll > /tmp/lampac-tick-gate.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-tick-gate.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=tick-gate-manual%40translationsub.test' \
+              -o /tmp/tick-gate-ready.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-tick-gate.pid)" 2>/dev/null; then
+              echo 'Lampac exited before TranslationSub became ready'
+              tail -n 400 /tmp/lampac-tick-gate.log || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready'
+            tail -n 400 /tmp/lampac-tick-gate.log || true
+            exit 1
+          fi
+
+      - name: Reproduce background tick/manual check contention
+        env:
+          TRANSLATIONSUB_BASE_URL: http://127.0.0.1:9118
+          TRANSLATIONSUB_TICK_GATE_FIXTURE: http://127.0.0.1:9124
+          TRANSLATIONSUB_DB_PATH: /tmp/lampac-tickgate/database/translationsub.db
+        run: python3 scripts/ci/translationsub-tick-gate-regression.py run
+
+      - name: Reject SQLite and unhandled runtime failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -E -i 'database is locked|SQLite Error|SqliteException|Unhandled exception' /tmp/lampac-tick-gate.log; then
+            echo 'Unexpected SQLite or unhandled runtime failure detected'
+            exit 1
+          fi
+
+      - name: Runtime log tails
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac-tick-gate.log tail ====='
+          tail -n 500 /tmp/lampac-tick-gate.log 2>/dev/null || true
+          echo '===== fixture ====='
+          tail -n 200 /tmp/translationsub-tick-gate-fixture.log 2>/dev/null || true
+
+      - name: Stop processes
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac-tick-gate.pid ]; then
+            kill "$(cat /tmp/lampac-tick-gate.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/translationsub-tick-gate-fixture.pid ]; then
+            kill "$(cat /tmp/translationsub-tick-gate-fixture.pid)" 2>/dev/null || true
+          fi
