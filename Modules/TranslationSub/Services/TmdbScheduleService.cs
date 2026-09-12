@@ -27,6 +27,11 @@ public static class TmdbScheduleService
     static readonly object cacheLock = new();
     static readonly Dictionary<string, (TmdbScheduleSnapshot value, DateTime fetchedAt)> cache = new(StringComparer.OrdinalIgnoreCase);
     static readonly TimeSpan cacheLifetime = TimeSpan.FromMinutes(30);
+    static readonly TimeSpan slowFailureThreshold = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan slowFailureBackoff = TimeSpan.FromSeconds(5);
+    const int slowFailureTripCount = 3;
+    static int consecutiveSlowFailures;
+    static DateTime slowFailureBackoffUntilUtc;
 
     public static async Task<TmdbScheduleSnapshot> Get(string tmdbId, string expectedImdbId = null)
     {
@@ -66,17 +71,24 @@ public static class TmdbScheduleService
                 return cached.value;
         }
 
+        if (SlowFailureBackoffActive())
+            return null;
+
         string host = (ModInit.conf?.tmdb_apihost ?? "https://api.themoviedb.org/3").TrimEnd('/');
         string key = ModInit.conf?.tmdb_apikey;
         if (string.IsNullOrWhiteSpace(key))
             return null;
 
+        DateTime startedAtUtc = DateTime.UtcNow;
         try
         {
             string url = $"{host}/tv/{id}?api_key={Uri.EscapeDataString(key)}&language=ru-RU&append_to_response=external_ids";
             string json = await Http.Get(url, timeoutSeconds: 12).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(json))
+            {
+                RecordSlowFailure(startedAtUtc);
                 return null;
+            }
 
             var root = JObject.Parse(json);
             var result = new TmdbScheduleSnapshot
@@ -126,30 +138,40 @@ public static class TmdbScheduleService
             lock (cacheLock)
                 cache[normalizedId] = (result, DateTime.Now);
 
+            RecordSuccess();
             return result;
         }
         catch
         {
+            RecordSlowFailure(startedAtUtc);
             return null;
         }
     }
 
     static async Task<long> FindTvIdByImdb(string imdbId)
     {
+        if (SlowFailureBackoffActive())
+            return 0;
+
         string host = (ModInit.conf?.tmdb_apihost ?? "https://api.themoviedb.org/3").TrimEnd('/');
         string key = ModInit.conf?.tmdb_apikey;
         if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(imdbId))
             return 0;
 
+        DateTime startedAtUtc = DateTime.UtcNow;
         try
         {
             string url = $"{host}/find/{Uri.EscapeDataString(imdbId)}?api_key={Uri.EscapeDataString(key)}&external_source=imdb_id&language=ru-RU";
             string json = await Http.Get(url, timeoutSeconds: 12).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(json))
+            {
+                RecordSlowFailure(startedAtUtc);
                 return 0;
+            }
 
             var root = JObject.Parse(json);
             var tv = root["tv_results"] as JArray;
+            RecordSuccess();
             if (tv == null || tv.Count == 0)
                 return 0;
 
@@ -157,7 +179,47 @@ public static class TmdbScheduleService
         }
         catch
         {
+            RecordSlowFailure(startedAtUtc);
             return 0;
+        }
+    }
+
+    static bool SlowFailureBackoffActive()
+    {
+        lock (cacheLock)
+        {
+            if (slowFailureBackoffUntilUtc > DateTime.UtcNow)
+                return true;
+
+            if (slowFailureBackoffUntilUtc != default)
+                slowFailureBackoffUntilUtc = default;
+
+            return false;
+        }
+    }
+
+    static void RecordSlowFailure(DateTime startedAtUtc)
+    {
+        if (DateTime.UtcNow - startedAtUtc < slowFailureThreshold)
+            return;
+
+        lock (cacheLock)
+        {
+            consecutiveSlowFailures++;
+            if (consecutiveSlowFailures < slowFailureTripCount)
+                return;
+
+            consecutiveSlowFailures = 0;
+            slowFailureBackoffUntilUtc = DateTime.UtcNow + slowFailureBackoff;
+        }
+    }
+
+    static void RecordSuccess()
+    {
+        lock (cacheLock)
+        {
+            consecutiveSlowFailures = 0;
+            slowFailureBackoffUntilUtc = default;
         }
     }
 
