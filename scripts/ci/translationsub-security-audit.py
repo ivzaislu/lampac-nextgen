@@ -79,7 +79,7 @@ class MetadataHandler(BaseHTTPRequestHandler):
                 "name": "Season 1",
                 "s": 1,
                 "method": "link",
-                "url": "http://127.0.0.1:9126/sentinel"
+                "url": "http://security-sentinel.test:9126/sentinel"
             }]
         })
 
