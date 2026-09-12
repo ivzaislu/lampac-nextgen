@@ -16,7 +16,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
     {
         var online = new List<ModuleOnlineItem>();
 
-        if (args.serial > 0 && (args.kinopoisk_id > 0 || !string.IsNullOrWhiteSpace(args.imdb_id)))
+        if (args.serial > 0 && args.kinopoisk_id > 0)
             online.Add(new(conf));
 
         return online;
