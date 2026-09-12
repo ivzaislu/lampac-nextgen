@@ -187,9 +187,6 @@
             Lampa.Listener.follow('full', function (event) {
                 if (event && event.type === 'complite') scheduleApply(0);
             });
-            Lampa.Listener.follow('app', function (event) {
-                if (event && event.type === 'ready') scheduleApply(0);
-            });
             lampaBound = true;
         } catch (e) {}
     }
