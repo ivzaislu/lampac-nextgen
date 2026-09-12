@@ -214,7 +214,8 @@ def seed_background_queue():
         )
         conn.commit()
 
-        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+        assert integrity is not None and integrity[0] == "ok", tuple(integrity) if integrity else integrity
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         count = conn.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0]
         assert count == SUBSCRIPTION_COUNT, count
@@ -245,7 +246,8 @@ def assert_persisted_queue(expected_synced=False):
             assert row["last_episode"] == 3, dict(row)
             if expected_synced and row["id"] == "tick-gate-sub-0":
                 assert row["tmdb_last_synced_at"], dict(row)
-        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()
+        assert integrity is not None and integrity[0] == "ok", tuple(integrity) if integrity else integrity
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
