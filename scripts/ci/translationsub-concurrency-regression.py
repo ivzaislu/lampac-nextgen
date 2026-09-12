@@ -19,6 +19,10 @@ LOCK_UID = "concurrency-lock@translationsub.test"
 SAME_UID = "concurrency-same-user@translationsub.test"
 
 
+class ConcurrencyHttpServer(ThreadingHTTPServer):
+    request_queue_size = 128
+
+
 class FixtureHandler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         return
@@ -65,7 +69,7 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 
 def serve_fixture():
-    server = ThreadingHTTPServer(("127.0.0.1", 9120), FixtureHandler)
+    server = ConcurrencyHttpServer(("127.0.0.1", 9120), FixtureHandler)
     print("TranslationSub concurrency fixture listening on 127.0.0.1:9120", flush=True)
     server.serve_forever()
 
