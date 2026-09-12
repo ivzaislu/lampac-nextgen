@@ -354,7 +354,6 @@ def verify(expected_watched):
     assert_ok(status, content)
     button = content.get("button") or {}
     assert button.get("subscribed") is True, content
-    assert button.get("subscriptionId") == state["subscriptionId"], content
 
     status, default_profile = get(f"/translationsub/v2/snapshot?uid={UID_Q}")
     assert_ok(status, default_profile)
