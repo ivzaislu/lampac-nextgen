@@ -8,6 +8,7 @@ on:
     paths:
       - 'Modules/TranslationSub/ModInit.cs'
       - 'Modules/TranslationSub/V2Controller.cs'
+      - 'Modules/TranslationSub/translationsub-realtime.js'
       - 'Modules/TranslationSub/Services/TranslationSubDatabase.cs'
       - 'Modules/TranslationSub/Services/SubscriptionStore.cs'
       - 'Modules/TranslationSub/Services/TranslationSubscriptionService.cs'
@@ -18,6 +19,7 @@ on:
       - 'Modules/TranslationSub/Models/SubscriptionProfileProgress.cs'
       - 'Modules/Sync/TimeCode/**'
       - 'scripts/ci/translationsub-realtime-live.mjs'
+      - 'scripts/ci/translationsub-realtime-client-regression.mjs'
       - '.github/workflows/translationsub-realtime-live.yml'
   workflow_dispatch:
 
@@ -30,7 +32,7 @@ permissions:
 
 jobs:
   realtime-live:
-    name: Live NWS + SQLite batching + TimeCode smoke
+    name: Live NWS + client + SQLite + TimeCode regression
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -46,6 +48,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Test realtime thin client
+        run: node scripts/ci/translationsub-realtime-client-regression.mjs
 
       - name: Publish Lampac runtime
         shell: bash
@@ -161,7 +166,7 @@ jobs:
           print('Seeded TranslationSub SQLite subscription')
           PY
 
-      - name: Run backend-first live realtime smoke
+      - name: Run expanded live realtime regression
         env:
           LAMPAC_BASE: http://127.0.0.1:9118
           TRANSLATIONSUB_STORE: /tmp/lampac-runtime/database/translationsub.db
