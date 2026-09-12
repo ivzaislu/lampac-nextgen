@@ -15,6 +15,7 @@ UID_Q = urllib.parse.quote(UID, safe="")
 DB = Path("/tmp/lampac-runtime/database/translationsub.db")
 
 hits = {"metadata": 0, "tmdb": 0}
+requests_seen = []
 
 
 class StubHandler(BaseHTTPRequestHandler):
@@ -31,6 +32,7 @@ class StubHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlsplit(self.path)
+        requests_seen.append(self.path)
         if parsed.path.startswith("/tmdb/tv/"):
             hits["tmdb"] += 1
             self._json({
@@ -162,6 +164,15 @@ def source_ids(settings_body):
     return [str(item.get("id") or "").strip().lower() for item in items if isinstance(item, dict)]
 
 
+def dump_metadata_diagnostics(known, selected, body):
+    print("subscriptions-regression diagnostics:", flush=True)
+    print("  available_sources=", json.dumps(known, ensure_ascii=False), flush=True)
+    print("  selected_source=", selected, flush=True)
+    print("  stub_hits=", json.dumps(hits), flush=True)
+    print("  stub_requests=", json.dumps(requests_seen, ensure_ascii=False), flush=True)
+    print("  content_state=", json.dumps(body, ensure_ascii=False), flush=True)
+
+
 def main():
     stub = start_stub()
     try:
@@ -252,6 +263,7 @@ def main():
         # Resolve voices through the actual metadata traversal.
         status, body = content_state(card, include_voices=True)
         assert_json_ok(status, body)
+        dump_metadata_diagnostics(known, selected, body)
         assert body.get("eligible") is True, body
         voices = body.get("voices") or []
         assert len(voices) == 1, body
