@@ -1,0 +1,260 @@
+name: TranslationSub Persistence Restart Regression
+
+on:
+  push:
+    branches:
+      - TranslationSub-final
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'Modules/Sync/TimeCode/**'
+      - 'scripts/ci/translationsub-persistence-restart.py'
+      - 'scripts/ci/translationsub-persistence-restart-realtime.mjs'
+      - '.github/workflows/translationsub-persistence-restart.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-persistence-restart-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  persistence-restart:
+    name: SQLite + TimeCode + restart + NWS recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-runtime
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-runtime \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-runtime/Core.dll
+          test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-runtime/module/Sync/TimeCode/manifest.json
+
+          echo '127.0.0.1 translationsub-fixture.test' | sudo tee -a /etc/hosts >/dev/null
+
+          cat > /tmp/lampac-runtime/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: true
+            accounts:
+              persistence-restart@translationsub.test: '2099-01-01T00:00:00'
+          BaseModule:
+            nws: true
+            LoadModules:
+              - TranslationSub
+              - TimeCode
+              - FlixCDN
+              - Phantom
+              - ZetflixDB
+              - VideoDB
+              - CDNvideohub
+          listen:
+            port: 9118
+          YAML
+
+          cat > /tmp/lampac-runtime/init.conf <<'JSON'
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://127.0.0.1:9120/tmdb"
+            },
+            "FlixCDN": {
+              "enable": true,
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
+            },
+            "Phantom": {
+              "enable": true,
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
+            },
+            "ZetflixDB": {
+              "enable": true,
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
+            },
+            "VideoDB": {
+              "enable": true,
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
+            },
+            "CDNvideohub": {
+              "enable": true,
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
+            }
+          }
+          JSON
+
+      - name: Start deterministic metadata fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/translationsub-persistence-restart.py serve > /tmp/translationsub-persistence-fixture.log 2>&1 &
+          echo $! > /tmp/translationsub-persistence-fixture.pid
+
+          ready=0
+          for i in $(seq 1 30); do
+            if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9120/health' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != '1' ]; then
+            cat /tmp/translationsub-persistence-fixture.log || true
+            exit 1
+          fi
+
+      - name: Start Lampac first boot
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-runtime
+            exec dotnet Core.dll > /tmp/lampac-persistence-first.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-persistence.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=persistence-restart%40translationsub.test' \
+              -o /tmp/persistence-first-ready.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-persistence.pid)" 2>/dev/null; then
+              echo 'Lampac exited during first boot'
+              tail -n 400 /tmp/lampac-persistence-first.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready on first boot'
+            tail -n 400 /tmp/lampac-persistence-first.log || true
+            exit 1
+          fi
+
+      - name: Create persisted state through public APIs
+        run: python3 scripts/ci/translationsub-persistence-restart.py prepare
+
+      - name: Stop Lampac completely
+        shell: bash
+        run: |
+          set -euo pipefail
+          pid="$(cat /tmp/lampac-persistence.pid)"
+          kill "$pid"
+          for i in $(seq 1 30); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo 'Lampac did not stop after SIGTERM'
+            kill -9 "$pid" || true
+            exit 1
+          fi
+
+          test -f /tmp/lampac-runtime/database/translationsub.db
+          test -f /tmp/lampac-runtime/database/TimeCode.sql
+          python3 - <<'PY'
+          import sqlite3
+          for path in ('/tmp/lampac-runtime/database/translationsub.db', '/tmp/lampac-runtime/database/TimeCode.sql'):
+              with sqlite3.connect(path) as db:
+                  result = db.execute('PRAGMA integrity_check').fetchone()
+                  assert result == ('ok',), (path, result)
+          print('Both SQLite databases are intact after clean shutdown')
+          PY
+
+      - name: Start Lampac second boot
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-runtime
+            exec dotnet Core.dll > /tmp/lampac-persistence-second.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-persistence.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=persistence-restart%40translationsub.test' \
+              -o /tmp/persistence-second-ready.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-persistence.pid)" 2>/dev/null; then
+              echo 'Lampac exited during second boot'
+              tail -n 400 /tmp/lampac-persistence-second.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready on second boot'
+            tail -n 400 /tmp/lampac-persistence-second.log || true
+            exit 1
+          fi
+
+      - name: Verify state after restart
+        run: python3 scripts/ci/translationsub-persistence-restart.py verify 2
+
+      - name: Verify realtime recovery after restart
+        env:
+          LAMPAC_BASE: http://127.0.0.1:9118
+          TRANSLATIONSUB_PERSISTENCE_STATE: /tmp/translationsub-persistence-state.json
+        run: node scripts/ci/translationsub-persistence-restart-realtime.mjs
+
+      - name: Verify post-restart write persisted
+        run: python3 scripts/ci/translationsub-persistence-restart.py verify 3
+
+      - name: Runtime log tails
+        if: always()
+        shell: bash
+        run: |
+          echo '===== first boot ====='
+          tail -n 250 /tmp/lampac-persistence-first.log 2>/dev/null || true
+          echo '===== second boot ====='
+          tail -n 350 /tmp/lampac-persistence-second.log 2>/dev/null || true
+          echo '===== fixture ====='
+          tail -n 100 /tmp/translationsub-persistence-fixture.log 2>/dev/null || true
+
+      - name: Stop processes
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac-persistence.pid ]; then
+            kill "$(cat /tmp/lampac-persistence.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/translationsub-persistence-fixture.pid ]; then
+            kill "$(cat /tmp/translationsub-persistence-fixture.pid)" 2>/dev/null || true
+          fi
