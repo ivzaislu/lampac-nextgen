@@ -46,6 +46,12 @@
         try { localStorage.setItem(name, typeof value === 'string' ? value : JSON.stringify(value)); } catch (e2) {}
     }
 
+    function boolValue(value, fallback) {
+        if (value === true || value === 1 || value === '1' || value === 'true') return true;
+        if (value === false || value === 0 || value === '0' || value === 'false') return false;
+        return !!fallback;
+    }
+
     function settingBool(name, fallback) {
         var value = storageGet(name, fallback);
         if (value === true || value === 1 || value === '1' || value === 'true') return true;
@@ -165,7 +171,7 @@
         var endedDays = pick(settings, 'EndedRefreshDays', 'endedRefreshDays', null);
         var seasonMode = pick(settings, 'NewSeasonMode', 'newSeasonMode', null);
         if (interval !== null) storageSet(KEYS.interval, String(interval));
-        if (smart !== null) storageSet(KEYS.smartTmdb, !!smart);
+        if (smart !== null) storageSet(KEYS.smartTmdb, boolValue(smart, false));
         if (tmdbHours !== null) storageSet(KEYS.tmdbRefreshHours, String(tmdbHours));
         if (endedDays !== null) storageSet(KEYS.endedRefreshDays, String(endedDays));
         if (seasonMode !== null) storageSet(KEYS.newSeasonMode, String(seasonMode));
@@ -278,7 +284,8 @@
                 name: item.name,
                 description: 'Lampac: ' + item.id + '. Использовать этот балансер для поиска озвучек и новых серий.'
             },
-            onChange: function () {
+            onChange: function (value) {
+                storageSet(key, boolValue(value, settingBool(key, false)));
                 selectedSources = currentSelectionFromTriggers();
                 syncServerSettings();
             }
@@ -294,7 +301,10 @@
             component: ROOT,
             param: { name: storageKey, type: 'select', values: values, 'default': String(defaultValue) },
             field: { name: name, description: description },
-            onChange: syncServerSettings
+            onChange: function (value) {
+                if (value !== undefined && value !== null) storageSet(storageKey, String(value));
+                syncServerSettings();
+            }
         });
     }
 
@@ -359,7 +369,10 @@
                     component: ROOT,
                     param: { name: KEYS.smartTmdb, type: 'trigger', values: '', 'default': !!smartDefault },
                     field: { name: 'Умное расписание TMDB', description: 'Не опрашивать балансеры до фактического выхода серии или сезона.' },
-                    onChange: syncServerSettings
+                    onChange: function (value) {
+                        storageSet(KEYS.smartTmdb, boolValue(value, settingBool(KEYS.smartTmdb, !!smartDefault)));
+                        syncServerSettings();
+                    }
                 });
             }
 
