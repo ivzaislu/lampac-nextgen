@@ -48,6 +48,8 @@ jobs:
           test -f /tmp/lampac-security/module/TranslationSub/manifest.json
           test -f /tmp/lampac-security/module/OnlineRUS/FlixCDN/manifest.json
 
+          echo '127.0.0.1 security-meta.test security-sentinel.test' | sudo tee -a /etc/hosts >/dev/null
+
           cat > /tmp/lampac-security/init.yaml <<'YAML'
           chromium:
             enable: false
@@ -73,12 +75,12 @@ jobs:
           {
             "TranslationSub": {
               "enable": true,
-              "tmdb_apihost": "http://127.0.0.1:9125/tmdb",
+              "tmdb_apihost": "http://security-meta.test:9125/tmdb",
               "tmdb_apikey": ""
             },
             "FlixCDN": {
               "enable": true,
-              "overridehost": "http://127.0.0.1:9125/meta"
+              "overridehost": "http://security-meta.test:9125/meta"
             }
           }
           JSON
