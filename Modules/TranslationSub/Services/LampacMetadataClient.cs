@@ -8,7 +8,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using TranslationSub.Models;
 
@@ -543,7 +545,12 @@ internal static class LampacMetadataClient
         }
 
         if (nextUrl.StartsWith('/'))
+        {
+            if (TryCreateHttpUri(currentUrl, out var currentAbsolute))
+                return ForceMetadataJson(new Uri(currentAbsolute, nextUrl).ToString());
+
             return ForceMetadataJson(nextUrl);
+        }
 
         try
         {
@@ -658,11 +665,19 @@ internal static class LampacMetadataClient
         {
             // Resolve the target before attaching Lampac identity. Local routes may
             // receive the native request identity; an explicitly configured remote
-            // source may receive it only on its original origin. Metadata links that
-            // jump to another origin are fetched without uid/token/account context.
+            // source may receive it only on its original origin.
             Uri uri = ResolveRequestUri(pathOrUrl, httpContext, out bool localRoute);
             if (uri == null)
                 return null;
+
+            bool externalSource = trustedExternalOrigin != null;
+            if (externalSource && (localRoute || !SameOrigin(uri, trustedExternalOrigin)))
+            {
+                Serilog.Log.Warning(
+                    "TranslationSub blocked external metadata origin escape. Route={Route}",
+                    SafeRoute(pathOrUrl));
+                return null;
+            }
 
             if (localRoute || SameOrigin(uri, trustedExternalOrigin))
             {
@@ -676,6 +691,22 @@ internal static class LampacMetadataClient
                     return null;
             }
 
+            // Re-check after identity/query decoration so an external source can
+            // never become a privileged local Lampac route or change origin.
+            if (externalSource && (localRoute || !SameOrigin(uri, trustedExternalOrigin)))
+            {
+                Serilog.Log.Warning(
+                    "TranslationSub blocked external metadata origin escape after identity decoration. Route={Route}",
+                    SafeRoute(pathOrUrl));
+                return null;
+            }
+
+            // External metadata is intentionally fetched without automatic redirects.
+            // This prevents a configured/compromised remote source from redirecting
+            // the server to loopback, private services, or another origin.
+            if (externalSource)
+                return await GetExternalNoRedirectAsync(uri).ConfigureAwait(false);
+
             IReadOnlyList<HeadersModel> headers = null;
             if (localRoute)
             {
@@ -686,7 +717,6 @@ internal static class LampacMetadataClient
                 );
             }
 
-            // Shared.Http follows redirects itself, matching OnlineApi.checkSearch().
             return await Http.Get(
                 uri.ToString(),
                 timeoutSeconds: 30,
@@ -699,6 +729,41 @@ internal static class LampacMetadataClient
         {
             Serilog.Log.Error(ex, "TranslationSub metadata HTTP failed. Route={Route}", SafeRoute(pathOrUrl));
             return null;
+        }
+    }
+
+    static async Task<string> GetExternalNoRedirectAsync(Uri uri)
+    {
+        HttpClientHandler handler = Http.HandlerOrNull(uri.ToString(), null);
+        if (handler != null)
+            handler.AllowAutoRedirect = false;
+
+        HttpClient client = FriendlyHttp.MessageClient(
+            "base",
+            handler,
+            out bool disposeHttpClient,
+            allowAutoRedirect: false);
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            Http.DefaultRequestHeaders(uri.ToString(), request, null, null, null);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using HttpResponseMessage response = await client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cts.Token).ConfigureAwait(false);
+
+            if (response.StatusCode != HttpStatusCode.OK)
+                return null;
+
+            return await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (disposeHttpClient)
+                client.Dispose();
         }
     }
 
