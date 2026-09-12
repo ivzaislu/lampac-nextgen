@@ -59,6 +59,7 @@ jobs:
             enable: false
           cache:
             type: mem
+          serilog: true
           accsdb:
             enable: false
           BaseModule:
@@ -155,6 +156,8 @@ jobs:
         run: |
           echo '===== lampac-concurrency.log tail ====='
           tail -n 500 /tmp/lampac-concurrency.log 2>/dev/null || true
+          echo '===== serilog metadata ====='
+          grep -E -i 'TranslationSub metadata|SQLite|Sqlite|Unhandled' /tmp/lampac-runtime/logs/app-*.log 2>/dev/null | tail -n 500 || true
           echo '===== fixture ====='
           tail -n 100 /tmp/translationsub-concurrency-fixture.log 2>/dev/null || true
 
