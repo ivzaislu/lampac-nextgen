@@ -9,6 +9,7 @@ on:
       - 'Modules/Sync/TimeCode/**'
       - 'scripts/ci/translationsub-concurrency-regression.py'
       - 'scripts/ci/translationsub-concurrency-diagnostic.py'
+      - 'scripts/ci/translationsub-concurrency-fixture.py'
       - '.github/workflows/translationsub-concurrency-regression.yml'
   workflow_dispatch:
 
@@ -88,7 +89,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/ci/translationsub-concurrency-regression.py serve > /tmp/translationsub-concurrency-fixture.log 2>&1 &
+          python3 scripts/ci/translationsub-concurrency-fixture.py > /tmp/translationsub-concurrency-fixture.log 2>&1 &
           echo $! > /tmp/translationsub-concurrency-fixture.pid
 
           ready=0
