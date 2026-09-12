@@ -8,6 +8,7 @@ on:
       - 'Modules/TranslationSub/**'
       - 'Modules/Sync/TimeCode/**'
       - 'scripts/ci/translationsub-concurrency-regression.py'
+      - 'scripts/ci/translationsub-concurrency-diagnostic.py'
       - '.github/workflows/translationsub-concurrency-regression.yml'
   workflow_dispatch:
 
@@ -132,6 +133,9 @@ jobs:
             tail -n 400 /tmp/lampac-concurrency.log || true
             exit 1
           fi
+
+      - name: Diagnose metadata subscribe burst
+        run: python3 scripts/ci/translationsub-concurrency-diagnostic.py
 
       - name: Run concurrency regression suite
         run: python3 scripts/ci/translationsub-concurrency-regression.py run
