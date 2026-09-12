@@ -66,6 +66,8 @@
 
         $('.translationsub-head').each(function () {
             var head = $(this);
+            head.toggleClass('translationsub-head--has-updates', count > 0);
+
             var badge = head.children('.translationsub-state-badge').first();
             if (!badge.length && count > 0) {
                 badge = $('<div class="translationsub-state-badge"></div>');
