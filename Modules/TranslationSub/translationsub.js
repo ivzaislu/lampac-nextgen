@@ -5,11 +5,8 @@
     window.__TranslationSubPluginStarted = true;
 
     var META = {
-        component: 'translationsub',
         name: 'Подписки на озвучки',
-        version: '4.0.0-backend-first',
-        description: 'Подписки на озвучки и уведомления о новых сериях',
-        type: 'other'
+        version: '4.0.0-backend-first'
     };
 
     function log() {
@@ -123,7 +120,6 @@
 
         window.TranslationSubRuntime = {
             onReady: onReady,
-            isReady: function () { return ready; },
             controllerName: controllerName,
             restoreController: restoreController
         };
