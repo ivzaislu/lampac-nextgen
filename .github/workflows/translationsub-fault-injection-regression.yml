@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   metadata-faults:
-    name: Metadata 404/500/malformed/empty/disconnect
+    name: Metadata + TMDB external-service faults
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -134,7 +134,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run metadata fault-injection stage
+      - name: Run metadata and TMDB fault-injection stages
         run: python3 scripts/ci/translationsub-fault-injection-regression.py run
 
       - name: Reject storage and unhandled runtime failures
