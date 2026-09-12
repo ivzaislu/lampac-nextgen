@@ -1,7 +1,6 @@
 using Shared;
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -101,12 +100,6 @@ public static class TranslationSubRealtimeService
             }
         }
     }
-
-    public static IReadOnlyDictionary<string, (string uid, string profileId)> SnapshotRegistrations()
-        => registrations.ToDictionary(
-            x => x.Key,
-            x => (x.Value.Uid, x.Value.ProfileId),
-            StringComparer.Ordinal);
 
     static string NormalizeProfileId(string profileId)
     {

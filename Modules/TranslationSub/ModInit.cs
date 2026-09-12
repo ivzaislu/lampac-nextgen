@@ -7,7 +7,6 @@ using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
 using Shared.Services;
 using System;
-using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -23,7 +22,6 @@ public class ModInit : IModuleLoaded
     public void Loaded(InitspaceModel initspace)
     {
         modpath = initspace.path;
-        Directory.CreateDirectory("database/translationsub");
 
         updateConf();
         EventListener.UpdateInitFile += updateConf;

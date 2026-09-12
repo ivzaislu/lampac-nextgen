@@ -3,10 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using TranslationSub.Models;
@@ -124,12 +121,7 @@ public class TranslationSubV2Controller : BaseController
         string profileId = ResolveProfileId();
         TimeCodeProgressService.SyncUser(uid, profileId);
 
-        var selectedSources = (TranslationSettingsStore.Get(uid).Sources ?? new List<string>())
-            .Select(TranslationSettingsStore.NormalizeSourceId)
-            .Where(x => x != null)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        await TranslationSubscriptionService.Tick(uid, selectedSources, force: true);
+        await TranslationSubscriptionService.Tick(uid, force: true);
 
         TimeCodeProgressService.SyncUser(uid, profileId);
         var snapshot = TranslationSubSnapshotService.Build(uid, profileId);
