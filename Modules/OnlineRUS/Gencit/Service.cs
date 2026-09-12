@@ -31,47 +31,34 @@ public class GencitService
         );
     }
 
-    public async Task<GencitApiData> ResolvePlaylist(long kinopoiskId, string imdbId)
+    public async Task<GencitApiData> ResolvePlaylist(long kinopoiskId, string _)
     {
         LastError = null;
-        string kpError = null;
 
-        if (kinopoiskId > 0)
+        if (kinopoiskId <= 0)
         {
-            var data = await GetApiData(kinopoiskId.ToString()).ConfigureAwait(false);
-            if (data?.playlist_id > 0 && (data.kinopoisk_id <= 0 || data.kinopoisk_id == kinopoiskId))
-                return data;
-
-            kpError = LastError ?? "api:kp:not_found";
-        }
-
-        string imdb = NormalizeImdb(imdbId);
-        if (!string.IsNullOrWhiteSpace(imdb))
-        {
-            var data = await GetApiData(imdb).ConfigureAwait(false);
-            if (data?.playlist_id > 0)
-            {
-                string responseImdb = NormalizeImdb(data.imdb_id);
-                if (string.IsNullOrWhiteSpace(responseImdb) || responseImdb == imdb)
-                    return data;
-            }
-
-            string imdbError = LastError ?? "api:imdb:not_found";
-            LastError = string.IsNullOrWhiteSpace(kpError)
-                ? imdbError
-                : $"{kpError}; {imdbError}";
+            LastError = "kinopoisk_id";
             return null;
         }
 
-        LastError = kpError ?? "external_id";
-        return null;
+        var data = await GetApiData(kinopoiskId).ConfigureAwait(false);
+        if (data == null)
+            return null;
+
+        if (data.kinopoisk_id > 0 && data.kinopoisk_id != kinopoiskId)
+        {
+            LastError = "api:kp:mismatch";
+            return null;
+        }
+
+        return data;
     }
 
-    private async Task<GencitApiData> GetApiData(string externalId)
+    private async Task<GencitApiData> GetApiData(long kinopoiskId)
     {
-        if (string.IsNullOrWhiteSpace(externalId))
+        if (kinopoiskId <= 0)
         {
-            LastError = "api:id";
+            LastError = "api:kp:id";
             return null;
         }
 
@@ -82,7 +69,7 @@ public class GencitService
             return null;
         }
 
-        string uri = $"{apiHost}/api/{Uri.EscapeDataString(externalId)}";
+        string uri = $"{apiHost}/api/{kinopoiskId}";
         string json;
 
         try
@@ -124,18 +111,6 @@ public class GencitService
             LastError = $"api:json:{ex.GetType().Name}";
             return null;
         }
-    }
-
-    private static string NormalizeImdb(string imdbId)
-    {
-        if (string.IsNullOrWhiteSpace(imdbId))
-            return null;
-
-        string value = imdbId.Trim().ToLowerInvariant();
-        if (value.StartsWith("tt", StringComparison.Ordinal))
-            return value;
-
-        return long.TryParse(value, out _) ? $"tt{value}" : value;
     }
 
     public async Task<GencitPageData> GetPage(int playlistId, short season = 0, short episode = 0, int voiceId = 0)
