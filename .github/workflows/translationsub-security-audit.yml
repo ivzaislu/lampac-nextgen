@@ -1,0 +1,180 @@
+name: TranslationSub Security Audit Probe
+
+on:
+  push:
+    branches:
+      - TranslationSub-final
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'scripts/ci/translationsub-security-audit.py'
+      - 'scripts/ci/translationsub-security-nws.mjs'
+      - '.github/workflows/translationsub-security-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  external-surface-audit:
+    name: Anonymous IDOR + NWS spoof + metadata SSRF
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-security
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-security \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-security/Core.dll
+          test -f /tmp/lampac-security/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-security/module/OnlineRUS/FlixCDN/manifest.json
+
+          cat > /tmp/lampac-security/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          serilog: true
+          accsdb:
+            enable: true
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+              - TimeCode
+              - FlixCDN
+          listen:
+            port: 9118
+          YAML
+
+          cat > /tmp/lampac-security/init.conf <<'JSON'
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://127.0.0.1:9125/tmdb",
+              "tmdb_apikey": ""
+            },
+            "FlixCDN": {
+              "enable": true,
+              "overridehost": "http://127.0.0.1:9125/meta"
+            }
+          }
+          JSON
+
+      - name: Start security fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/translationsub-security-audit.py serve > /tmp/translationsub-security-fixture.log 2>&1 &
+          echo $! > /tmp/translationsub-security-fixture.pid
+
+          ready_meta=0
+          ready_sentinel=0
+          for i in $(seq 1 30); do
+            if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9125/health' >/dev/null; then
+              ready_meta=1
+            fi
+            if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9126/health' >/dev/null; then
+              ready_sentinel=1
+            fi
+            if [ "$ready_meta" = '1' ] && [ "$ready_sentinel" = '1' ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$ready_meta" = '1'
+          test "$ready_sentinel" = '1'
+
+      - name: Start Lampac and wait for TranslationSub
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-security
+            exec dotnet Core.dll > /tmp/lampac-security.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-security.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=security-ready%40translationsub.test' \
+              -o /tmp/security-ready.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-security.pid)" 2>/dev/null; then
+              echo 'Lampac exited before TranslationSub became ready'
+              tail -n 400 /tmp/lampac-security.log || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready'
+            tail -n 400 /tmp/lampac-security.log || true
+            exit 1
+          fi
+
+      - name: Probe anonymous HTTP IDOR and metadata SSRF
+        env:
+          TRANSLATIONSUB_BASE_URL: http://127.0.0.1:9118
+          TRANSLATIONSUB_DB_PATH: /tmp/lampac-security/database/translationsub.db
+          TRANSLATIONSUB_SECURITY_META: http://127.0.0.1:9125
+        run: python3 scripts/ci/translationsub-security-audit.py run
+
+      - name: Probe anonymous NWS uid spoof and destructive IDOR
+        env:
+          TRANSLATIONSUB_BASE_URL: http://127.0.0.1:9118
+        run: node scripts/ci/translationsub-security-nws.mjs
+
+      - name: Reject SQLite and unhandled runtime failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -E -i 'database is locked|SQLite Error|SqliteException|Unhandled exception' /tmp/lampac-security.log; then
+            echo 'Unexpected SQLite or unhandled runtime failure detected'
+            exit 1
+          fi
+
+      - name: Audit log tails
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac-security.log tail ====='
+          tail -n 500 /tmp/lampac-security.log 2>/dev/null || true
+          echo '===== security fixture ====='
+          tail -n 200 /tmp/translationsub-security-fixture.log 2>/dev/null || true
+
+      - name: Stop processes
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac-security.pid ]; then
+            kill "$(cat /tmp/lampac-security.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/translationsub-security-fixture.pid ]; then
+            kill "$(cat /tmp/translationsub-security-fixture.pid)" 2>/dev/null || true
+          fi
