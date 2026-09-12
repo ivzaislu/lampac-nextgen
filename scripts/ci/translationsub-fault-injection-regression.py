@@ -533,7 +533,7 @@ def tmdb_fault_case(source, mode, tmdb_id):
     subscription_id = created.get("subscriptionId")
     assert subscription_id, created
     if mode == "timeout":
-        assert subscribe_elapsed >= 20, subscribe_elapsed
+        assert subscribe_elapsed < 30, subscribe_elapsed
 
     before = tmdb_row(uid)
     assert before is not None, uid
