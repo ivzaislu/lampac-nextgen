@@ -1,7 +1,6 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -21,36 +20,80 @@ public class TranslationUserSettings
 
 public static class TranslationSettingsStore
 {
-    static readonly object locker = new();
     static readonly string[] allowedNewSeasonModes = { "auto", "notify", "off" };
     static readonly Regex sourceIdRegex = new("^[a-z0-9][a-z0-9._:/-]{0,119}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    static string path => "database/translationsub/settings.json";
 
-    static List<TranslationUserSettings> LoadUnsafe()
+    static TranslationUserSettings LoadUnsafe(string uid)
     {
-        if (!File.Exists(path))
-            return new List<TranslationUserSettings>();
+        using var connection = TranslationSubDatabase.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+SELECT uid, check_interval_hours, sources_json, use_tmdb_schedule,
+       tmdb_refresh_hours, ended_refresh_days, new_season_mode, updated_at
+FROM settings
+WHERE uid = $uid
+LIMIT 1;";
+        command.Parameters.AddWithValue("$uid", uid);
 
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        return new TranslationUserSettings
+        {
+            Uid = reader.GetString(reader.GetOrdinal("uid")),
+            CheckIntervalHours = reader.GetInt32(reader.GetOrdinal("check_interval_hours")),
+            Sources = ReadSources(reader.GetString(reader.GetOrdinal("sources_json"))),
+            UseTmdbSchedule = reader.GetInt32(reader.GetOrdinal("use_tmdb_schedule")) != 0,
+            TmdbRefreshHours = reader.GetInt32(reader.GetOrdinal("tmdb_refresh_hours")),
+            EndedRefreshDays = reader.GetInt32(reader.GetOrdinal("ended_refresh_days")),
+            NewSeasonMode = reader.GetString(reader.GetOrdinal("new_season_mode")),
+            UpdatedAt = TranslationSubDatabase.ReadDateTime(reader, "updated_at", DateTime.Now)
+        };
+    }
+
+    static void SaveUnsafe(TranslationUserSettings value)
+    {
+        using var connection = TranslationSubDatabase.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = @"
+INSERT INTO settings (
+    uid, check_interval_hours, sources_json, use_tmdb_schedule,
+    tmdb_refresh_hours, ended_refresh_days, new_season_mode, updated_at
+) VALUES (
+    $uid, $check_interval_hours, $sources_json, $use_tmdb_schedule,
+    $tmdb_refresh_hours, $ended_refresh_days, $new_season_mode, $updated_at
+)
+ON CONFLICT(uid) DO UPDATE SET
+    check_interval_hours = excluded.check_interval_hours,
+    sources_json = excluded.sources_json,
+    use_tmdb_schedule = excluded.use_tmdb_schedule,
+    tmdb_refresh_hours = excluded.tmdb_refresh_hours,
+    ended_refresh_days = excluded.ended_refresh_days,
+    new_season_mode = excluded.new_season_mode,
+    updated_at = excluded.updated_at;";
+
+        command.Parameters.AddWithValue("$uid", value.Uid);
+        command.Parameters.AddWithValue("$check_interval_hours", value.CheckIntervalHours);
+        command.Parameters.AddWithValue("$sources_json", JsonConvert.SerializeObject(value.Sources ?? new List<string>()));
+        command.Parameters.AddWithValue("$use_tmdb_schedule", value.UseTmdbSchedule ? 1 : 0);
+        command.Parameters.AddWithValue("$tmdb_refresh_hours", value.TmdbRefreshHours);
+        command.Parameters.AddWithValue("$ended_refresh_days", value.EndedRefreshDays);
+        command.Parameters.AddWithValue("$new_season_mode", value.NewSeasonMode);
+        command.Parameters.AddWithValue("$updated_at", TranslationSubDatabase.DateTimeText(value.UpdatedAt));
+        command.ExecuteNonQuery();
+    }
+
+    static List<string> ReadSources(string json)
+    {
         try
         {
-            return JsonConvert.DeserializeObject<List<TranslationUserSettings>>(File.ReadAllText(path))
-                ?? new List<TranslationUserSettings>();
+            return JsonConvert.DeserializeObject<List<string>>(json ?? "[]") ?? new List<string>();
         }
         catch
         {
-            return new List<TranslationUserSettings>();
+            return new List<string>();
         }
-    }
-
-    static void SaveUnsafe(List<TranslationUserSettings> list)
-    {
-        string dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(dir))
-            Directory.CreateDirectory(dir);
-
-        string temp = path + ".tmp";
-        File.WriteAllText(temp, JsonConvert.SerializeObject(list, Formatting.Indented));
-        File.Move(temp, path, true);
     }
 
     static TranslationUserSettings Normalize(TranslationUserSettings value, string uid = null, bool touchUpdatedAt = false)
@@ -107,11 +150,9 @@ public static class TranslationSettingsStore
     {
         uid = string.IsNullOrWhiteSpace(uid) ? null : uid.Trim();
 
-        lock (locker)
+        lock (TranslationSubDatabase.SyncRoot)
         {
-            var current = uid == null
-                ? null
-                : LoadUnsafe().FirstOrDefault(x => string.Equals(x.Uid, uid, StringComparison.Ordinal));
+            var current = uid == null ? null : LoadUnsafe(uid);
             if (current == null)
                 return Normalize(new TranslationUserSettings { Uid = uid }, uid);
 
@@ -132,15 +173,9 @@ public static class TranslationSettingsStore
         if (uid == null)
             throw new ArgumentException("uid is required", nameof(uid));
 
-        lock (locker)
+        lock (TranslationSubDatabase.SyncRoot)
         {
-            var list = LoadUnsafe();
-            var current = list.FirstOrDefault(x => string.Equals(x.Uid, uid, StringComparison.Ordinal));
-            if (current == null)
-            {
-                current = new TranslationUserSettings { Uid = uid };
-                list.Add(current);
-            }
+            var current = LoadUnsafe(uid) ?? new TranslationUserSettings { Uid = uid };
 
             current.CheckIntervalHours = checkIntervalHours;
             current.Sources = sources?.ToList() ?? new List<string>();
@@ -150,7 +185,7 @@ public static class TranslationSettingsStore
             if (!string.IsNullOrWhiteSpace(newSeasonMode)) current.NewSeasonMode = newSeasonMode;
 
             Normalize(current, uid, true);
-            SaveUnsafe(list);
+            SaveUnsafe(current);
             return Clone(current);
         }
     }
