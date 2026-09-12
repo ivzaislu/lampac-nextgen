@@ -7,6 +7,7 @@ on:
     paths:
       - 'Modules/TranslationSub/**'
       - 'scripts/ci/translationsub-fault-injection-regression.py'
+      - 'scripts/ci/translationsub-fault-source-fallback.py'
       - '.github/workflows/translationsub-fault-injection-regression.yml'
   workflow_dispatch:
 
@@ -19,7 +20,7 @@ concurrency:
 
 jobs:
   metadata-faults:
-    name: Metadata + TMDB external-service faults
+    name: Metadata + TMDB + source fallback faults
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -45,6 +46,7 @@ jobs:
           test -f /tmp/lampac-runtime/Core.dll
           test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
           test -f /tmp/lampac-runtime/module/Sync/TimeCode/manifest.json
+          test -f /tmp/lampac-runtime/module/OnlineRUS/Phantom/manifest.json
 
           echo '127.0.0.1 translationsub-fault.test' | sudo tee -a /etc/hosts >/dev/null
 
@@ -65,6 +67,7 @@ jobs:
               - TranslationSub
               - TimeCode
               - FlixCDN
+              - Phantom
           listen:
             port: 9118
           YAML
@@ -79,27 +82,42 @@ jobs:
             "FlixCDN": {
               "enable": true,
               "overridehost": "http://translationsub-fault.test:9122/meta"
+            },
+            "Phantom": {
+              "enable": true,
+              "overridehost": "http://translationsub-fault.test:9123/meta"
             }
           }
           JSON
 
-      - name: Start controllable external-service fixture
+      - name: Start controllable external-service fixtures
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/ci/translationsub-fault-injection-regression.py serve > /tmp/translationsub-fault-fixture.log 2>&1 &
           echo $! > /tmp/translationsub-fault-fixture.pid
 
-          ready=0
+          python3 scripts/ci/translationsub-fault-source-fallback.py serve > /tmp/translationsub-phantom-fixture.log 2>&1 &
+          echo $! > /tmp/translationsub-phantom-fixture.pid
+
+          ready_main=0
+          ready_phantom=0
           for i in $(seq 1 30); do
             if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9122/health' >/dev/null; then
-              ready=1
+              ready_main=1
+            fi
+            if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9123/health' >/dev/null; then
+              ready_phantom=1
+            fi
+            if [ "$ready_main" = '1' ] && [ "$ready_phantom" = '1' ]; then
               break
             fi
             sleep 1
           done
-          if [ "$ready" != '1' ]; then
+          if [ "$ready_main" != '1' ] || [ "$ready_phantom" != '1' ]; then
+            echo 'External-service fixtures did not become ready'
             cat /tmp/translationsub-fault-fixture.log || true
+            cat /tmp/translationsub-phantom-fixture.log || true
             exit 1
           fi
 
@@ -137,6 +155,9 @@ jobs:
       - name: Run metadata and TMDB fault-injection stages
         run: python3 scripts/ci/translationsub-fault-injection-regression.py run
 
+      - name: Run metadata timeout and source fallback stages
+        run: python3 scripts/ci/translationsub-fault-source-fallback.py run
+
       - name: Reject storage and unhandled runtime failures
         shell: bash
         run: |
@@ -154,8 +175,10 @@ jobs:
           tail -n 500 /tmp/lampac-fault.log 2>/dev/null || true
           echo '===== serilog TranslationSub metadata tail ====='
           grep -E -i 'TranslationSub metadata|SQLite|Sqlite|Unhandled' /tmp/lampac-runtime/logs/app-*.log 2>/dev/null | tail -n 500 || true
-          echo '===== fixture ====='
+          echo '===== main fixture ====='
           tail -n 200 /tmp/translationsub-fault-fixture.log 2>/dev/null || true
+          echo '===== Phantom fixture ====='
+          tail -n 200 /tmp/translationsub-phantom-fixture.log 2>/dev/null || true
 
       - name: Stop processes
         if: always()
@@ -166,4 +189,7 @@ jobs:
           fi
           if [ -f /tmp/translationsub-fault-fixture.pid ]; then
             kill "$(cat /tmp/translationsub-fault-fixture.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/translationsub-phantom-fixture.pid ]; then
+            kill "$(cat /tmp/translationsub-phantom-fixture.pid)" 2>/dev/null || true
           fi
