@@ -45,6 +45,11 @@ jobs:
           test -f /tmp/lampac-runtime/Core.dll
           test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
 
+          # Lampac intentionally treats absolute loopback URLs as local Lampac
+          # routes. Use a dedicated hostname mapped to loopback so the fixture is
+          # exercised as a configured external provider origin without external IO.
+          echo '127.0.0.1 translationsub-fixture.test' | sudo tee -a /etc/hosts >/dev/null
+
           cat > /tmp/lampac-runtime/init.yaml <<'YAML'
           chromium:
             enable: false
@@ -76,23 +81,23 @@ jobs:
             },
             "FlixCDN": {
               "enable": true,
-              "overridehost": "http://127.0.0.1:9120/meta"
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
             },
             "Phantom": {
               "enable": true,
-              "overridehost": "http://127.0.0.1:9120/meta"
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
             },
             "ZetflixDB": {
               "enable": true,
-              "overridehost": "http://127.0.0.1:9120/meta"
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
             },
             "VideoDB": {
               "enable": true,
-              "overridehost": "http://127.0.0.1:9120/meta"
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
             },
             "CDNvideohub": {
               "enable": true,
-              "overridehost": "http://127.0.0.1:9120/meta"
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
             }
           }
           JSON
