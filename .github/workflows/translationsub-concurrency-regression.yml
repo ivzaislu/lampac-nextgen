@@ -1,0 +1,166 @@
+name: TranslationSub Concurrency Regression
+
+on:
+  push:
+    branches:
+      - TranslationSub-final
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'Modules/Sync/TimeCode/**'
+      - 'scripts/ci/translationsub-concurrency-regression.py'
+      - '.github/workflows/translationsub-concurrency-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-concurrency-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  concurrency-regression:
+    name: API races + SQLite locking
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-runtime
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-runtime \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-runtime/Core.dll
+          test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-runtime/module/Sync/TimeCode/manifest.json
+
+          echo '127.0.0.1 translationsub-fixture.test' | sudo tee -a /etc/hosts >/dev/null
+
+          cat > /tmp/lampac-runtime/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+              - TimeCode
+              - FlixCDN
+          listen:
+            port: 9118
+          YAML
+
+          cat > /tmp/lampac-runtime/init.conf <<'JSON'
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://127.0.0.1:9120/tmdb"
+            },
+            "FlixCDN": {
+              "enable": true,
+              "overridehost": "http://translationsub-fixture.test:9120/meta"
+            }
+          }
+          JSON
+
+      - name: Start deterministic metadata fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/translationsub-concurrency-regression.py serve > /tmp/translationsub-concurrency-fixture.log 2>&1 &
+          echo $! > /tmp/translationsub-concurrency-fixture.pid
+
+          ready=0
+          for i in $(seq 1 30); do
+            if curl --silent --show-error --fail --max-time 2 'http://127.0.0.1:9120/health' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != '1' ]; then
+            cat /tmp/translationsub-concurrency-fixture.log || true
+            exit 1
+          fi
+
+      - name: Start Lampac and wait for TranslationSub
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-runtime
+            exec dotnet Core.dll > /tmp/lampac-concurrency.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-concurrency.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=concurrency-0%40translationsub.test' \
+              -o /tmp/concurrency-ready.json; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-concurrency.pid)" 2>/dev/null; then
+              echo 'Lampac exited before TranslationSub became ready'
+              tail -n 400 /tmp/lampac-concurrency.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub did not become ready'
+            tail -n 400 /tmp/lampac-concurrency.log || true
+            exit 1
+          fi
+
+      - name: Run concurrency regression suite
+        run: python3 scripts/ci/translationsub-concurrency-regression.py run
+
+      - name: Reject SQLite and unhandled runtime failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -E -i 'database is locked|SQLite Error|SqliteException|Unhandled exception' /tmp/lampac-concurrency.log; then
+            echo 'Unexpected SQLite or unhandled runtime failure detected'
+            exit 1
+          fi
+
+      - name: Runtime log tail
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac-concurrency.log tail ====='
+          tail -n 500 /tmp/lampac-concurrency.log 2>/dev/null || true
+          echo '===== fixture ====='
+          tail -n 100 /tmp/translationsub-concurrency-fixture.log 2>/dev/null || true
+
+      - name: Stop processes
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac-concurrency.pid ]; then
+            kill "$(cat /tmp/lampac-concurrency.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/translationsub-concurrency-fixture.pid ]; then
+            kill "$(cat /tmp/translationsub-concurrency-fixture.pid)" 2>/dev/null || true
+          fi
