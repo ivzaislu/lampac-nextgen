@@ -3,6 +3,7 @@ name: TranslationSub Backend-First CI
 on:
   push:
     branches:
+      - TranslationSub-final
       - TranslationSub-clean-legacy-api
       - TranslationSub-backend-first-refactor
       - TranslationSub-backend-first-refactor-work
@@ -99,6 +100,7 @@ jobs:
           set -euo pipefail
           test ! -e Modules/TranslationSub/Controller.cs
           test ! -e Modules/TranslationSub/translationsub-watch.js
+          test ! -e Modules/TranslationSub/translationsub-bell-theme.js
 
           if grep -RniE --include='*.cs' \
             '\[Route\("(transsubscribe/|translationsub/(list|updates|progress|variants|check|add|remove|user-settings|sources|toggle|watched|notified)("|/))' \

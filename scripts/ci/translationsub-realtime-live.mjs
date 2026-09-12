@@ -5,7 +5,7 @@ const base = process.env.LAMPAC_BASE || 'http://127.0.0.1:9118';
 const uid = 'ci@translationsub.test';
 const subscriptionId = 'ci-subscription';
 const storePath = process.env.TRANSLATIONSUB_STORE
-  || '/tmp/lampac-runtime/database/translationsub/subscriptions.json';
+  || '/tmp/lampac-runtime/database/translationsub.db';
 
 function wsBase(url) {
   return url.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
@@ -117,7 +117,7 @@ const p7 = new Client('7');
 const p8 = new Client('8');
 
 try {
-  assert.ok(fs.existsSync(storePath), `seeded subscription store is missing: ${storePath}`);
+  assert.ok(fs.existsSync(storePath), `TranslationSub database is missing: ${storePath}`);
 
   await p7.connect();
   await p8.connect();
@@ -159,18 +159,19 @@ try {
   assert.ok(changedSub, changed.snapshot);
   assert.equal(changedSub.schedule?.code, 'sources_disabled', changedSub);
 
-  const persisted = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-  assert.equal(persisted.length, 1, persisted);
-  assert.equal(persisted[0].Id, subscriptionId, persisted[0]);
-  assert.equal(persisted[0].ScheduleState, 'sources_disabled', persisted[0]);
-  console.log('LIVE changed tick: one canonical save state + one invalidation per connection');
+  const persistedSnapshot = await jsonFetch(
+    `/translationsub/v2/snapshot?uid=${encodeURIComponent(uid)}&profile_id=7`);
+  const persistedSub = subscriptionFrom(persistedSnapshot);
+  assert.ok(persistedSub, persistedSnapshot);
+  assert.equal(persistedSub.schedule?.code, 'sources_disabled', persistedSub);
+  console.log('LIVE changed tick: SQLite state persisted + one invalidation per connection');
 
-  // Repeating the exact same check must be a true no-op: no file rewrite and no
-  // realtime invalidation. This exercises PersistedState + batch no-op handling.
+  // Repeating the exact same check must be a true no-op: no TranslationSub DB
+  // rewrite and no realtime invalidation.
   const noOpBeforeP7 = p7.countReason('subscription');
   const noOpBeforeP8 = p8.countReason('subscription');
   const beforeNoOpStat = fs.statSync(storePath, { bigint: true }).mtimeNs;
-  const beforeNoOpFile = fs.readFileSync(storePath, 'utf8');
+  const beforeNoOpFile = fs.readFileSync(storePath);
 
   const noOp = await postJson(
     `/translationsub/v2/check?uid=${encodeURIComponent(uid)}&profile_id=7`);
@@ -181,19 +182,19 @@ try {
     'no-op batch must not invalidate profile 7');
   assert.equal(p8.countReason('subscription'), noOpBeforeP8,
     'no-op batch must not invalidate profile 8');
-  assert.equal(fs.readFileSync(storePath, 'utf8'), beforeNoOpFile,
-    'no-op batch must leave persisted contents unchanged');
+  assert.deepEqual(fs.readFileSync(storePath), beforeNoOpFile,
+    'no-op batch must leave translationsub.db contents unchanged');
   assert.equal(fs.statSync(storePath, { bigint: true }).mtimeNs, beforeNoOpStat,
-    'no-op batch must not rewrite subscriptions.json');
+    'no-op batch must not rewrite translationsub.db');
   assert.equal(subscriptionFrom(noOp.snapshot)?.schedule?.code, 'sources_disabled', noOp.snapshot);
-  console.log('LIVE no-op tick: zero writes and zero subscription invalidations');
+  console.log('LIVE no-op tick: zero SQLite writes and zero subscription invalidations');
 
   // An immediate command whose mutation changes nothing must obey the same store
   // invariant. Missing unsubscribe executes Mutate but must not rewrite or publish.
   const immediateBeforeP7 = p7.countReason('subscription');
   const immediateBeforeP8 = p8.countReason('subscription');
   const beforeImmediateStat = fs.statSync(storePath, { bigint: true }).mtimeNs;
-  const beforeImmediateFile = fs.readFileSync(storePath, 'utf8');
+  const beforeImmediateFile = fs.readFileSync(storePath);
 
   const missing = await postJson(
     `/translationsub/v2/subscriptions/missing/remove?uid=${encodeURIComponent(uid)}&profile_id=7`);
@@ -205,11 +206,11 @@ try {
     'missing unsubscribe must not invalidate profile 7');
   assert.equal(p8.countReason('subscription'), immediateBeforeP8,
     'missing unsubscribe must not invalidate profile 8');
-  assert.equal(fs.readFileSync(storePath, 'utf8'), beforeImmediateFile,
-    'missing unsubscribe must leave persisted contents unchanged');
+  assert.deepEqual(fs.readFileSync(storePath), beforeImmediateFile,
+    'missing unsubscribe must leave translationsub.db contents unchanged');
   assert.equal(fs.statSync(storePath, { bigint: true }).mtimeNs, beforeImmediateStat,
-    'missing unsubscribe must not rewrite subscriptions.json');
-  console.log('LIVE immediate no-op: zero writes and zero subscription invalidations');
+    'missing unsubscribe must not rewrite translationsub.db');
+  console.log('LIVE immediate no-op: zero SQLite writes and zero subscription invalidations');
 
   // TimeCode remains the authoritative profile-local writer. Only profile 7 is
   // invalidated, then the canonical snapshot must already contain watched episode 1.

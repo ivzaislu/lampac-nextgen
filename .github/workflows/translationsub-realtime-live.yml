@@ -3,10 +3,12 @@ name: TranslationSub Realtime Live Smoke
 on:
   push:
     branches:
+      - TranslationSub-final
       - TranslationSub-backend-first-refactor-work
     paths:
       - 'Modules/TranslationSub/ModInit.cs'
       - 'Modules/TranslationSub/V2Controller.cs'
+      - 'Modules/TranslationSub/Services/TranslationSubDatabase.cs'
       - 'Modules/TranslationSub/Services/SubscriptionStore.cs'
       - 'Modules/TranslationSub/Services/TranslationSubscriptionService.cs'
       - 'Modules/TranslationSub/Services/TranslationSubRealtimeService.cs'
@@ -28,7 +30,7 @@ permissions:
 
 jobs:
   realtime-live:
-    name: Live NWS + batching + TimeCode smoke
+    name: Live NWS + SQLite batching + TimeCode smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -82,29 +84,6 @@ jobs:
             port: 9118
           YAML
 
-          mkdir -p /tmp/lampac-runtime/database/translationsub
-          cat > /tmp/lampac-runtime/database/translationsub/subscriptions.json <<'JSON'
-          [
-            {
-              "Id": "ci-subscription",
-              "Uid": "ci@translationsub.test",
-              "ContentId": "ci-series",
-              "Title": "CI Series",
-              "OriginalTitle": "CI Series",
-              "IsSerial": true,
-              "Source": "multi",
-              "TranslationId": "ci-voice",
-              "TranslationName": "CI Voice",
-              "CurrentSeason": 1,
-              "LastSeason": 1,
-              "LastEpisode": 3,
-              "Sources": [],
-              "CreatedAt": "2026-01-01T00:00:00",
-              "TmdbNewSeasonAvailable": false
-            }
-          ]
-          JSON
-
       - name: Start Lampac and wait for TranslationSub v2
         shell: bash
         run: |
@@ -149,10 +128,43 @@ jobs:
             exit 1
           fi
 
+      - name: Seed TranslationSub SQLite subscription
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sqlite3
+
+          path = '/tmp/lampac-runtime/database/translationsub.db'
+          db = sqlite3.connect(path, timeout=10)
+          db.execute(
+              '''
+              INSERT OR REPLACE INTO subscriptions (
+                  id, uid, content_id, title, original_title, is_serial, source,
+                  translation_id, translation_name, current_season, last_season,
+                  last_episode, sources_json, created_at, tmdb_new_season_available
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ''',
+              (
+                  'ci-subscription', 'ci@translationsub.test', 'ci-series',
+                  'CI Series', 'CI Series', 1, 'multi', 'ci-voice', 'CI Voice',
+                  1, 1, 3, '[]', '2026-01-01T00:00:00.0000000', 0
+              )
+          )
+          db.commit()
+          row = db.execute(
+              'SELECT id, uid, last_episode FROM subscriptions WHERE id = ?',
+              ('ci-subscription',)
+          ).fetchone()
+          db.close()
+          assert row == ('ci-subscription', 'ci@translationsub.test', 3), row
+          print('Seeded TranslationSub SQLite subscription')
+          PY
+
       - name: Run backend-first live realtime smoke
         env:
           LAMPAC_BASE: http://127.0.0.1:9118
-          TRANSLATIONSUB_STORE: /tmp/lampac-runtime/database/translationsub/subscriptions.json
+          TRANSLATIONSUB_STORE: /tmp/lampac-runtime/database/translationsub.db
         run: node scripts/ci/translationsub-realtime-live.mjs
 
       - name: Runtime log tail
