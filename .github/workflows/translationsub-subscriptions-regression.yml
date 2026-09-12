@@ -56,24 +56,6 @@ jobs:
             type: mem
           accsdb:
             enable: false
-          TranslationSub:
-            enable: true
-            tmdb_apihost: http://127.0.0.1:9120/tmdb
-          FlixCDN:
-            enable: true
-            overridehost: http://127.0.0.1:9120/meta
-          Phantom:
-            enable: true
-            overridehost: http://127.0.0.1:9120/meta
-          ZetflixDB:
-            enable: true
-            overridehost: http://127.0.0.1:9120/meta
-          VideoDB:
-            enable: true
-            overridehost: http://127.0.0.1:9120/meta
-          CDNvideohub:
-            enable: true
-            overridehost: http://127.0.0.1:9120/meta
           BaseModule:
             LoadModules:
               - TranslationSub
@@ -85,6 +67,35 @@ jobs:
           listen:
             port: 9118
           YAML
+
+          cat > /tmp/lampac-runtime/init.conf <<'JSON'
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://127.0.0.1:9120/tmdb"
+            },
+            "FlixCDN": {
+              "enable": true,
+              "overridehost": "http://127.0.0.1:9120/meta"
+            },
+            "Phantom": {
+              "enable": true,
+              "overridehost": "http://127.0.0.1:9120/meta"
+            },
+            "ZetflixDB": {
+              "enable": true,
+              "overridehost": "http://127.0.0.1:9120/meta"
+            },
+            "VideoDB": {
+              "enable": true,
+              "overridehost": "http://127.0.0.1:9120/meta"
+            },
+            "CDNvideohub": {
+              "enable": true,
+              "overridehost": "http://127.0.0.1:9120/meta"
+            }
+          }
+          JSON
 
       - name: Start Lampac and wait for TranslationSub
         shell: bash
