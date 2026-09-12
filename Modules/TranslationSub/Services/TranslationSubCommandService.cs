@@ -25,7 +25,7 @@ public static class TranslationSubCommandService
         if (intent?.Card == null)
             return Fail("card_required");
 
-        var content = await ContentIdentityService.ResolveAsync(intent.Card).ConfigureAwait(false);
+        var content = await ContentIdentityService.ResolveAsync(intent.Card, uid, httpContext).ConfigureAwait(false);
         if (content == null || !content.IsSerial)
             return Fail("not_serial");
         if (string.IsNullOrWhiteSpace(content.ContentId) && string.IsNullOrWhiteSpace(content.Title))
