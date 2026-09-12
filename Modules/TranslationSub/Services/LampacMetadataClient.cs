@@ -97,6 +97,7 @@ internal static class LampacMetadataClient
     {
         var rows = new List<MetadataRow>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Uri trustedExternalOrigin = TrustedExternalOrigin(source.Url, httpContext);
 
         await TraverseAsync(
             source,
@@ -108,7 +109,8 @@ internal static class LampacMetadataClient
             0,
             visited,
             rows,
-            httpContext).ConfigureAwait(false);
+            httpContext,
+            trustedExternalOrigin).ConfigureAwait(false);
 
         if (rows.Count == 0)
             Serilog.Log.Warning("TranslationSub metadata source produced no episode rows. Source={Source}; Season={Season}", source.Id, query.Season);
@@ -170,7 +172,8 @@ internal static class LampacMetadataClient
         int depth,
         HashSet<string> visited,
         List<MetadataRow> rows,
-        HttpContext httpContext)
+        HttpContext httpContext,
+        Uri trustedExternalOrigin)
     {
         if (depth > MaxMetadataDepth || visited.Count >= MaxMetadataPages || string.IsNullOrWhiteSpace(url))
             return;
@@ -179,7 +182,7 @@ internal static class LampacMetadataClient
         if (!visited.Add(url.Trim()))
             return;
 
-        string body = await GetAsync(url, query.Uid, httpContext).ConfigureAwait(false);
+        string body = await GetAsync(url, query.Uid, httpContext, trustedExternalOrigin).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(body))
         {
             Serilog.Log.Warning(
@@ -316,7 +319,8 @@ internal static class LampacMetadataClient
                 depth + 1,
                 visited,
                 rows,
-                httpContext).ConfigureAwait(false);
+                httpContext,
+                trustedExternalOrigin).ConfigureAwait(false);
         }
     }
 
@@ -629,23 +633,48 @@ internal static class LampacMetadataClient
         return bool.TryParse(token.ToString(), out bool result) && result;
     }
 
-    static async Task<string> GetAsync(string pathOrUrl, string uid, HttpContext httpContext)
+    static Uri TrustedExternalOrigin(string sourceUrl, HttpContext httpContext)
+    {
+        Uri uri = ResolveRequestUri(sourceUrl, httpContext, out bool localRoute);
+        return uri != null && !localRoute ? uri : null;
+    }
+
+    static bool SameOrigin(Uri uri, Uri trustedOrigin)
+    {
+        if (uri == null || trustedOrigin == null)
+            return false;
+
+        return uri.Scheme.Equals(trustedOrigin.Scheme, StringComparison.OrdinalIgnoreCase)
+            && uri.Host.Equals(trustedOrigin.Host, StringComparison.OrdinalIgnoreCase)
+            && uri.Port == trustedOrigin.Port;
+    }
+
+    static async Task<string> GetAsync(string pathOrUrl, string uid, HttpContext httpContext, Uri trustedExternalOrigin)
     {
         if (string.IsNullOrWhiteSpace(pathOrUrl))
             return null;
 
         try
         {
-            // Interactive requests carry Lampac's native identity context.
-            // Background polls have no HttpContext and keep the stored uid fallback.
-            if (httpContext != null)
-                pathOrUrl = AccsDbInvk.Args(pathOrUrl, httpContext);
-            else if (!string.IsNullOrWhiteSpace(uid) && !HasQueryKey(pathOrUrl, "uid"))
-                pathOrUrl = AppendQuery(pathOrUrl, "uid", uid.Trim());
-
+            // Resolve the target before attaching Lampac identity. Local routes may
+            // receive the native request identity; an explicitly configured remote
+            // source may receive it only on its original origin. Metadata links that
+            // jump to another origin are fetched without uid/token/account context.
             Uri uri = ResolveRequestUri(pathOrUrl, httpContext, out bool localRoute);
             if (uri == null)
                 return null;
+
+            if (localRoute || SameOrigin(uri, trustedExternalOrigin))
+            {
+                if (httpContext != null)
+                    pathOrUrl = AccsDbInvk.Args(pathOrUrl, httpContext);
+                else if (!string.IsNullOrWhiteSpace(uid) && !HasQueryKey(pathOrUrl, "uid"))
+                    pathOrUrl = AppendQuery(pathOrUrl, "uid", uid.Trim());
+
+                uri = ResolveRequestUri(pathOrUrl, httpContext, out localRoute);
+                if (uri == null)
+                    return null;
+            }
 
             IReadOnlyList<HeadersModel> headers = null;
             if (localRoute)
