@@ -52,6 +52,10 @@
         return !!fallback;
     }
 
+    function triggerStorageValue(value, fallback) {
+        return boolValue(value, fallback) ? 'true' : 'false';
+    }
+
     function settingBool(name, fallback) {
         var value = storageGet(name, fallback);
         if (value === true || value === 1 || value === '1' || value === 'true') return true;
@@ -171,7 +175,7 @@
         var endedDays = pick(settings, 'EndedRefreshDays', 'endedRefreshDays', null);
         var seasonMode = pick(settings, 'NewSeasonMode', 'newSeasonMode', null);
         if (interval !== null) storageSet(KEYS.interval, String(interval));
-        if (smart !== null) storageSet(KEYS.smartTmdb, boolValue(smart, false));
+        if (smart !== null) storageSet(KEYS.smartTmdb, triggerStorageValue(smart, false));
         if (tmdbHours !== null) storageSet(KEYS.tmdbRefreshHours, String(tmdbHours));
         if (endedDays !== null) storageSet(KEYS.endedRefreshDays, String(endedDays));
         if (seasonMode !== null) storageSet(KEYS.newSeasonMode, String(seasonMode));
@@ -179,7 +183,7 @@
         availableItems.forEach(function (item) {
             var key = sourceParamKeys[item.id] || sourceParamKey(item.id);
             sourceParamKeys[item.id] = key;
-            storageSet(key, selectedSources.indexOf(item.id) >= 0);
+            storageSet(key, triggerStorageValue(selectedSources.indexOf(item.id) >= 0, false));
         });
     }
 
@@ -275,7 +279,7 @@
     function addBalancer(item) {
         var key = sourceParamKey(item.id);
         sourceParamKeys[item.id] = key;
-        storageSet(key, selectedSources.indexOf(item.id) >= 0);
+        storageSet(key, triggerStorageValue(selectedSources.indexOf(item.id) >= 0, false));
 
         Lampa.SettingsApi.addParam({
             component: BALANCERS,
@@ -285,7 +289,7 @@
                 description: 'Lampac: ' + item.id + '. Использовать этот балансер для поиска озвучек и новых серий.'
             },
             onChange: function (value) {
-                storageSet(key, boolValue(value, settingBool(key, false)));
+                storageSet(key, triggerStorageValue(value, settingBool(key, false)));
                 selectedSources = currentSelectionFromTriggers();
                 syncServerSettings();
             }
@@ -370,7 +374,7 @@
                     param: { name: KEYS.smartTmdb, type: 'trigger', values: '', 'default': !!smartDefault },
                     field: { name: 'Умное расписание TMDB', description: 'Не опрашивать балансеры до фактического выхода серии или сезона.' },
                     onChange: function (value) {
-                        storageSet(KEYS.smartTmdb, boolValue(value, settingBool(KEYS.smartTmdb, !!smartDefault)));
+                        storageSet(KEYS.smartTmdb, triggerStorageValue(value, settingBool(KEYS.smartTmdb, !!smartDefault)));
                         syncServerSettings();
                     }
                 });
