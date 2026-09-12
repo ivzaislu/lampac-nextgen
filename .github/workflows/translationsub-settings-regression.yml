@@ -1,0 +1,120 @@
+name: TranslationSub Settings Regression
+
+on:
+  push:
+    branches:
+      - TranslationSub-final
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'scripts/ci/translationsub-settings-regression.py'
+      - '.github/workflows/translationsub-settings-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-settings-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  settings-regression:
+    name: Settings API + SQLite regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-runtime
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-runtime \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-runtime/Core.dll
+          test -f /tmp/lampac-runtime/module/TranslationSub/manifest.json
+
+          cat > /tmp/lampac-runtime/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+              - FlixCDN
+              - Phantom
+              - ZetflixDB
+              - VideoDB
+              - CDNvideohub
+          listen:
+            port: 9118
+          YAML
+
+      - name: Start Lampac and wait for TranslationSub settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd /tmp/lampac-runtime
+            dotnet Core.dll > /tmp/lampac-settings.log 2>&1
+          ) &
+          echo $! > /tmp/lampac-settings.pid
+
+          ready=0
+          for i in $(seq 1 120); do
+            if curl --silent --show-error --fail --max-time 2 \
+              'http://127.0.0.1:9118/translationsub/v2/settings?uid=settings-regression%40translationsub.test' \
+              -o /tmp/settings-ready.json; then
+              ready=1
+              break
+            fi
+
+            if ! kill -0 "$(cat /tmp/lampac-settings.pid)" 2>/dev/null; then
+              echo 'Lampac exited before TranslationSub settings became ready'
+              tail -n 400 /tmp/lampac-settings.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != '1' ]; then
+            echo 'TranslationSub settings did not become ready'
+            tail -n 400 /tmp/lampac-settings.log || true
+            exit 1
+          fi
+
+      - name: Run settings regression suite
+        run: python3 scripts/ci/translationsub-settings-regression.py
+
+      - name: Runtime log tail
+        if: always()
+        shell: bash
+        run: |
+          echo '===== lampac-settings.log tail ====='
+          tail -n 400 /tmp/lampac-settings.log 2>/dev/null || true
+
+      - name: Stop Lampac
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/lampac-settings.pid ]; then
+            kill "$(cat /tmp/lampac-settings.pid)" 2>/dev/null || true
+          fi
