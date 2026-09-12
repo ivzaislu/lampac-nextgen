@@ -167,11 +167,6 @@
                 window.TranslationSubBadgeState.render();
         } catch (e) {}
 
-        try {
-            if (window.TranslationSubBellTheme && typeof window.TranslationSubBellTheme.refresh === 'function')
-                window.TranslationSubBellTheme.refresh();
-        } catch (e2) {}
-
         observeNavigationRoots();
     }
 
