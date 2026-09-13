@@ -193,7 +193,7 @@ public class FlixCDNController : BaseOnlineController
         if (await IsRequestBlocked(rch_check: false))
             return badInitMsg;
 
-        var cache = await InvokeCacheResult<string>(ipkey($"flixcdn:stream:{iframe}:{t}:{s}:{e}"), 10, async result =>
+        var cache = await InvokeCacheResult<string>(ipkey($"flixcdn:stream:v2:{iframe}:{t}:{s}:{e}"), 10, async result =>
         {
             string file = null;
             string iframeUrl = oninvk.BuildIframeUrl(iframe, t, s, e);
@@ -210,15 +210,26 @@ public class FlixCDNController : BaseOnlineController
                     {
                         try
                         {
+                            string routeUrl = route.Request.Url;
+
+                            if (routeUrl.Contains("challenges.cloudflare.com", StringComparison.OrdinalIgnoreCase) &&
+                                routeUrl.Contains("failure_retry", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Serilog.Log.Warning("FlixCDN Turnstile challenge failed for {Iframe}", iframeUrl);
+                                browser.SetPageResult("__TURNSTILE__");
+                                await route.AbortAsync();
+                                return;
+                            }
+
                             if (browser.completionSource.Task.IsCompleted ||
-                                route.Request.Url.Contains("mc.yandex.ru") ||
-                                route.Request.Url.Contains("/videos/"))
+                                routeUrl.Contains("mc.yandex.ru") ||
+                                routeUrl.Contains("/videos/"))
                             {
                                 await route.AbortAsync();
                                 return;
                             }
 
-                            if (route.Request.Url.StartsWith("https://flixcdn.live"))
+                            if (routeUrl.StartsWith("https://flixcdn.live"))
                             {
                                 await route.FulfillAsync(new RouteFulfillOptions
                                 {
@@ -227,12 +238,12 @@ public class FlixCDNController : BaseOnlineController
                             }
                             else
                             {
-                                if (route.Request.Url.Contains("&cuid="))
+                                if (routeUrl.Contains("&cuid="))
                                 {
                                     await route.ContinueAsync();
 
-                                    var response = await page.WaitForResponseAsync(route.Request.Url);
-                                    browser.completionSource.SetResult(response != null
+                                    var response = await page.WaitForResponseAsync(routeUrl);
+                                    browser.SetPageResult(response != null
                                         ? await response.TextAsync()
                                         : null);
                                     return;
@@ -257,6 +268,9 @@ public class FlixCDNController : BaseOnlineController
                 }
             }
             catch { }
+
+            if (file == "__TURNSTILE__")
+                return result.Fail("turnstile");
 
             if (string.IsNullOrWhiteSpace(file))
                 return result.Fail("file", refresh_proxy: true);
