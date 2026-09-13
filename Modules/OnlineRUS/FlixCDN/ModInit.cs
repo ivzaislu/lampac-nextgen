@@ -42,15 +42,15 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     void updateConf()
     {
-        conf = ModuleInvoke.Init("FlixCDN", new OnlinesSettings("FlixCDN", "https://player0.flixcdn.space", "https://api0.flixcdn.biz/api", streamproxy: true)
+        conf = ModuleInvoke.Init("FlixCDN", new OnlinesSettings("FlixCDN", "https://tarantino.factorios.live", "https://api0.flixcdn.biz/api", streamproxy: true)
         {
-            enable = false,
+            enable = true,
             displayindex = 525,
             stream_access = "apk,cors,web",
             headers_stream = HeadersModel.Init(
                 ("accept", "*/*"),
-                ("origin", "https://player0.flixcdn.space"),
-                ("referer", "https://player0.flixcdn.space/"),
+                ("origin", "https://tarantino.factorios.live"),
+                ("referer", "https://tarantino.factorios.live/"),
                 ("sec-fetch-dest", "video"),
                 ("sec-fetch-mode", "cors"),
                 ("sec-fetch-site", "cross-site")
