@@ -5,6 +5,7 @@ using Shared.Services;
 using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
@@ -18,6 +19,11 @@ public struct FlixCDNInvoke
     OnlinesSettings init;
     HttpHydra httpHydra;
     Func<string, string> onstreamfile;
+
+    static readonly JsonSerializerOptions jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public FlixCDNInvoke(string host, OnlinesSettings init, HttpHydra httpHydra, Func<string, string> onstreamfile)
     {
@@ -82,9 +88,98 @@ public struct FlixCDNInvoke
     }
     #endregion
 
+    #region PlayerMovie
+    public string BuildPlayerUrl(long kinopoisk_id)
+    {
+        return $"{init.host}/show/kinopoisk/{kinopoisk_id}?extrans=1&extepi=1&unfseason=1";
+    }
+
+    async Task<SearchItem> GetPlayerMovie(long kinopoisk_id, string title, string original_title)
+    {
+        if (kinopoisk_id <= 0)
+            return null;
+
+        string playerUrl = BuildPlayerUrl(kinopoisk_id);
+        string html = await httpHydra.Get(playerUrl, safety: true);
+        if (string.IsNullOrWhiteSpace(html))
+            return null;
+
+        const string marker = "window.__PLAYER_PAYLOAD__ = ";
+        int start = html.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+
+        start += marker.Length;
+        int end = html.IndexOf(';', start);
+        if (end < 0)
+            return null;
+
+        string json = html.Substring(start, end - start).Trim();
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        PlayerPayload payload;
+
+        try
+        {
+            payload = JsonSerializer.Deserialize<PlayerPayload>(json, jsonOptions);
+        }
+        catch
+        {
+            return null;
+        }
+
+        if (payload == null || payload.id <= 0 || payload.is_serial)
+            return null;
+
+        var translations = new List<Voice>();
+        var ids = new HashSet<int>();
+
+        if (payload.translations != null)
+        {
+            foreach (var translation in payload.translations)
+            {
+                if (translation == null || translation.id <= 0 || !ids.Add(translation.id))
+                    continue;
+
+                translations.Add(new Voice
+                {
+                    id = translation.id,
+                    title = string.IsNullOrWhiteSpace(translation.title) ? "Перевод" : translation.title
+                });
+            }
+        }
+
+        if (payload.translate > 0 && ids.Add(payload.translate))
+        {
+            translations.Insert(0, new Voice
+            {
+                id = payload.translate,
+                title = string.IsNullOrWhiteSpace(payload.translateTitle) ? "Перевод" : payload.translateTitle
+            });
+        }
+
+        if (translations.Count == 0)
+            return null;
+
+        return new SearchItem
+        {
+            iframe_url = playerUrl,
+            type = "movie",
+            title_rus = title,
+            title_orig = original_title,
+            translations = translations
+        };
+    }
+    #endregion
+
     #region SearchByTitle
     async public Task<SearchItem> SearchByTitle(string imdb_id, long kinopoisk_id, string title, string original_title, bool forceSimilar)
     {
+        var directMovie = await GetPlayerMovie(kinopoisk_id, title, original_title);
+        if (directMovie != null)
+            return directMovie;
+
         if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(original_title))
             return null;
 
@@ -142,6 +237,9 @@ public struct FlixCDNInvoke
 
     async Task<SearchItem[]> ApiSearch(string query)
     {
+        if (string.IsNullOrWhiteSpace(init?.token))
+            return null;
+
         string uri = $"{init.apihost}/search?token={init.token}&{query}";
         var root = await httpHydra.Get<SearchRoot>(uri, safety: true);
 
