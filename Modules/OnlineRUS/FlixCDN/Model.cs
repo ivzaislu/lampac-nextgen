@@ -37,3 +37,23 @@ public class Voice
 
     public short episode { get; set; }
 }
+
+public class PlayerPayload
+{
+    public int id { get; set; }
+
+    public bool is_serial { get; set; }
+
+    public int translate { get; set; }
+
+    public string translateTitle { get; set; }
+
+    public List<PlayerTranslation> translations { get; set; }
+}
+
+public class PlayerTranslation
+{
+    public int id { get; set; }
+
+    public string title { get; set; }
+}
