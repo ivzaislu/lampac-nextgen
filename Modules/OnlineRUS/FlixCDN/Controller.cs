@@ -39,26 +39,27 @@ public class FlixCDNController : BaseOnlineController
             return badInitMsg;
 
     rhubFallback:
-        var cache = await InvokeCacheResult<SearchItem>($"flixcdn:search:v3:{imdb_id}:{kinopoisk_id}:{title}:{original_title}:{similar}", TimeSpan.FromHours(4), async e =>
+        var cache = await InvokeCacheResult<SearchItem>($"flixcdn:search:v4:{imdb_id}:{kinopoisk_id}:{title}:{original_title}:{similar}", TimeSpan.FromHours(4), async e =>
         {
             SearchItem search = null;
 
-            if (similar || (kinopoisk_id == 0 && string.IsNullOrWhiteSpace(imdb_id)))
+            if (similar)
             {
-                search = await oninvk.SearchByTitle(imdb_id, kinopoisk_id, title, original_title, similar);
-
-                if (search == null && kinopoisk_id > 0)
-                    search = await oninvk.SearchByPlayer(kinopoisk_id, title, original_title);
+                search = await oninvk.SearchByTitle(imdb_id, kinopoisk_id, title, original_title, true);
             }
-            else
+            else if (kinopoisk_id > 0)
             {
-                search = await oninvk.SearchById(imdb_id, kinopoisk_id);
+                search = await oninvk.SearchByPlayer(kinopoisk_id, title, original_title);
 
-                if (search == null && kinopoisk_id > 0)
-                    search = await oninvk.SearchByPlayer(kinopoisk_id, title, original_title);
+                if (search == null)
+                    search = await oninvk.SearchById(imdb_id, kinopoisk_id);
 
                 if (search == null)
                     search = await oninvk.SearchByTitle(imdb_id, kinopoisk_id, title, original_title, false);
+            }
+            else
+            {
+                search = await oninvk.SearchByTitle(imdb_id, kinopoisk_id, title, original_title, false);
             }
 
             if (search == null)
