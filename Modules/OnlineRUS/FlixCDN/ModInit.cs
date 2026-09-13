@@ -4,7 +4,6 @@ using Shared.Models.Events;
 using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
 using Shared.Models.Online.Settings;
-using Shared.PlaywrightCore;
 using Shared.Services;
 using System.Collections.Generic;
 
@@ -16,9 +15,6 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
-        if (Firefox.Status == PlaywrightStatus.disabled)
-            return null;
-
         var online = new List<ModuleOnlineItem>();
 
         if (args.kinopoisk_id > 0 && !args.isanime)
