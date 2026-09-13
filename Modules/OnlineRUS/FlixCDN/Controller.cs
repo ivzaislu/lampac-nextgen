@@ -7,6 +7,7 @@ using Shared.PlaywrightCore;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Web;
 
@@ -15,6 +16,11 @@ namespace FlixCDN;
 public class FlixCDNController : BaseOnlineController
 {
     FlixCDNInvoke oninvk;
+
+    static readonly JsonSerializerOptions jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public FlixCDNController() : base(ModInit.conf)
     {
@@ -39,7 +45,7 @@ public class FlixCDNController : BaseOnlineController
             return badInitMsg;
 
     rhubFallback:
-        var cache = await InvokeCacheResult<SearchItem>($"flixcdn:search:v4:{imdb_id}:{kinopoisk_id}:{title}:{original_title}:{similar}", TimeSpan.FromHours(4), async e =>
+        var cache = await InvokeCacheResult<SearchItem>($"flixcdn:search:v5:{imdb_id}:{kinopoisk_id}:{title}:{original_title}:{similar}", TimeSpan.FromHours(4), async e =>
         {
             SearchItem search = null;
 
@@ -50,6 +56,9 @@ public class FlixCDNController : BaseOnlineController
             else if (kinopoisk_id > 0)
             {
                 search = await oninvk.SearchByPlayer(kinopoisk_id, title, original_title);
+
+                if (search == null)
+                    search = await SearchByPlayerBrowser(kinopoisk_id, title, original_title);
 
                 if (search == null)
                     search = await oninvk.SearchById(imdb_id, kinopoisk_id);
@@ -277,4 +286,177 @@ public class FlixCDNController : BaseOnlineController
             httpContext: HttpContext
         ));
     }
+
+
+    #region player browser fallback
+    async Task<SearchItem> SearchByPlayerBrowser(long kinopoisk_id, string title, string original_title)
+    {
+        if (kinopoisk_id <= 0 || PlaywrightBrowser.Status == PlaywrightStatus.disabled)
+            return null;
+
+        try
+        {
+            using (var browser = new PlaywrightBrowser("firefox"))
+            {
+                var page = await browser.NewPageAsync(init.plugin, headers: init.headers, proxy: proxy_data).ConfigureAwait(false);
+                if (page == null)
+                    return null;
+
+                string playerUrl = oninvk.BuildPlayerUrl(kinopoisk_id);
+
+                await page.GotoAsync(playerUrl, new PageGotoOptions
+                {
+                    WaitUntil = WaitUntilState.DOMContentLoaded,
+                    Timeout = 20000
+                }).ConfigureAwait(false);
+
+                try
+                {
+                    await page.WaitForFunctionAsync(
+                        "() => !!window.__PLAYER_PAYLOAD__",
+                        null,
+                        new PageWaitForFunctionOptions { Timeout = 10000 }
+                    ).ConfigureAwait(false);
+                }
+                catch { }
+
+                string json = await page.EvaluateAsync<string>(
+                    "() => window.__PLAYER_PAYLOAD__ ? JSON.stringify(window.__PLAYER_PAYLOAD__) : null"
+                ).ConfigureAwait(false);
+
+                if (string.IsNullOrWhiteSpace(json))
+                    return null;
+
+                var payload = JsonSerializer.Deserialize<PlayerPayload>(json, jsonOptions);
+                return BuildSearchItem(payload, playerUrl, title, original_title);
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    static SearchItem BuildSearchItem(PlayerPayload payload, string playerUrl, string title, string original_title)
+    {
+        if (payload == null || payload.id <= 0)
+            return null;
+
+        var voices = payload.translations?
+            .Where(v => v != null && v.id > 0)
+            .GroupBy(v => v.id)
+            .Select(g => g.First())
+            .ToList() ?? new List<PlayerTranslation>();
+
+        var seasons = GetPlayerSeasons(payload);
+        int totalEpisodes = TotalPlayerEpisodes(seasons);
+
+        if (payload.translate > 0 && !voices.Any(v => v.id == payload.translate))
+        {
+            voices.Insert(0, new PlayerTranslation
+            {
+                id = payload.translate,
+                title = string.IsNullOrWhiteSpace(payload.translateTitle) ? "Перевод" : payload.translateTitle,
+                episodes_qty = totalEpisodes
+            });
+        }
+
+        if (voices.Count == 0)
+            return null;
+
+        var translations = new List<Voice>();
+
+        if (!payload.is_serial)
+        {
+            foreach (var voice in voices)
+            {
+                translations.Add(new Voice
+                {
+                    id = voice.id,
+                    title = string.IsNullOrWhiteSpace(voice.title) ? "Перевод" : voice.title
+                });
+            }
+        }
+        else
+        {
+            if (seasons.Count == 0)
+                return null;
+
+            foreach (var voice in voices)
+            {
+                int remaining = voice.episodes_qty > 0 ? voice.episodes_qty : totalEpisodes;
+
+                foreach (var season in seasons)
+                {
+                    int seasonLength = season.Value?.Length ?? 0;
+                    if (seasonLength <= 0)
+                        continue;
+
+                    int available = Math.Min(Math.Max(remaining, 0), seasonLength);
+                    if (available > 0)
+                    {
+                        translations.Add(new Voice
+                        {
+                            id = voice.id,
+                            title = string.IsNullOrWhiteSpace(voice.title) ? "Перевод" : voice.title,
+                            season = season.Key,
+                            episode = (short)Math.Min(available, short.MaxValue)
+                        });
+                    }
+
+                    remaining -= seasonLength;
+                }
+            }
+        }
+
+        if (translations.Count == 0)
+            return null;
+
+        return new SearchItem
+        {
+            iframe_url = playerUrl,
+            type = payload.is_serial ? "serial" : (string.IsNullOrWhiteSpace(payload.type) ? "movie" : payload.type),
+            title_rus = title,
+            title_orig = original_title,
+            translations = translations
+        };
+    }
+
+    static SortedDictionary<short, int[]> GetPlayerSeasons(PlayerPayload payload)
+    {
+        var seasons = new SortedDictionary<short, int[]>();
+
+        if (payload?.seasons_episodes != null)
+        {
+            foreach (var item in payload.seasons_episodes)
+            {
+                if (!short.TryParse(item.Key, out short season) || season <= 0 || item.Value == null || item.Value.Length == 0)
+                    continue;
+
+                var episodes = item.Value.Where(e => e > 0).ToArray();
+                if (episodes.Length > 0)
+                    seasons[season] = episodes;
+            }
+        }
+
+        if (seasons.Count == 0 && payload?.season > 0 && payload.episodes?.Length > 0)
+        {
+            var episodes = payload.episodes.Where(e => e > 0).ToArray();
+            if (episodes.Length > 0)
+                seasons[payload.season.Value] = episodes;
+        }
+
+        return seasons;
+    }
+
+    static int TotalPlayerEpisodes(SortedDictionary<short, int[]> seasons)
+    {
+        int total = 0;
+
+        foreach (var season in seasons)
+            total += season.Value?.Length ?? 0;
+
+        return total;
+    }
+    #endregion
 }
