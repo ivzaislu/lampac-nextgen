@@ -200,7 +200,7 @@ public class FlixCDNController : BaseOnlineController
 
             try
             {
-                using (var browser = new Firefox())
+                using (var browser = new PlaywrightBrowser("firefox"))
                 {
                     var page = await browser.NewPageAsync(init.plugin, proxy: proxy_data, headers: init.headers).ConfigureAwait(false);
                     if (page == null)
