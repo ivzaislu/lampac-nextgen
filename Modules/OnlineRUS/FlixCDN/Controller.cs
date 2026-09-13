@@ -38,9 +38,6 @@ public class FlixCDNController : BaseOnlineController
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
 
-        if (string.IsNullOrEmpty(init?.token))
-            return OnError();
-
     rhubFallback:
         var cache = await InvokeCacheResult<SearchItem>($"flixcdn:search:{imdb_id}:{kinopoisk_id}:{title}:{similar}", TimeSpan.FromHours(4), async e =>
         {
