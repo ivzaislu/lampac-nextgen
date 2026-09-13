@@ -94,7 +94,7 @@ public struct FlixCDNInvoke
         return $"{init.host}/show/kinopoisk/{kinopoisk_id}?extrans=1&extepi=1&unfseason=1";
     }
 
-    async Task<SearchItem> GetPlayerMovie(long kinopoisk_id, string title, string original_title)
+    async public Task<SearchItem> SearchByPlayer(long kinopoisk_id, string title, string original_title)
     {
         if (kinopoisk_id <= 0)
             return null;
@@ -173,13 +173,29 @@ public struct FlixCDNInvoke
     }
     #endregion
 
-    #region SearchByTitle
+    #region Search
+    async public Task<SearchItem> SearchById(string imdb_id, long kinopoisk_id)
+    {
+        var args = new List<string>(2);
+
+        if (kinopoisk_id > 0)
+            args.Add($"kinopoisk_id={kinopoisk_id}");
+
+        if (!string.IsNullOrWhiteSpace(imdb_id))
+            args.Add($"imdb_id={HttpUtility.UrlEncode(imdb_id)}");
+
+        if (args.Count == 0)
+            return null;
+
+        var root = await ApiSearch(string.Join("&", args));
+        if (root != null && root.Length > 0)
+            return root[0];
+
+        return null;
+    }
+
     async public Task<SearchItem> SearchByTitle(string imdb_id, long kinopoisk_id, string title, string original_title, bool forceSimilar)
     {
-        var directMovie = await GetPlayerMovie(kinopoisk_id, title, original_title);
-        if (directMovie != null)
-            return directMovie;
-
         if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(original_title))
             return null;
 
@@ -188,9 +204,6 @@ public struct FlixCDNInvoke
             return null;
 
         var stpl = new SimilarTpl(root.Length);
-        string enc_title = HttpUtility.UrlEncode(title);
-        string enc_original_title = HttpUtility.UrlEncode(original_title);
-
         string stitle = SearchNameTo.Convert(title);
         string sorig = SearchNameTo.Convert(original_title);
 
