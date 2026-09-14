@@ -1,0 +1,85 @@
+name: TranslationSub Code Cleanup
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Modules/TranslationSub/**"
+      - ".github/workflows/translationsub-code-cleanup.yml"
+  push:
+    branches:
+      - fix/translationsub-metadata-ssrf
+      - TranslationSub-final
+    paths:
+      - "Modules/TranslationSub/**"
+      - ".github/workflows/translationsub-code-cleanup.yml"
+
+concurrency:
+  group: translationsub-cleanup-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    name: Format verify + unused report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Restore
+        run: dotnet restore --verbosity minimal NextGen.slnx
+
+      - name: Verify TranslationSub formatting
+        run: |
+          dotnet format NextGen.slnx \
+            --include Modules/TranslationSub \
+            --verify-no-changes \
+            --verbosity minimal
+
+      - name: Install Roslynator CLI
+        run: dotnet tool install -g roslynator.dotnet.cli
+
+      - name: Report unused TranslationSub types
+        run: |
+          {
+            echo "## Unused types (TranslationSub)"
+            echo
+            echo '```'
+            roslynator find-symbol NextGen.slnx \
+              --symbol-kind type \
+              --unused \
+              --include Modules/TranslationSub \
+              --verbosity n || true
+            echo '```'
+          } | tee unused-types.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report unused TranslationSub members
+        run: |
+          {
+            echo "## Unused members (TranslationSub)"
+            echo
+            echo '```'
+            roslynator find-symbol NextGen.slnx \
+              --symbol-kind method,property,field \
+              --unused \
+              --include Modules/TranslationSub \
+              --verbosity n || true
+            echo '```'
+          } | tee unused-members.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unused-symbol reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: translationsub-unused-symbols
+          path: |
+            unused-types.md
+            unused-members.md
+          if-no-files-found: ignore

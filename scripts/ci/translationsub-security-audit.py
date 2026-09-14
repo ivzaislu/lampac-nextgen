@@ -243,7 +243,7 @@ def run():
         assert row == (3, "off"), row
     print("CONFIRMED HIGH: unauthenticated caller can read and modify arbitrary uid state", flush=True)
 
-    print("3. cross-origin metadata navigation SSRF probe", flush=True)
+    print("3. same-origin metadata navigation must not fetch a foreign sentinel", flush=True)
     ssrf_q = urllib.parse.quote(SSRF_UID, safe="")
     saved = require_ok(api("POST", f"/translationsub/v2/settings?uid={ssrf_q}", {
         "checkIntervalHours": 1,
@@ -274,10 +274,10 @@ def run():
 
     state = require_ok(http_json("GET", META + "/state"), "fixture state")
     assert int(ci_get(state, "meta_hits", 0) or 0) >= 1, state
-    assert int(ci_get(state, "sentinel_hits", 0) or 0) >= 1, state
+    assert int(ci_get(state, "sentinel_hits", 0) or 0) == 0, state
     voices = ci_get(content, "voices", []) or []
-    assert any(ci_get(x, "name") == "SSRF Sentinel Voice" for x in voices), content
-    print("CONFIRMED HIGH: external metadata can make Lampac fetch a different origin server-side", flush=True)
+    assert not any(ci_get(x, "name") == "SSRF Sentinel Voice" for x in voices), content
+    print("CLOSED: configured metadata origin was fetched; foreign sentinel origin was not", flush=True)
 
     assert_integrity()
     print("Security HTTP/SSRF audit probes completed; SQLite integrity is clean", flush=True)

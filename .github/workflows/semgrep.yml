@@ -1,0 +1,52 @@
+name: Semgrep
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Modules/TranslationSub/**"
+      - ".github/workflows/semgrep.yml"
+  push:
+    branches:
+      - fix/translationsub-metadata-ssrf
+      - TranslationSub-final
+      - main
+      - master
+    paths:
+      - "Modules/TranslationSub/**"
+      - ".github/workflows/semgrep.yml"
+
+concurrency:
+  group: semgrep-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  semgrep:
+    name: Scan
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --config p/csharp \
+            --config p/javascript \
+            --config p/owasp-top-ten \
+            --sarif \
+            --output semgrep.sarif \
+            --metrics=off \
+            Modules/TranslationSub
+
+      - name: Upload SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
