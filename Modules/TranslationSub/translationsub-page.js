@@ -98,6 +98,24 @@
             }
         }
 
+        function controllerName() {
+            try {
+                if (window.TranslationSubRuntime && typeof window.TranslationSubRuntime.controllerName === 'function')
+                    return window.TranslationSubRuntime.controllerName('');
+            } catch (e) {}
+            try {
+                if (Lampa.Controller && typeof Lampa.Controller.enabled === 'function') {
+                    var enabled = Lampa.Controller.enabled();
+                    return enabled && enabled.name ? String(enabled.name) : '';
+                }
+            } catch (e2) {}
+            return '';
+        }
+
+        function canStealFocus() {
+            return controllerName() === 'content';
+        }
+
         this.create = function () {
             scroll.minus();
             scroll.append(html);
@@ -155,7 +173,7 @@
 
         function focusAfterRender(subscriptionId) {
             setTimeout(function () {
-                if (!pageActive()) return;
+                if (!pageActive() || !canStealFocus()) return;
                 try {
                     Lampa.Controller.collectionSet(scroll.render());
                     var target = null;
@@ -267,6 +285,7 @@
             } catch (e2) {}
 
             if (!pageActive()) return;
+            if (!canStealFocus()) return;
             Lampa.Controller.enable('content');
             focusAfterRender(focusedId);
         }
@@ -279,7 +298,7 @@
             try { self.activity.loader(false); } catch (e) {}
             if (!pageActive()) return;
             render(snapshot);
-            if (first) {
+            if (first && canStealFocus()) {
                 try { self.activity.toggle(); } catch (e2) {}
             }
         }
@@ -299,7 +318,9 @@
             if (!bindState() || !badge || typeof badge.refresh !== 'function') {
                 if (pageActive()) {
                     render({ subscriptions: [], badge: { count: 0 } });
-                    try { self.activity.toggle(); } catch (e) {}
+                    if (canStealFocus()) {
+                        try { self.activity.toggle(); } catch (e) {}
+                    }
                     notify('TranslationSub state недоступен');
                 }
                 return;
@@ -312,7 +333,9 @@
                 if (destroyed || hasSnapshot || !pageActive()) return;
                 try { self.activity.loader(false); } catch (e) {}
                 render({ subscriptions: [], badge: { count: 0 } });
-                try { self.activity.toggle(); } catch (e2) {}
+                if (canStealFocus()) {
+                    try { self.activity.toggle(); } catch (e2) {}
+                }
                 notify('Не удалось загрузить подписки');
             });
         };

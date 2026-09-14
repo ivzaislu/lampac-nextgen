@@ -95,6 +95,24 @@
         } catch (e) {}
     }
 
+    function controllerName() {
+        try {
+            if (window.TranslationSubRuntime && typeof window.TranslationSubRuntime.controllerName === 'function')
+                return window.TranslationSubRuntime.controllerName('');
+        } catch (e) {}
+        return '';
+    }
+
+    function settingsLayerOpen() {
+        var name = controllerName();
+        return name === 'settings' || name === 'select';
+    }
+
+    function rebuildSettingsSafe() {
+        if (settingsLayerOpen()) return;
+        rebuildSettings();
+    }
+
     function pick(object, pascal, camel, fallback) {
         if (!object) return fallback;
         if (object[pascal] !== undefined && object[pascal] !== null) return object[pascal];
@@ -242,7 +260,7 @@
             }
 
             applyCanonicalSettings(response);
-            rebuildSettings();
+            rebuildSettingsSafe();
             refreshPlugin();
         }, function () {
             syncInFlight = false;
@@ -440,14 +458,14 @@
             clearTimeout(reloadTimer);
             reloadTimer = null;
             applyCanonicalSettings(data);
-            rebuildSettings();
+            rebuildSettingsSafe();
         }, function () {
             if (seq !== settingsLoadSeq) return;
             serverReady = false;
             serverSchema = {};
             availableItems = [];
             selectedSources = [];
-            rebuildSettings();
+            rebuildSettingsSafe();
             scheduleServerReload(15000);
         });
         return true;
