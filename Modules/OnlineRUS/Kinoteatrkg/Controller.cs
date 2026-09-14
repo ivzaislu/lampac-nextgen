@@ -24,6 +24,14 @@ public class KinoteatrkgController : BaseOnlineController
         public string title;
         public short year;
         public int order;
+        public bool mult;
+    }
+
+    sealed class PlaybackSource
+    {
+        public string pageUrl { get; set; }
+        public string streamUrl { get; set; }
+        public string label { get; set; }
     }
 
     static readonly Regex PlayerSourceRegex = new(
@@ -46,8 +54,18 @@ public class KinoteatrkgController : BaseOnlineController
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
     );
 
+    static readonly Regex MultPageTitleRegex = new(
+        """<h2\b[^>]*class=["'][^"']*\btext-danger\b[^"']*["'][^>]*>(?<title>[\s\S]*?)</h2>""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+    );
+
     static readonly Regex YearRegex = new(
         """<span>\s*Год\s*</span>\s*<strong>\s*(?<year>(?:19|20)\d{2})\s*</strong>""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
+    );
+
+    static readonly Regex MultYearRegex = new(
+        """fa-camera-retro[^>]*>[\s\S]{0,80}?(?<year>(?:19|20)\d{2})""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
     );
 
@@ -62,7 +80,7 @@ public class KinoteatrkgController : BaseOnlineController
     );
 
     static readonly Regex SearchViewLinkRegex = new(
-        """<a\b(?<attrs>[^>]*\bhref=["'][^"']*/site/view\?id=(?<id>\d+)[^"']*["'][^>]*)>(?<body>[\s\S]*?)</a>""",
+        """<a\b(?<attrs>[^>]*\bhref=["'][^"']*/site/(?<kind>view|mult)\?id=(?<id>\d+)[^"']*["'][^>]*)>(?<body>[\s\S]*?)</a>""",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant
     );
 
@@ -104,76 +122,100 @@ public class KinoteatrkgController : BaseOnlineController
             ? id
             : null;
 
-        string cacheKey = $"kinoteatrkg:v8:view:{providerId}:{NormalizeTitle(title)}:{NormalizeTitle(original_title)}:{year}";
+        string cacheKey = $"kinoteatrkg:v9:view:{providerId}:{NormalizeTitle(title)}:{NormalizeTitle(original_title)}:{year}";
         var cache = await InvokeCacheResult<string>(cacheKey, 40, async e =>
         {
-            var movie = await ResolveMovie(title, original_title, year, providerId);
-            if (string.IsNullOrEmpty(movie.pageUrl) || string.IsNullOrEmpty(movie.streamUrl))
+            var sources = await ResolveMovie(title, original_title, year, providerId);
+            if (sources == null || sources.Count == 0)
                 return e.Fail("search");
 
-            return e.Success($"{movie.pageUrl}\n{movie.streamUrl}\n{movie.quality}");
+            return e.Success(JsonSerializer.Serialize(sources));
         });
 
         if (!cache.IsSuccess || string.IsNullOrEmpty(cache.Value))
             return OnError(cache.ErrorMsg);
 
-        string[] data = cache.Value.Split(new[] { '\n' }, 3, StringSplitOptions.None);
-        if (data.Length < 2 || string.IsNullOrWhiteSpace(data[0]) || string.IsNullOrWhiteSpace(data[1]))
+        List<PlaybackSource> sources;
+        try
+        {
+            sources = JsonSerializer.Deserialize<List<PlaybackSource>>(cache.Value);
+        }
+        catch (JsonException)
+        {
+            return OnError("cache");
+        }
+
+        if (sources == null || sources.Count == 0)
             return OnError("cache");
 
-        string pageUrl = data[0];
-        string streamUrl = data[1];
-        string quality = data.Length > 2 && !string.IsNullOrWhiteSpace(data[2])
-            ? data[2]
-            : "Kinoteatr.kg";
-
-        var streamHeaders = HeadersModel.Init("referer", pageUrl);
-        string playUrl = HostStreamProxy(streamUrl, streamHeaders);
-
         var mtpl = new MovieTpl(title, original_title);
-        mtpl.Append(
-            quality,
-            playUrl,
-            vast: init.vast
-        );
+        foreach (var sourceItem in sources)
+        {
+            if (string.IsNullOrWhiteSpace(sourceItem.pageUrl) || string.IsNullOrWhiteSpace(sourceItem.streamUrl))
+                continue;
+
+            var streamHeaders = HeadersModel.Init("referer", sourceItem.pageUrl);
+            string label = sourceItem.label;
+            if (sources.Count == 1 && label == "Обычная")
+                label = "Kinoteatr.kg";
+
+            mtpl.Append(
+                string.IsNullOrWhiteSpace(label) ? "Kinoteatr.kg" : label,
+                HostStreamProxy(sourceItem.streamUrl, streamHeaders),
+                vast: init.vast
+            );
+        }
 
         return ContentTpl(mtpl);
     }
 
-    async Task<(string pageUrl, string streamUrl, string quality)> ResolveMovie(string title, string originalTitle, short year, string id)
+    async Task<List<PlaybackSource>> ResolveMovie(string title, string originalTitle, short year, string id)
     {
         if (!string.IsNullOrWhiteSpace(id))
-            return await ResolveById(id.Trim(), year);
+        {
+            var source = await ResolveById(new SearchCandidate { id = id.Trim(), title = title }, year);
+            return source == null ? null : [source];
+        }
 
         var triedIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (string query in SearchQueries(title, originalTitle))
         {
-            var movie = await ResolveCandidates(await SearchSuggest(query), query, year, triedIds);
-            if (!string.IsNullOrEmpty(movie.streamUrl))
-                return movie;
+            var sources = await ResolveCandidates(await SearchSuggest(query), query, year, triedIds);
+            if (sources.Count > 0)
+                return sources;
 
-            movie = await ResolveCandidates(await SearchFull(query, year), query, year, triedIds);
-            if (!string.IsNullOrEmpty(movie.streamUrl))
-                return movie;
+            sources = await ResolveCandidates(await SearchFull(query, year), query, year, triedIds);
+            if (sources.Count > 0)
+                return sources;
         }
 
-        return default;
+        return null;
     }
 
-    async Task<(string pageUrl, string streamUrl, string quality)> ResolveCandidates(
+    async Task<List<PlaybackSource>> ResolveCandidates(
         List<SearchCandidate> candidates,
         string query,
         short year,
         HashSet<string> triedIds)
     {
         if (candidates == null || candidates.Count == 0)
-            return default;
+            return [];
 
         string normalizedQuery = NormalizeTitle(query);
+        var sources = new List<PlaybackSource>(2);
+        var labels = new HashSet<string>(StringComparer.Ordinal);
 
-        var ordered = candidates
+        var eligible = candidates
             .Where(i => year <= 0 || i.year <= 0 || i.year == year)
+            .ToList();
+        var exact = eligible
+            .Where(i => NormalizeTitle(i.title) == normalizedQuery)
+            .ToList();
+        if (exact.Count > 0)
+            eligible = exact;
+
+        var ordered = eligible
             .OrderByDescending(i => NormalizeTitle(i.title) == normalizedQuery)
             .ThenByDescending(i => year > 0 && i.year == year)
             .ThenByDescending(i => IsTitleMatch(i.title, query))
@@ -182,15 +224,19 @@ public class KinoteatrkgController : BaseOnlineController
 
         foreach (var candidate in ordered)
         {
-            if (string.IsNullOrWhiteSpace(candidate.id) || !triedIds.Add(candidate.id))
+            if (string.IsNullOrWhiteSpace(candidate.id) || !triedIds.Add(CandidateKey(candidate)))
                 continue;
 
-            var movie = await ResolveById(candidate.id, year, query);
-            if (!string.IsNullOrEmpty(movie.streamUrl))
-                return movie;
+            var source = await ResolveById(candidate, year, query);
+            if (source == null || !labels.Add(source.label))
+                continue;
+
+            sources.Add(source);
+            if (sources.Count == 2)
+                break;
         }
 
-        return default;
+        return sources.OrderBy(i => i.label == "60 FPS").ToList();
     }
 
     async Task<List<SearchCandidate>> SearchSuggest(string query)
@@ -206,45 +252,53 @@ public class KinoteatrkgController : BaseOnlineController
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (!doc.RootElement.TryGetProperty("films", out JsonElement films) || films.ValueKind != JsonValueKind.Array)
-                return null;
-
             var result = new List<SearchCandidate>();
             int order = 0;
 
-            foreach (JsonElement item in films.EnumerateArray())
-            {
-                if (!item.TryGetProperty("id", out JsonElement idElement) || !item.TryGetProperty("title", out JsonElement titleElement))
-                    continue;
-
-                string movieId = idElement.ValueKind switch
-                {
-                    JsonValueKind.String => idElement.GetString(),
-                    JsonValueKind.Number => idElement.GetRawText(),
-                    _ => null
-                };
-
-                string movieTitle = titleElement.ValueKind == JsonValueKind.String
-                    ? titleElement.GetString()
-                    : null;
-
-                if (!string.IsNullOrWhiteSpace(movieId) && !string.IsNullOrWhiteSpace(movieTitle))
-                {
-                    result.Add(new SearchCandidate
-                    {
-                        id = movieId,
-                        title = movieTitle.Trim(),
-                        year = 0,
-                        order = order++
-                    });
-                }
-            }
+            AddSuggestCandidates(doc.RootElement, "films", mult: false, result, ref order);
+            AddSuggestCandidates(doc.RootElement, "mults", mult: true, result, ref order);
 
             return result;
         }
         catch (JsonException)
         {
             return null;
+        }
+    }
+
+    static void AddSuggestCandidates(
+        JsonElement root,
+        string property,
+        bool mult,
+        List<SearchCandidate> result,
+        ref int order)
+    {
+        if (!root.TryGetProperty(property, out JsonElement items) || items.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (JsonElement item in items.EnumerateArray())
+        {
+            if (!item.TryGetProperty("id", out JsonElement idElement) || !item.TryGetProperty("title", out JsonElement titleElement))
+                continue;
+
+            string id = idElement.ValueKind switch
+            {
+                JsonValueKind.String => idElement.GetString(),
+                JsonValueKind.Number => idElement.GetRawText(),
+                _ => null
+            };
+            string title = titleElement.ValueKind == JsonValueKind.String ? titleElement.GetString() : null;
+
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(title))
+                continue;
+
+            result.Add(new SearchCandidate
+            {
+                id = id,
+                title = title.Trim(),
+                order = order++,
+                mult = mult
+            });
         }
     }
 
@@ -267,6 +321,7 @@ public class KinoteatrkgController : BaseOnlineController
         {
             string body = linkMatch.Groups["body"].Value;
             string attrs = linkMatch.Groups["attrs"].Value;
+            bool mult = linkMatch.Groups["kind"].Value.Equals("mult", StringComparison.OrdinalIgnoreCase);
 
             AddSearchCandidate(
                 candidates,
@@ -275,7 +330,8 @@ public class KinoteatrkgController : BaseOnlineController
                 ExtractLinkTitle(attrs, body),
                 ExtractCandidateYear(body),
                 order++,
-                query
+                query,
+                mult
             );
         }
 
@@ -286,6 +342,8 @@ public class KinoteatrkgController : BaseOnlineController
             if (!linkMatch.Success)
                 continue;
 
+            bool mult = linkMatch.Groups["kind"].Value.Equals("mult", StringComparison.OrdinalIgnoreCase);
+
             AddSearchCandidate(
                 candidates,
                 byId,
@@ -293,7 +351,8 @@ public class KinoteatrkgController : BaseOnlineController
                 ExtractSearchTitle(card, linkMatch),
                 ExtractCandidateYear(card),
                 order++,
-                query
+                query,
+                mult
             );
         }
 
@@ -307,24 +366,27 @@ public class KinoteatrkgController : BaseOnlineController
         string title,
         short year,
         int order,
-        string query)
+        string query,
+        bool mult)
     {
         if (string.IsNullOrWhiteSpace(id))
             return;
 
         title = CleanText(title);
+        string key = $"{(mult ? "mult" : "film")}:{id}";
 
-        if (!byId.TryGetValue(id, out SearchCandidate existing))
+        if (!byId.TryGetValue(key, out SearchCandidate existing))
         {
             var candidate = new SearchCandidate
             {
                 id = id,
                 title = title,
                 year = year,
-                order = order
+                order = order,
+                mult = mult
             };
 
-            byId[id] = candidate;
+            byId[key] = candidate;
             candidates.Add(candidate);
             return;
         }
@@ -451,54 +513,101 @@ public class KinoteatrkgController : BaseOnlineController
         return Math.Max(1, 300 - Math.Min(title.Length, 299));
     }
 
-    async Task<(string pageUrl, string streamUrl, string quality)> ResolveById(string id, short expectedYear, string expectedTitle = null)
+    async Task<PlaybackSource> ResolveById(SearchCandidate candidate, short expectedYear, string expectedTitle = null)
     {
-        if (string.IsNullOrWhiteSpace(id) || !id.All(char.IsDigit))
-            return default;
+        if (candidate == null || string.IsNullOrWhiteSpace(candidate.id) || !candidate.id.All(char.IsDigit))
+            return null;
 
         string host = init.host.TrimEnd('/');
-        string pageUrl = $"{host}/site/view?id={id}";
+        string pageUrl = $"{host}/site/{(candidate.mult ? "mult" : "view")}?id={candidate.id}";
         string html = await httpHydra.Get(pageUrl, addheaders: HeadersModel.Init("referer", $"{host}/"));
         if (string.IsNullOrWhiteSpace(html))
-            return default;
+            return null;
 
-        Match titleMatch = PageTitleRegex.Match(html);
-        string pageTitle = titleMatch.Success
-            ? WebUtility.HtmlDecode(titleMatch.Groups["title"].Value)?.Trim()
-            : null;
-        string pageOriginalTitle = titleMatch.Success
-            ? WebUtility.HtmlDecode(titleMatch.Groups["original"].Value)?.Trim()
-            : null;
+        var pageTitles = ExtractPageTitles(html, candidate.mult);
 
         if (!string.IsNullOrWhiteSpace(expectedTitle))
         {
-            if (!titleMatch.Success || (!IsTitleMatch(pageTitle, expectedTitle) && !IsTitleMatch(pageOriginalTitle, expectedTitle)))
-                return default;
+            if (!IsTitleMatch(pageTitles.title, expectedTitle) && !IsTitleMatch(pageTitles.original, expectedTitle))
+                return null;
         }
 
         short pageYear = 0;
-        Match yearMatch = YearRegex.Match(html);
+        Match yearMatch = candidate.mult ? MultYearRegex.Match(html) : YearRegex.Match(html);
         if (yearMatch.Success)
             short.TryParse(yearMatch.Groups["year"].Value, out pageYear);
 
         if (expectedYear > 0 && pageYear != expectedYear)
-            return default;
+            return null;
 
         string streamUrl = ExtractStreamUrl(html, host);
         if (string.IsNullOrWhiteSpace(streamUrl))
-            return default;
+            return null;
 
-        string quality = null;
+        string siteQuality = null;
         Match qualityMatch = QualityRegex.Match(html);
         if (qualityMatch.Success)
         {
-            quality = WebUtility.HtmlDecode(qualityMatch.Groups["quality"].Value);
-            if (!string.IsNullOrWhiteSpace(quality))
-                quality = Regex.Replace(quality, """\s+""", " ").Trim();
+            siteQuality = WebUtility.HtmlDecode(qualityMatch.Groups["quality"].Value);
+            if (!string.IsNullOrWhiteSpace(siteQuality))
+                siteQuality = Regex.Replace(siteQuality, """\s+""", " ").Trim();
         }
 
-        return (pageUrl, streamUrl, quality);
+        if (!await IsStreamAvailable(streamUrl, pageUrl))
+            return null;
+
+        return new PlaybackSource
+        {
+            pageUrl = pageUrl,
+            streamUrl = streamUrl,
+            label = Is60Fps(candidate.title, pageTitles.title, siteQuality) ? "60 FPS" : "Обычная"
+        };
     }
+
+    static (string title, string original) ExtractPageTitles(string html, bool mult)
+    {
+        if (!mult)
+        {
+            Match titleMatch = PageTitleRegex.Match(html);
+            return titleMatch.Success
+                ? (
+                    WebUtility.HtmlDecode(titleMatch.Groups["title"].Value)?.Trim(),
+                    WebUtility.HtmlDecode(titleMatch.Groups["original"].Value)?.Trim()
+                )
+                : default;
+        }
+
+        Match multTitleMatch = MultPageTitleRegex.Match(html);
+        if (!multTitleMatch.Success)
+            return default;
+
+        string combined = CleanText(multTitleMatch.Groups["title"].Value);
+        int separator = combined.IndexOf('/', StringComparison.Ordinal);
+        return separator > 0
+            ? (combined[..separator].Trim(), combined[(separator + 1)..].Trim())
+            : (combined, null);
+    }
+
+    async Task<bool> IsStreamAvailable(string streamUrl, string pageUrl)
+    {
+        using var response = await Http.ResponseHeaders(
+            streamUrl,
+            timeoutSeconds: 8,
+            headers: HeadersModel.Init("referer", pageUrl),
+            httpversion: init.httpversion,
+            allowAutoRedirect: true,
+            proxy: proxy
+        );
+
+        return response?.IsSuccessStatusCode == true;
+    }
+
+    static bool Is60Fps(params string[] values)
+        => values.Any(value => !string.IsNullOrWhiteSpace(value)
+            && Regex.IsMatch(value, """\b60\s*fps\b""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+
+    static string CandidateKey(SearchCandidate candidate)
+        => $"{(candidate.mult ? "mult" : "film")}:{candidate.id}";
 
     static string ExtractStreamUrl(string html, string host)
     {
