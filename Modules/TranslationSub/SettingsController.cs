@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Shared;
-using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,7 +24,7 @@ public class TranslationSubSettingsController : BaseController
     [Route("translationsub/v2/settings")]
     public ActionResult GetSettings(string uid = null)
     {
-        uid = ResolveUid(uid);
+        uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, uid);
         var settings = TranslationSettingsStore.Get(uid);
         var options = LampacSourceRegistry.AvailableSources();
 
@@ -61,7 +60,7 @@ public class TranslationSubSettingsController : BaseController
             return ContentTo("{\"success\":false,\"error\":\"invalid_json\"}");
         }
 
-        string uid = ResolveUid(body?.Value<string>("uid"));
+        string uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, body?.Value<string>("uid"));
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("{\"success\":false,\"error\":\"uid_required\"}");
 
@@ -101,21 +100,5 @@ public class TranslationSubSettingsController : BaseController
             schema = TranslationSettingsStore.UiSchema(),
             availableSourceItems = options
         }));
-    }
-
-    string ResolveUid(string explicitUid = null)
-    {
-        string requestUid = requestInfo?.user_uid;
-        if (!string.IsNullOrWhiteSpace(requestUid))
-            return requestUid.Trim();
-
-        if (!string.IsNullOrWhiteSpace(explicitUid))
-            return explicitUid.Trim();
-
-        if (Request.Query.TryGetValue("uid", out var uidQuery)
-            && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
-            return uidQuery.ToString().Trim();
-
-        return null;
     }
 }

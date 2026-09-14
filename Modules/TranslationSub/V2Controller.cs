@@ -23,11 +23,11 @@ public class TranslationSubV2Controller : BaseController
     [Route("translationsub/v2/snapshot")]
     public ActionResult Snapshot(string uid = null)
     {
-        uid = ResolveUid(uid);
+        uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, uid);
         if (string.IsNullOrWhiteSpace(uid))
             return Error("uid_required");
 
-        string profileId = ResolveProfileId();
+        string profileId = TranslationSubRequestIdentity.ResolveProfileId(HttpContext);
 
         // Server-side safety reconciliation covers restarts or missed NWS
         // invalidations. The client never owns watched-progress synchronization.
@@ -46,7 +46,7 @@ public class TranslationSubV2Controller : BaseController
         if (body == null)
             return ContentTo("{\"eligible\":false,\"reason\":\"empty_body\"}");
 
-        uid = ResolveUid(uid ?? body.Value<string>("uid"));
+        uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, uid ?? body.Value<string>("uid"));
         if (string.IsNullOrWhiteSpace(uid))
             return ContentTo("{\"eligible\":false,\"reason\":\"uid_required\"}");
 
@@ -75,8 +75,8 @@ public class TranslationSubV2Controller : BaseController
             }));
         }
 
-        uid = ResolveUid(uid ?? body.Value<string>("uid"));
-        string profileId = ResolveProfileId();
+        uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, uid ?? body.Value<string>("uid"));
+        string profileId = TranslationSubRequestIdentity.ResolveProfileId(HttpContext);
         var intent = body.ToObject<TranslationSubSubscribeIntent>();
         var result = await TranslationSubCommandService.SubscribeAsync(uid, intent, HttpContext);
 
@@ -96,8 +96,8 @@ public class TranslationSubV2Controller : BaseController
     [Route("translationsub/v2/subscriptions/{id}/remove")]
     public ActionResult Unsubscribe(string id, string uid = null)
     {
-        uid = ResolveUid(uid);
-        string profileId = ResolveProfileId();
+        uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, uid);
+        string profileId = TranslationSubRequestIdentity.ResolveProfileId(HttpContext);
         var result = TranslationSubCommandService.Unsubscribe(uid, id);
 
         if (result.Success)
@@ -114,11 +114,11 @@ public class TranslationSubV2Controller : BaseController
     [Route("translationsub/v2/check")]
     async public Task<ActionResult> Check(string uid = null)
     {
-        uid = ResolveUid(uid);
+        uid = TranslationSubRequestIdentity.ResolveUid(requestInfo, uid);
         if (string.IsNullOrWhiteSpace(uid))
             return Error("uid_required");
 
-        string profileId = ResolveProfileId();
+        string profileId = TranslationSubRequestIdentity.ResolveProfileId(HttpContext);
         TimeCodeProgressService.SyncUser(uid, profileId);
 
         await TranslationSubscriptionService.Tick(uid, force: true);
@@ -139,30 +139,6 @@ public class TranslationSubV2Controller : BaseController
             success = false,
             error
         }));
-
-    string ResolveUid(string explicitUid = null)
-    {
-        string requestUid = requestInfo?.user_uid;
-        if (!string.IsNullOrWhiteSpace(requestUid))
-            return requestUid.Trim();
-
-        if (!string.IsNullOrWhiteSpace(explicitUid))
-            return explicitUid.Trim();
-
-        if (Request.Query.TryGetValue("uid", out var uidQuery)
-            && !string.IsNullOrWhiteSpace(uidQuery.ToString()))
-            return uidQuery.ToString().Trim();
-
-        return null;
-    }
-
-    string ResolveProfileId()
-    {
-        if (Request.Query.TryGetValue("profile_id", out var profileQuery))
-            return ProfileProgressStore.NormalizeProfileId(profileQuery.ToString());
-
-        return "0";
-    }
 
     async Task<JObject> ReadBody()
     {

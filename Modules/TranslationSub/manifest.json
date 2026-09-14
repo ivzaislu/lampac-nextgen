@@ -28,6 +28,7 @@
     "Services/TranslationSubContentStateService.cs",
     "Services/TranslationSubProjectionService.cs",
     "Services/TranslationSubRealtimeService.cs",
+    "Services/TranslationSubRequestIdentity.cs",
     "Services/TranslationSubSnapshotService.cs",
     "Services/VoiceNormalize.cs"
   ]
