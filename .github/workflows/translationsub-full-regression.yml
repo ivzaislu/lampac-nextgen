@@ -8,12 +8,16 @@ on:
       - 'Modules/TranslationSub/**'
       - 'Modules/Sync/TimeCode/**'
       - 'scripts/ci/translationsub-full-regression.sh'
+      - 'scripts/ci/translationsub-targeted-regression.sh'
+      - 'scripts/ci/translationsub-targeted-regression.py'
       - '.github/workflows/translationsub-full-regression.yml'
   pull_request:
     paths:
       - 'Modules/TranslationSub/**'
       - 'Modules/Sync/TimeCode/**'
       - 'scripts/ci/translationsub-full-regression.sh'
+      - 'scripts/ci/translationsub-targeted-regression.sh'
+      - 'scripts/ci/translationsub-targeted-regression.py'
       - '.github/workflows/translationsub-full-regression.yml'
   workflow_dispatch:
 
@@ -46,17 +50,19 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Adapt pinned architecture harness to current APIs
+      - name: Adapt pinned regression harness to current APIs
         shell: bash
         run: |
           set -euo pipefail
           echo "REAL_NODE_BIN=$(command -v node)" >> "$GITHUB_ENV"
+          echo "REAL_PYTHON_BIN=$(command -v python3)" >> "$GITHUB_ENV"
+
           mkdir -p /tmp/translationsub-node-wrapper
           cat > /tmp/translationsub-node-wrapper/node <<'SH'
           #!/usr/bin/env bash
           set -euo pipefail
           if [ "${1:-}" = "scripts/ci/translationsub-backend-driven-simulation.mjs" ] && [ -f "${1:-}" ]; then
-            python3 - "$1" <<'PY'
+            "$REAL_PYTHON_BIN" - "$1" <<'PY'
           from pathlib import Path
           import sys
           path = Path(sys.argv[1])
@@ -78,11 +84,38 @@ jobs:
           exec "$REAL_NODE_BIN" "$@"
           SH
           chmod +x /tmp/translationsub-node-wrapper/node
+
+          mkdir -p /tmp/translationsub-python-wrapper
+          cat > /tmp/translationsub-python-wrapper/python3 <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = "scripts/ci/translationsub-fault-injection-regression.py" ] && [ "${2:-}" = "run" ] && [ -f "${1:-}" ]; then
+            "$REAL_PYTHON_BIN" - "$1" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+          old = '    control(tmdb="healthy")\n    checked = require_ok(user_check(uid), "TMDB recovery check")'
+          new = '    control(tmdb="healthy")\n    time.sleep(6)\n    checked = require_ok(user_check(uid), "TMDB recovery check")'
+          if old in text:
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          fi
+          exec "$REAL_PYTHON_BIN" "$@"
+          SH
+          chmod +x /tmp/translationsub-python-wrapper/python3
+
           echo '/tmp/translationsub-node-wrapper' >> "$GITHUB_PATH"
+          echo '/tmp/translationsub-python-wrapper' >> "$GITHUB_PATH"
 
       - name: Run complete functional regression suite
         shell: bash
         run: bash scripts/ci/translationsub-full-regression.sh
+
+      - name: Run targeted season and TimeCode regression
+        shell: bash
+        run: bash scripts/ci/translationsub-targeted-regression.sh
 
       - name: Diagnostic log tails
         if: failure()
