@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -23,6 +24,12 @@ public static class SubscriptionStore
     {
         public string Id { get; init; }
         public string Uid { get; init; }
+    }
+
+    sealed class SubscriptionSnapshot
+    {
+        public Dictionary<string, string> StateById { get; init; }
+        public Dictionary<string, string> UidById { get; init; }
     }
 
     sealed class MutationBatchScope : IDisposable
@@ -120,28 +127,113 @@ ORDER BY rowid;";
         }
     }
 
-    static void SaveUnsafe(
-        List<TranslationSubscription> list,
-        IReadOnlyCollection<RemovedSubscription> removedSubscriptions = null)
+    static Dictionary<string, TranslationSubscription> PersistableById(IEnumerable<TranslationSubscription> list)
     {
-        using var connection = TranslationSubDatabase.Open();
-        using var transaction = connection.BeginTransaction();
-
-        using (var clear = connection.CreateCommand())
-        {
-            clear.Transaction = transaction;
-            clear.CommandText = "DELETE FROM subscriptions;";
-            clear.ExecuteNonQuery();
-        }
-
-        foreach (var item in list ?? new List<TranslationSubscription>())
+        var result = new Dictionary<string, TranslationSubscription>(StringComparer.Ordinal);
+        foreach (var item in list ?? Enumerable.Empty<TranslationSubscription>())
         {
             if (item == null || string.IsNullOrWhiteSpace(item.Id))
                 continue;
 
-            using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = @"
+            if (!result.TryAdd(item.Id, item))
+                throw new InvalidOperationException($"Duplicate TranslationSub subscription id '{item.Id}'.");
+        }
+        return result;
+    }
+
+    static SubscriptionSnapshot CaptureSnapshot(IEnumerable<TranslationSubscription> list)
+    {
+        var items = PersistableById(list);
+        return new SubscriptionSnapshot
+        {
+            StateById = items.ToDictionary(
+                pair => pair.Key,
+                pair => JsonConvert.SerializeObject(pair.Value, Formatting.None),
+                StringComparer.Ordinal),
+            UidById = items.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.Uid ?? string.Empty,
+                StringComparer.Ordinal)
+        };
+    }
+
+    static bool SameSnapshot(SubscriptionSnapshot left, SubscriptionSnapshot right)
+    {
+        if (left?.StateById == null || right?.StateById == null)
+            return false;
+        if (left.StateById.Count != right.StateById.Count)
+            return false;
+
+        foreach (var pair in left.StateById)
+        {
+            if (!right.StateById.TryGetValue(pair.Key, out string state)
+                || !string.Equals(pair.Value, state, StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
+    }
+
+    static List<RemovedSubscription> RemovedSubscriptions(
+        SubscriptionSnapshot before,
+        SubscriptionSnapshot after)
+    {
+        if (before?.UidById == null)
+            return new List<RemovedSubscription>();
+
+        var afterOwners = after?.UidById ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        return before.UidById
+            .Where(pair => !afterOwners.TryGetValue(pair.Key, out string currentUid)
+                || !string.Equals(currentUid, pair.Value, StringComparison.Ordinal))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            .Select(pair => new RemovedSubscription
+            {
+                Id = pair.Key,
+                Uid = pair.Value
+            })
+            .ToList();
+    }
+
+    static void BindSubscriptionParameters(SqliteCommand command, TranslationSubscription item)
+    {
+        command.Parameters.AddWithValue("$id", item.Id);
+        command.Parameters.AddWithValue("$uid", (object)item.Uid ?? DBNull.Value);
+        command.Parameters.AddWithValue("$content_id", (object)item.ContentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$title", (object)item.Title ?? DBNull.Value);
+        command.Parameters.AddWithValue("$original_title", (object)item.OriginalTitle ?? DBNull.Value);
+        command.Parameters.AddWithValue("$kp_id", (object)item.KpId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$imdb_id", (object)item.ImdbId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_id", (object)item.TmdbId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$poster", (object)item.Poster ?? DBNull.Value);
+        command.Parameters.AddWithValue("$year", (object)item.Year ?? DBNull.Value);
+        command.Parameters.AddWithValue("$is_serial", item.IsSerial ? 1 : 0);
+        command.Parameters.AddWithValue("$source", (object)item.Source ?? DBNull.Value);
+        command.Parameters.AddWithValue("$translation_id", (object)item.TranslationId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$translation_name", (object)item.TranslationName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$current_season", (object)item.CurrentSeason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$last_season", (object)item.LastSeason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$last_episode", (object)item.LastEpisode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sources_json", JsonConvert.SerializeObject(item.Sources ?? new List<TranslationSubscriptionSource>()));
+        command.Parameters.AddWithValue("$created_at", TranslationSubDatabase.DateTimeText(item.CreatedAt));
+        command.Parameters.AddWithValue("$last_checked_at", TranslationSubDatabase.DateTimeValue(item.LastCheckedAt));
+        command.Parameters.AddWithValue("$tmdb_status", (object)item.TmdbStatus ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_last_season", (object)item.TmdbLastSeason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_last_episode", (object)item.TmdbLastEpisode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_last_air_date", TranslationSubDatabase.DateTimeValue(item.TmdbLastAirDate));
+        command.Parameters.AddWithValue("$tmdb_next_season", (object)item.TmdbNextSeason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_next_episode", (object)item.TmdbNextEpisode ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_next_air_date", TranslationSubDatabase.DateTimeValue(item.TmdbNextAirDate));
+        command.Parameters.AddWithValue("$tmdb_target_season_episodes", (object)item.TmdbTargetSeasonEpisodes ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_last_synced_at", TranslationSubDatabase.DateTimeValue(item.TmdbLastSyncedAt));
+        command.Parameters.AddWithValue("$schedule_state", (object)item.ScheduleState ?? DBNull.Value);
+        command.Parameters.AddWithValue("$tmdb_new_season_available", item.TmdbNewSeasonAvailable ? 1 : 0);
+    }
+
+    static void InsertSubscription(SqliteConnection connection, SqliteTransaction transaction, TranslationSubscription item)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"
 INSERT INTO subscriptions (
     id, uid, content_id, title, original_title, kp_id, imdb_id, tmdb_id,
     poster, year, is_serial, source, translation_id, translation_name,
@@ -159,48 +251,81 @@ INSERT INTO subscriptions (
     $tmdb_target_season_episodes, $tmdb_last_synced_at, $schedule_state,
     $tmdb_new_season_available
 );";
+        BindSubscriptionParameters(command, item);
+        command.ExecuteNonQuery();
+    }
 
-            command.Parameters.AddWithValue("$id", item.Id);
-            command.Parameters.AddWithValue("$uid", (object)item.Uid ?? DBNull.Value);
-            command.Parameters.AddWithValue("$content_id", (object)item.ContentId ?? DBNull.Value);
-            command.Parameters.AddWithValue("$title", (object)item.Title ?? DBNull.Value);
-            command.Parameters.AddWithValue("$original_title", (object)item.OriginalTitle ?? DBNull.Value);
-            command.Parameters.AddWithValue("$kp_id", (object)item.KpId ?? DBNull.Value);
-            command.Parameters.AddWithValue("$imdb_id", (object)item.ImdbId ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_id", (object)item.TmdbId ?? DBNull.Value);
-            command.Parameters.AddWithValue("$poster", (object)item.Poster ?? DBNull.Value);
-            command.Parameters.AddWithValue("$year", (object)item.Year ?? DBNull.Value);
-            command.Parameters.AddWithValue("$is_serial", item.IsSerial ? 1 : 0);
-            command.Parameters.AddWithValue("$source", (object)item.Source ?? DBNull.Value);
-            command.Parameters.AddWithValue("$translation_id", (object)item.TranslationId ?? DBNull.Value);
-            command.Parameters.AddWithValue("$translation_name", (object)item.TranslationName ?? DBNull.Value);
-            command.Parameters.AddWithValue("$current_season", (object)item.CurrentSeason ?? DBNull.Value);
-            command.Parameters.AddWithValue("$last_season", (object)item.LastSeason ?? DBNull.Value);
-            command.Parameters.AddWithValue("$last_episode", (object)item.LastEpisode ?? DBNull.Value);
-            command.Parameters.AddWithValue("$sources_json", JsonConvert.SerializeObject(item.Sources ?? new List<TranslationSubscriptionSource>()));
-            command.Parameters.AddWithValue("$created_at", TranslationSubDatabase.DateTimeText(item.CreatedAt));
-            command.Parameters.AddWithValue("$last_checked_at", TranslationSubDatabase.DateTimeValue(item.LastCheckedAt));
-            command.Parameters.AddWithValue("$tmdb_status", (object)item.TmdbStatus ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_last_season", (object)item.TmdbLastSeason ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_last_episode", (object)item.TmdbLastEpisode ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_last_air_date", TranslationSubDatabase.DateTimeValue(item.TmdbLastAirDate));
-            command.Parameters.AddWithValue("$tmdb_next_season", (object)item.TmdbNextSeason ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_next_episode", (object)item.TmdbNextEpisode ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_next_air_date", TranslationSubDatabase.DateTimeValue(item.TmdbNextAirDate));
-            command.Parameters.AddWithValue("$tmdb_target_season_episodes", (object)item.TmdbTargetSeasonEpisodes ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_last_synced_at", TranslationSubDatabase.DateTimeValue(item.TmdbLastSyncedAt));
-            command.Parameters.AddWithValue("$schedule_state", (object)item.ScheduleState ?? DBNull.Value);
-            command.Parameters.AddWithValue("$tmdb_new_season_available", item.TmdbNewSeasonAvailable ? 1 : 0);
-            command.ExecuteNonQuery();
-        }
+    static void UpdateSubscription(SqliteConnection connection, SqliteTransaction transaction, TranslationSubscription item)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"
+UPDATE subscriptions SET
+    uid = $uid,
+    content_id = $content_id,
+    title = $title,
+    original_title = $original_title,
+    kp_id = $kp_id,
+    imdb_id = $imdb_id,
+    tmdb_id = $tmdb_id,
+    poster = $poster,
+    year = $year,
+    is_serial = $is_serial,
+    source = $source,
+    translation_id = $translation_id,
+    translation_name = $translation_name,
+    current_season = $current_season,
+    last_season = $last_season,
+    last_episode = $last_episode,
+    sources_json = $sources_json,
+    created_at = $created_at,
+    last_checked_at = $last_checked_at,
+    tmdb_status = $tmdb_status,
+    tmdb_last_season = $tmdb_last_season,
+    tmdb_last_episode = $tmdb_last_episode,
+    tmdb_last_air_date = $tmdb_last_air_date,
+    tmdb_next_season = $tmdb_next_season,
+    tmdb_next_episode = $tmdb_next_episode,
+    tmdb_next_air_date = $tmdb_next_air_date,
+    tmdb_target_season_episodes = $tmdb_target_season_episodes,
+    tmdb_last_synced_at = $tmdb_last_synced_at,
+    schedule_state = $schedule_state,
+    tmdb_new_season_available = $tmdb_new_season_available
+WHERE id = $id;";
+        BindSubscriptionParameters(command, item);
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"TranslationSub subscription '{item.Id}' disappeared during update.");
+    }
 
-        foreach (var removed in removedSubscriptions ?? Array.Empty<RemovedSubscription>())
+    static void SaveUnsafe(
+        List<TranslationSubscription> list,
+        SubscriptionSnapshot before,
+        SubscriptionSnapshot after)
+    {
+        var afterItems = PersistableById(list);
+        var beforeStates = before?.StateById ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        var afterStates = after?.StateById ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var removedSubscriptions = RemovedSubscriptions(before, after);
+        var deletedIds = beforeStates.Keys
+            .Where(id => !afterItems.ContainsKey(id))
+            .ToArray();
+        var inserted = afterItems
+            .Where(pair => !beforeStates.ContainsKey(pair.Key))
+            .Select(pair => pair.Value)
+            .ToArray();
+        var updated = afterItems
+            .Where(pair => beforeStates.TryGetValue(pair.Key, out string oldState)
+                && afterStates.TryGetValue(pair.Key, out string newState)
+                && !string.Equals(oldState, newState, StringComparison.Ordinal))
+            .Select(pair => pair.Value)
+            .ToArray();
+
+        using var connection = TranslationSubDatabase.Open();
+        using var transaction = connection.BeginTransaction();
+
+        foreach (var removed in removedSubscriptions)
         {
-            if (removed == null
-                || string.IsNullOrWhiteSpace(removed.Id)
-                || string.IsNullOrWhiteSpace(removed.Uid))
-                continue;
-
             using var cleanup = connection.CreateCommand();
             cleanup.Transaction = transaction;
             cleanup.CommandText = @"
@@ -211,39 +336,22 @@ WHERE uid = $uid AND subscription_id = $subscription_id;";
             cleanup.ExecuteNonQuery();
         }
 
+        foreach (string id in deletedIds)
+        {
+            using var delete = connection.CreateCommand();
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM subscriptions WHERE id = $id;";
+            delete.Parameters.AddWithValue("$id", id);
+            delete.ExecuteNonQuery();
+        }
+
+        foreach (var item in updated)
+            UpdateSubscription(connection, transaction, item);
+
+        foreach (var item in inserted)
+            InsertSubscription(connection, transaction, item);
+
         transaction.Commit();
-    }
-
-    static string PersistedState(IEnumerable<TranslationSubscription> list)
-        => JsonConvert.SerializeObject(list ?? Enumerable.Empty<TranslationSubscription>(), Formatting.None);
-
-    static Dictionary<string, string> SubscriptionOwners(IEnumerable<TranslationSubscription> list)
-    {
-        return (list ?? Enumerable.Empty<TranslationSubscription>())
-            .Where(x => x != null
-                && !string.IsNullOrWhiteSpace(x.Id)
-                && !string.IsNullOrWhiteSpace(x.Uid))
-            .GroupBy(x => x.Id.Trim(), StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Last().Uid.Trim(),
-                StringComparer.Ordinal);
-    }
-
-    static List<RemovedSubscription> RemovedSubscriptions(
-        IReadOnlyDictionary<string, string> before,
-        IEnumerable<TranslationSubscription> after)
-    {
-        var afterOwners = SubscriptionOwners(after);
-        return (before ?? new Dictionary<string, string>(StringComparer.Ordinal))
-            .Where(pair => !afterOwners.TryGetValue(pair.Key, out string currentUid)
-                || !string.Equals(currentUid, pair.Value, StringComparison.Ordinal))
-            .Select(pair => new RemovedSubscription
-            {
-                Id = pair.Key,
-                Uid = pair.Value
-            })
-            .ToList();
     }
 
     public static IDisposable BeginBatch()
@@ -282,17 +390,16 @@ WHERE uid = $uid AND subscription_id = $subscription_id;";
         lock (TranslationSubDatabase.SyncRoot)
         {
             var list = LoadUnsafe();
-            string beforePersisted = PersistedState(list);
+            var before = CaptureSnapshot(list);
             var beforeShared = SharedStateByUid(list);
-            var beforeOwners = SubscriptionOwners(list);
             action(list);
+            var after = CaptureSnapshot(list);
 
-            if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
+            if (SameSnapshot(before, after))
                 return;
 
             var afterShared = SharedStateByUid(list);
-            var removedSubscriptions = RemovedSubscriptions(beforeOwners, list);
-            SaveUnsafe(list, removedSubscriptions);
+            SaveUnsafe(list, before, after);
             changedUids = ChangedUids(beforeShared, afterShared);
         }
 
@@ -315,18 +422,17 @@ WHERE uid = $uid AND subscription_id = $subscription_id;";
         lock (TranslationSubDatabase.SyncRoot)
         {
             var list = LoadUnsafe();
-            string beforePersisted = PersistedState(list);
+            var before = CaptureSnapshot(list);
             var beforeShared = SharedStateByUid(list);
-            var beforeOwners = SubscriptionOwners(list);
             if (!action(list))
                 return false;
 
-            if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
+            var after = CaptureSnapshot(list);
+            if (SameSnapshot(before, after))
                 return false;
 
             var afterShared = SharedStateByUid(list);
-            var removedSubscriptions = RemovedSubscriptions(beforeOwners, list);
-            SaveUnsafe(list, removedSubscriptions);
+            SaveUnsafe(list, before, after);
             changedUids = ChangedUids(beforeShared, afterShared);
         }
 
@@ -343,9 +449,8 @@ WHERE uid = $uid AND subscription_id = $subscription_id;";
         lock (TranslationSubDatabase.SyncRoot)
         {
             var list = LoadUnsafe();
-            string beforePersisted = PersistedState(list);
+            var before = CaptureSnapshot(list);
             var beforeShared = SharedStateByUid(list);
-            var beforeOwners = SubscriptionOwners(list);
 
             foreach (var operation in batch.Operations)
             {
@@ -360,12 +465,12 @@ WHERE uid = $uid AND subscription_id = $subscription_id;";
                 }
             }
 
-            if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
+            var after = CaptureSnapshot(list);
+            if (SameSnapshot(before, after))
                 return;
 
             var afterShared = SharedStateByUid(list);
-            var removedSubscriptions = RemovedSubscriptions(beforeOwners, list);
-            SaveUnsafe(list, removedSubscriptions);
+            SaveUnsafe(list, before, after);
             changedUids = ChangedUids(beforeShared, afterShared);
         }
 
