@@ -1,0 +1,120 @@
+name: TranslationSub Plugin Bundle Smoke
+
+on:
+  push:
+    branches:
+      - TranslationSub-release
+    paths:
+      - 'Modules/TranslationSub/PluginController.cs'
+      - 'Modules/TranslationSub/translationsub*.js'
+      - 'Modules/TranslationSub/manifest.json'
+      - '.github/workflows/translationsub-plugin-smoke.yml'
+  pull_request:
+    paths:
+      - 'Modules/TranslationSub/PluginController.cs'
+      - 'Modules/TranslationSub/translationsub*.js'
+      - 'Modules/TranslationSub/manifest.json'
+      - '.github/workflows/translationsub-plugin-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-plugin-smoke
+          dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-plugin-smoke --verbosity minimal -p:PlaywrightPlatform=linux-x64
+          cat > /tmp/lampac-plugin-smoke/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+          listen:
+            port: 9118
+          YAML
+          (cd /tmp/lampac-plugin-smoke && exec dotnet Core.dll > /tmp/lampac-plugin-smoke.log 2>&1) &
+          echo $! > /tmp/lampac-plugin-smoke.pid
+          ready=0
+          for _ in $(seq 1 120); do
+            if curl -fsS --max-time 2 http://127.0.0.1:9118/translationsub.js >/tmp/translationsub.bundle.js 2>/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-plugin-smoke.pid)" 2>/dev/null; then
+              tail -n 400 /tmp/lampac-plugin-smoke.log || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test "$ready" = 1
+
+      - name: Verify both plugin routes and dependency order
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS -D /tmp/headers-a.txt http://127.0.0.1:9118/translationsub.js -o /tmp/bundle-a.js
+          curl -fsS -D /tmp/headers-b.txt http://127.0.0.1:9118/translationsub/plugin.js -o /tmp/bundle-b.js
+          cmp /tmp/bundle-a.js /tmp/bundle-b.js
+          grep -Eiq '^Content-Type: application/javascript' /tmp/headers-a.txt
+          grep -Eiq '^Cache-Control: no-cache, no-store, must-revalidate' /tmp/headers-a.txt
+          node --check /tmp/bundle-a.js
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/bundle-a.js').read_text(encoding='utf-8')
+          needles = [
+              'TranslationSubApi',
+              'TranslationSubUI',
+              'TranslationSubBadgeState',
+              'TranslationSubSource',
+              'TranslationSubPage',
+              'TranslationSubNotice',
+              'TranslationSubSettings',
+              'TranslationSubCardFlow',
+              'TranslationSubRealtime',
+              'TranslationSubNavigation',
+          ]
+          positions = []
+          for needle in needles:
+              pos = text.find(needle)
+              assert pos >= 0, f'missing bundle symbol: {needle}'
+              positions.append(pos)
+          assert positions == sorted(positions), (needles, positions)
+          assert len(text) > 10000, len(text)
+          print(f'Plugin bundle smoke passed; bytes={len(text)}')
+          PY
+
+      - name: Diagnostic tail
+        if: failure()
+        shell: bash
+        run: tail -n 400 /tmp/lampac-plugin-smoke.log 2>/dev/null || true
+
+      - name: Stop Lampac
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          [ -f /tmp/lampac-plugin-smoke.pid ] && kill "$(cat /tmp/lampac-plugin-smoke.pid)" 2>/dev/null || true
