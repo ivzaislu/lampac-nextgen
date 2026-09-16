@@ -1,0 +1,62 @@
+name: TranslationSub Full Functional Regression
+
+on:
+  push:
+    branches:
+      - TranslationSub-release
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'Modules/Sync/TimeCode/**'
+      - 'scripts/ci/translationsub-full-regression.sh'
+      - '.github/workflows/translationsub-full-regression.yml'
+  pull_request:
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'Modules/Sync/TimeCode/**'
+      - 'scripts/ci/translationsub-full-regression.sh'
+      - '.github/workflows/translationsub-full-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-full-functional-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-functional-regression:
+    name: Build + API + SQLite + TimeCode + faults + realtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run complete functional regression suite
+        shell: bash
+        run: bash scripts/ci/translationsub-full-regression.sh
+
+      - name: Diagnostic log tails
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          for file in /tmp/lampac-*.log /tmp/translationsub-*.log; do
+            [ -f "$file" ] || continue
+            echo "===== $file ====="
+            tail -n 400 "$file"
+          done
