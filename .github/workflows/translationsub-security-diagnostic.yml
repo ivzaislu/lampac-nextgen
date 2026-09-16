@@ -1,0 +1,214 @@
+name: TranslationSub Security Diagnostic
+
+on:
+  push:
+    branches:
+      - TranslationSub-release
+    paths:
+      - 'Modules/TranslationSub/**'
+      - '.github/workflows/translationsub-security-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-diagnostic:
+    name: UID isolation + NWS binding + metadata origin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Restore pinned security probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          HARNESS_COMMIT='b31714cb97d80aa0c4f04bcab2a08d464cb6216b'
+          git fetch --no-tags --depth=1 origin "$HARNESS_COMMIT"
+          mkdir -p /tmp/translationsub-security-probes
+          git show "$HARNESS_COMMIT:scripts/ci/translationsub-security-audit.py" > /tmp/translationsub-security-probes/http.py
+          git show "$HARNESS_COMMIT:scripts/ci/translationsub-security-nws.mjs" > /tmp/translationsub-security-probes/nws.mjs
+
+      - name: Publish isolated Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-security
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-security \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-security/Core.dll
+          test -f /tmp/lampac-security/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-security/module/OnlineRUS/FlixCDN/manifest.json
+
+          echo '127.0.0.1 security-meta.test security-sentinel.test' | sudo tee -a /etc/hosts >/dev/null
+
+          cat > /tmp/lampac-security/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          serilog: true
+          accsdb:
+            enable: true
+          BaseModule:
+            LoadModules:
+              - TranslationSub
+              - TimeCode
+              - FlixCDN
+          listen:
+            port: 9118
+          YAML
+
+          cat > /tmp/lampac-security/init.conf <<'JSON'
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://security-meta.test:9125/tmdb",
+              "tmdb_apikey": ""
+            },
+            "FlixCDN": {
+              "enable": true,
+              "overridehost": "http://security-meta.test:9125/meta"
+            }
+          }
+          JSON
+
+      - name: Start security fixtures and Lampac
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/translationsub-security-probes/http.py serve > /tmp/translationsub-security-fixture.log 2>&1 &
+          echo $! > /tmp/translationsub-security-fixture.pid
+
+          ready_meta=0
+          ready_sentinel=0
+          for _ in $(seq 1 40); do
+            curl -fsS --max-time 2 http://127.0.0.1:9125/health >/dev/null 2>&1 && ready_meta=1 || true
+            curl -fsS --max-time 2 http://127.0.0.1:9126/health >/dev/null 2>&1 && ready_sentinel=1 || true
+            if [ "$ready_meta" = 1 ] && [ "$ready_sentinel" = 1 ]; then break; fi
+            sleep 0.5
+          done
+          test "$ready_meta" = 1
+          test "$ready_sentinel" = 1
+
+          (cd /tmp/lampac-security && exec dotnet Core.dll > /tmp/lampac-security.log 2>&1) &
+          echo $! > /tmp/lampac-security.pid
+
+          ready=0
+          for _ in $(seq 1 180); do
+            if curl -fsS --max-time 2 'http://127.0.0.1:9118/translationsub/v2/settings?uid=security-ready%40translationsub.test' >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-security.pid)" 2>/dev/null; then
+              tail -n 400 /tmp/lampac-security.log || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test "$ready" = 1
+
+      - name: Run security probes
+        shell: bash
+        env:
+          TRANSLATIONSUB_BASE_URL: http://127.0.0.1:9118
+          TRANSLATIONSUB_DB_PATH: /tmp/lampac-security/database/translationsub.db
+          TRANSLATIONSUB_SECURITY_META: http://127.0.0.1:9125
+        run: |
+          set +e
+          python3 /tmp/translationsub-security-probes/http.py run 2>&1 | tee /tmp/translationsub-security-http.out
+          http_rc=${PIPESTATUS[0]}
+          node /tmp/translationsub-security-probes/nws.mjs 2>&1 | tee /tmp/translationsub-security-nws.out
+          nws_rc=${PIPESTATUS[0]}
+          set -e
+
+          echo "$http_rc" > /tmp/translationsub-security-http.rc
+          echo "$nws_rc" > /tmp/translationsub-security-nws.rc
+
+          if grep -E -i 'database is locked|SQLite Error|SqliteException|Unhandled exception' /tmp/lampac-security.log; then
+            echo 'Unexpected SQLite or unhandled runtime failure detected'
+            exit 1
+          fi
+
+      - name: Classify security result
+        shell: bash
+        run: |
+          set -euo pipefail
+          http_rc=$(cat /tmp/translationsub-security-http.rc)
+          nws_rc=$(cat /tmp/translationsub-security-nws.rc)
+          failed=0
+
+          if grep -Fq 'CONFIRMED HIGH:' /tmp/translationsub-security-http.out; then
+            echo '::error::HTTP arbitrary-UID read/write is reproducible on TranslationSub-release'
+            failed=1
+          elif [ "$http_rc" != 0 ]; then
+            echo '::warning::Legacy HTTP exploit probe no longer reproduced exactly; inspect output to distinguish hardening from harness drift.'
+          fi
+
+          if ! grep -Fq 'CLOSED: configured metadata origin was fetched; foreign sentinel origin was not' /tmp/translationsub-security-http.out; then
+            echo '::error::Metadata same-origin/SSRF closure was not positively verified'
+            failed=1
+          fi
+
+          if grep -Fq 'CONFIRMED HIGH:' /tmp/translationsub-security-nws.out; then
+            echo '::error::Anonymous NWS arbitrary-UID registration/destructive IDOR is reproducible on TranslationSub-release'
+            failed=1
+          elif [ "$nws_rc" != 0 ]; then
+            echo '::warning::Legacy NWS exploit probe no longer reproduced exactly; inspect output to distinguish hardening from harness drift.'
+          fi
+
+          if [ "$failed" != 0 ]; then
+            echo 'TranslationSub security diagnostic found unresolved high-risk UID isolation findings.'
+            exit 1
+          fi
+
+          echo 'TranslationSub security diagnostic found no reproduced HIGH findings; metadata origin protection verified.'
+
+      - name: Diagnostic tails
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          echo '===== HTTP/SSRF probe ====='
+          cat /tmp/translationsub-security-http.out 2>/dev/null || true
+          echo '===== NWS probe ====='
+          cat /tmp/translationsub-security-nws.out 2>/dev/null || true
+          echo '===== Lampac tail ====='
+          tail -n 400 /tmp/lampac-security.log 2>/dev/null || true
+          echo '===== Fixture tail ====='
+          tail -n 200 /tmp/translationsub-security-fixture.log 2>/dev/null || true
+
+      - name: Stop processes
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          [ -f /tmp/lampac-security.pid ] && kill "$(cat /tmp/lampac-security.pid)" 2>/dev/null || true
+          [ -f /tmp/translationsub-security-fixture.pid ] && kill "$(cat /tmp/translationsub-security-fixture.pid)" 2>/dev/null || true
