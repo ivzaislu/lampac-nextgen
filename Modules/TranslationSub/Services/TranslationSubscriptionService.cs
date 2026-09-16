@@ -531,56 +531,64 @@ public static class TranslationSubscriptionService
             if (!sourceExists)
                 return false;
 
-            bool exists = list.Any(x =>
-                string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal)
+            bool exists = list.Any(x => x != null
+                && !string.Equals(x.Id, sub.Id, StringComparison.Ordinal)
+                && string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal)
                 && x.ContentId == sub.ContentId
                 && x.CurrentSeason.GetValueOrDefault(1) == newSeason
                 && (
                     (!string.IsNullOrWhiteSpace(sub.TranslationId) && x.TranslationId == sub.TranslationId)
-                    || VoiceNormalize.Normalize(x.TranslationName) == normalizedVoice
+                    || (!string.IsNullOrWhiteSpace(normalizedVoice)
+                        && VoiceNormalize.Normalize(x.TranslationName) == normalizedVoice)
                 ));
-            if (exists)
-                return false;
 
-            list.Add(new TranslationSubscription
+            if (!exists)
             {
-                Id = Guid.NewGuid().ToString("N"),
-                Uid = sub.Uid,
-                ContentId = sub.ContentId,
-                Title = sub.Title,
-                OriginalTitle = sub.OriginalTitle,
-                KpId = sub.KpId,
-                ImdbId = sub.ImdbId,
-                TmdbId = sub.TmdbId,
-                Poster = sub.Poster,
-                Year = sub.Year,
-                IsSerial = true,
-                Source = sub.Source,
-                TranslationId = sub.TranslationId,
-                TranslationName = sub.TranslationName,
-                CurrentSeason = newSeason,
-                LastSeason = newSeason,
-                LastEpisode = 0,
-                Sources = sub.Sources?.Select(x => new TranslationSubscriptionSource
+                list.Add(new TranslationSubscription
                 {
-                    Source = x.Source,
-                    TranslationId = x.TranslationId,
-                    TranslationName = x.TranslationName
-                }).ToList() ?? new List<TranslationSubscriptionSource>(),
-                CreatedAt = now,
-                TmdbStatus = tmdb.Status,
-                TmdbLastSeason = tmdb.LastSeason > 0 ? tmdb.LastSeason : null,
-                TmdbLastEpisode = tmdb.LastEpisode > 0 ? tmdb.LastEpisode : null,
-                TmdbLastAirDate = tmdb.LastAirDate,
-                TmdbNextSeason = tmdb.NextSeason > 0 ? tmdb.NextSeason : null,
-                TmdbNextEpisode = tmdb.NextEpisode > 0 ? tmdb.NextEpisode : null,
-                TmdbNextAirDate = tmdb.NextAirDate,
-                TmdbTargetSeasonEpisodes = expected > 0 ? expected : null,
-                TmdbLastSyncedAt = tmdb.SyncedAt,
-                ScheduleState = "active_dubbing",
-                TmdbNewSeasonAvailable = false
-            });
-            return true;
+                    Id = Guid.NewGuid().ToString("N"),
+                    Uid = sub.Uid,
+                    ContentId = sub.ContentId,
+                    Title = sub.Title,
+                    OriginalTitle = sub.OriginalTitle,
+                    KpId = sub.KpId,
+                    ImdbId = sub.ImdbId,
+                    TmdbId = sub.TmdbId,
+                    Poster = sub.Poster,
+                    Year = sub.Year,
+                    IsSerial = true,
+                    Source = sub.Source,
+                    TranslationId = sub.TranslationId,
+                    TranslationName = sub.TranslationName,
+                    CurrentSeason = newSeason,
+                    LastSeason = newSeason,
+                    LastEpisode = 0,
+                    Sources = sub.Sources?.Select(x => new TranslationSubscriptionSource
+                    {
+                        Source = x.Source,
+                        TranslationId = x.TranslationId,
+                        TranslationName = x.TranslationName
+                    }).ToList() ?? new List<TranslationSubscriptionSource>(),
+                    CreatedAt = now,
+                    TmdbStatus = tmdb.Status,
+                    TmdbLastSeason = tmdb.LastSeason > 0 ? tmdb.LastSeason : null,
+                    TmdbLastEpisode = tmdb.LastEpisode > 0 ? tmdb.LastEpisode : null,
+                    TmdbLastAirDate = tmdb.LastAirDate,
+                    TmdbNextSeason = tmdb.NextSeason > 0 ? tmdb.NextSeason : null,
+                    TmdbNextEpisode = tmdb.NextEpisode > 0 ? tmdb.NextEpisode : null,
+                    TmdbNextAirDate = tmdb.NextAirDate,
+                    TmdbTargetSeasonEpisodes = expected > 0 ? expected : null,
+                    TmdbLastSyncedAt = tmdb.SyncedAt,
+                    ScheduleState = "active_dubbing",
+                    TmdbNewSeasonAvailable = false
+                });
+            }
+
+            return list.RemoveAll(x => x != null
+                && string.Equals(x.Id, sub.Id, StringComparison.Ordinal)
+                && string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal)) > 0;
         });
+
+        ProfileProgressStore.RemoveSubscription(sub.Uid, sub.Id);
     }
 }
