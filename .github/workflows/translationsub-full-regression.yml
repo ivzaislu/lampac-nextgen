@@ -46,7 +46,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Adapt pinned architecture harness to current reconciliation API
+      - name: Adapt pinned architecture harness to current APIs
         shell: bash
         run: |
           set -euo pipefail
@@ -61,11 +61,18 @@ jobs:
           import sys
           path = Path(sys.argv[1])
           text = path.read_text(encoding='utf-8')
-          old = r'ProfileProgressStore\.Upsert\(uid, profileId, watchedBySubscription\)'
-          new = r'ProfileProgressStore\.(?:Upsert|Reconcile)\(uid, profileId, watchedBySubscription\)'
-          if old in text:
-              text = text.replace(old, new)
-              path.write_text(text, encoding='utf-8')
+          replacements = {
+              r'ProfileProgressStore\.Upsert\(uid, profileId, watchedBySubscription\)':
+                  r'ProfileProgressStore\.(?:Upsert|Reconcile)\(uid, profileId, watchedBySubscription\)',
+              r'beforePersisted[\s\S]*?PersistedState\(list\)[\s\S]*?StringComparison\.Ordinal[\s\S]*?return;':
+                  r'(?:beforePersisted[\s\S]*?PersistedState\(list\)[\s\S]*?StringComparison\.Ordinal|SameSnapshot\(before, after\))[\s\S]*?return;',
+              r'SaveUnsafe\(list\)':
+                  r'SaveUnsafe\(list(?:, before, after)?\)',
+          }
+          for old, new in replacements.items():
+              if old in text:
+                  text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
           PY
           fi
           exec "$REAL_NODE_BIN" "$@"
