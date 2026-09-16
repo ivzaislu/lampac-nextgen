@@ -145,6 +145,11 @@ ON CONFLICT(uid, profile_id, subscription_id) DO UPDATE SET
         if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(subscriptionId))
             return;
 
+        // Batched subscription deletions clean their profile progress in the same
+        // SQLite transaction when SubscriptionStore flushes the final state.
+        if (SubscriptionStore.HasActiveBatch)
+            return;
+
         lock (TranslationSubDatabase.SyncRoot)
         {
             using var connection = TranslationSubDatabase.Open();

@@ -11,10 +11,18 @@ public static class SubscriptionStore
 {
     static readonly AsyncLocal<MutationBatch> ambientBatch = new();
 
+    internal static bool HasActiveBatch => ambientBatch.Value != null;
+
     sealed class MutationBatch
     {
         public int Depth { get; set; } = 1;
         public List<Action<List<TranslationSubscription>>> Operations { get; } = new();
+    }
+
+    sealed class RemovedSubscription
+    {
+        public string Id { get; init; }
+        public string Uid { get; init; }
     }
 
     sealed class MutationBatchScope : IDisposable
@@ -112,7 +120,9 @@ ORDER BY rowid;";
         }
     }
 
-    static void SaveUnsafe(List<TranslationSubscription> list)
+    static void SaveUnsafe(
+        List<TranslationSubscription> list,
+        IReadOnlyCollection<RemovedSubscription> removedSubscriptions = null)
     {
         using var connection = TranslationSubDatabase.Open();
         using var transaction = connection.BeginTransaction();
@@ -184,11 +194,57 @@ INSERT INTO subscriptions (
             command.ExecuteNonQuery();
         }
 
+        foreach (var removed in removedSubscriptions ?? Array.Empty<RemovedSubscription>())
+        {
+            if (removed == null
+                || string.IsNullOrWhiteSpace(removed.Id)
+                || string.IsNullOrWhiteSpace(removed.Uid))
+                continue;
+
+            using var cleanup = connection.CreateCommand();
+            cleanup.Transaction = transaction;
+            cleanup.CommandText = @"
+DELETE FROM profile_progress
+WHERE uid = $uid AND subscription_id = $subscription_id;";
+            cleanup.Parameters.AddWithValue("$uid", removed.Uid);
+            cleanup.Parameters.AddWithValue("$subscription_id", removed.Id);
+            cleanup.ExecuteNonQuery();
+        }
+
         transaction.Commit();
     }
 
     static string PersistedState(IEnumerable<TranslationSubscription> list)
         => JsonConvert.SerializeObject(list ?? Enumerable.Empty<TranslationSubscription>(), Formatting.None);
+
+    static Dictionary<string, string> SubscriptionOwners(IEnumerable<TranslationSubscription> list)
+    {
+        return (list ?? Enumerable.Empty<TranslationSubscription>())
+            .Where(x => x != null
+                && !string.IsNullOrWhiteSpace(x.Id)
+                && !string.IsNullOrWhiteSpace(x.Uid))
+            .GroupBy(x => x.Id.Trim(), StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Last().Uid.Trim(),
+                StringComparer.Ordinal);
+    }
+
+    static List<RemovedSubscription> RemovedSubscriptions(
+        IReadOnlyDictionary<string, string> before,
+        IEnumerable<TranslationSubscription> after)
+    {
+        var afterOwners = SubscriptionOwners(after);
+        return (before ?? new Dictionary<string, string>(StringComparer.Ordinal))
+            .Where(pair => !afterOwners.TryGetValue(pair.Key, out string currentUid)
+                || !string.Equals(currentUid, pair.Value, StringComparison.Ordinal))
+            .Select(pair => new RemovedSubscription
+            {
+                Id = pair.Key,
+                Uid = pair.Value
+            })
+            .ToList();
+    }
 
     public static IDisposable BeginBatch()
     {
@@ -228,13 +284,15 @@ INSERT INTO subscriptions (
             var list = LoadUnsafe();
             string beforePersisted = PersistedState(list);
             var beforeShared = SharedStateByUid(list);
+            var beforeOwners = SubscriptionOwners(list);
             action(list);
 
             if (string.Equals(beforePersisted, PersistedState(list), StringComparison.Ordinal))
                 return;
 
             var afterShared = SharedStateByUid(list);
-            SaveUnsafe(list);
+            var removedSubscriptions = RemovedSubscriptions(beforeOwners, list);
+            SaveUnsafe(list, removedSubscriptions);
             changedUids = ChangedUids(beforeShared, afterShared);
         }
 
@@ -259,6 +317,7 @@ INSERT INTO subscriptions (
             var list = LoadUnsafe();
             string beforePersisted = PersistedState(list);
             var beforeShared = SharedStateByUid(list);
+            var beforeOwners = SubscriptionOwners(list);
             if (!action(list))
                 return false;
 
@@ -266,7 +325,8 @@ INSERT INTO subscriptions (
                 return false;
 
             var afterShared = SharedStateByUid(list);
-            SaveUnsafe(list);
+            var removedSubscriptions = RemovedSubscriptions(beforeOwners, list);
+            SaveUnsafe(list, removedSubscriptions);
             changedUids = ChangedUids(beforeShared, afterShared);
         }
 
@@ -285,6 +345,7 @@ INSERT INTO subscriptions (
             var list = LoadUnsafe();
             string beforePersisted = PersistedState(list);
             var beforeShared = SharedStateByUid(list);
+            var beforeOwners = SubscriptionOwners(list);
 
             foreach (var operation in batch.Operations)
             {
@@ -303,7 +364,8 @@ INSERT INTO subscriptions (
                 return;
 
             var afterShared = SharedStateByUid(list);
-            SaveUnsafe(list);
+            var removedSubscriptions = RemovedSubscriptions(beforeOwners, list);
+            SaveUnsafe(list, removedSubscriptions);
             changedUids = ChangedUids(beforeShared, afterShared);
         }
 
