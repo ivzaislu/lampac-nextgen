@@ -1,0 +1,63 @@
+name: TranslationSub Targeted Regression
+
+on:
+  push:
+    branches:
+      - TranslationSub-release
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'Modules/Sync/TimeCode/**'
+      - 'scripts/ci/translationsub-targeted-regression.py'
+      - 'scripts/ci/translationsub-targeted-regression.sh'
+      - '.github/workflows/translationsub-targeted-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-targeted-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  targeted:
+    name: New season + TimeCode identity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish Lampac runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-translationsub-base
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-translationsub-base \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+          test -f /tmp/lampac-translationsub-base/Core.dll
+          test -f /tmp/lampac-translationsub-base/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-translationsub-base/module/Sync/TimeCode/manifest.json
+
+      - name: Run targeted season and TimeCode regression
+        shell: bash
+        run: bash scripts/ci/translationsub-targeted-regression.sh
+
+      - name: Diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          echo '===== Lampac targeted log ====='
+          tail -n 500 /tmp/lampac-targeted.log 2>/dev/null || true
+          echo '===== Targeted TMDB fixture ====='
+          tail -n 200 /tmp/translationsub-targeted-fixture.log 2>/dev/null || true
