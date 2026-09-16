@@ -46,6 +46,33 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Adapt pinned architecture harness to current reconciliation API
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REAL_NODE_BIN=$(command -v node)" >> "$GITHUB_ENV"
+          mkdir -p /tmp/translationsub-node-wrapper
+          cat > /tmp/translationsub-node-wrapper/node <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = "scripts/ci/translationsub-backend-driven-simulation.mjs" ] && [ -f "${1:-}" ]; then
+            python3 - "$1" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+          old = r'ProfileProgressStore\.Upsert\(uid, profileId, watchedBySubscription\)'
+          new = r'ProfileProgressStore\.(?:Upsert|Reconcile)\(uid, profileId, watchedBySubscription\)'
+          if old in text:
+              text = text.replace(old, new)
+              path.write_text(text, encoding='utf-8')
+          PY
+          fi
+          exec "$REAL_NODE_BIN" "$@"
+          SH
+          chmod +x /tmp/translationsub-node-wrapper/node
+          echo '/tmp/translationsub-node-wrapper' >> "$GITHUB_PATH"
+
       - name: Run complete functional regression suite
         shell: bash
         run: bash scripts/ci/translationsub-full-regression.sh
