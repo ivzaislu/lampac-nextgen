@@ -72,7 +72,7 @@ jobs:
           done
           test "$ready" = 1
 
-      - name: Verify both plugin routes and dependency order
+      - name: Verify both plugin routes and exact bundle composition
         shell: bash
         run: |
           set -euo pipefail
@@ -84,27 +84,31 @@ jobs:
           node --check /tmp/bundle-a.js
           python3 - <<'PY'
           from pathlib import Path
-          text = Path('/tmp/bundle-a.js').read_text(encoding='utf-8')
-          needles = [
-              'TranslationSubApi',
-              'TranslationSubUI',
-              'TranslationSubBadgeState',
-              'TranslationSubSource',
-              'TranslationSubPage',
-              'TranslationSubNotice',
-              'TranslationSubSettings',
-              'TranslationSubCardFlow',
-              'TranslationSubRealtime',
-              'TranslationSubNavigation',
+
+          module = Path('Modules/TranslationSub')
+          order = [
+              'translationsub.js',
+              'translationsub-api.js',
+              'translationsub-ui.js',
+              'translationsub-badge-state.js',
+              'translationsub-source.js',
+              'translationsub-page.js',
+              'translationsub-notice.js',
+              'translationsub-settings-v2.js',
+              'translationsub-card-flow.js',
+              'translationsub-realtime.js',
+              'translationsub-navigation.js',
           ]
-          positions = []
-          for needle in needles:
-              pos = text.find(needle)
-              assert pos >= 0, f'missing bundle symbol: {needle}'
-              positions.append(pos)
-          assert positions == sorted(positions), (needles, positions)
-          assert len(text) > 10000, len(text)
-          print(f'Plugin bundle smoke passed; bytes={len(text)}')
+
+          expected = (module / order[0]).read_text(encoding='utf-8')
+          for name in order[1:]:
+              expected += '\n;\n' + (module / name).read_text(encoding='utf-8')
+
+          actual = Path('/tmp/bundle-a.js').read_text(encoding='utf-8')
+          assert actual == expected, (
+              f'live plugin bundle mismatch: actual={len(actual)} expected={len(expected)}'
+          )
+          print(f'Plugin bundle smoke passed; files={len(order)} bytes={len(actual)}')
           PY
 
       - name: Diagnostic tail
