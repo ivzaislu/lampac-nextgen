@@ -48,6 +48,7 @@ public static class TimeCodeProgressService
             // successfully. An empty result is authoritative: this user/profile
             // currently has no persisted watched progress.
             var rows = LoadRows(timeCodeUser);
+            var fallbackOwners = BuildFallbackOwners(subscriptions, rows);
 
             var watchedBySubscription = new Dictionary<string, int>(StringComparer.Ordinal);
             var progressCache = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -64,7 +65,7 @@ public static class TimeCodeProgressService
                 {
                     watched = rows.Count == 0
                         ? 0
-                        : FindWatchedEpisode(sub, season, rows);
+                        : FindWatchedEpisode(sub, season, rows, fallbackOwners);
                     watched = Math.Max(0, watched);
                     progressCache[cacheKey] = watched;
                 }
@@ -161,24 +162,60 @@ public static class TimeCodeProgressService
         }
     }
 
+    static Dictionary<string, HashSet<string>> BuildFallbackOwners(
+        IReadOnlyCollection<TranslationSubscription> subscriptions,
+        IReadOnlyDictionary<string, List<TimeCodeRow>> rows)
+    {
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (subscriptions == null || subscriptions.Count == 0 || rows == null || rows.Count == 0)
+            return result;
+
+        foreach (var sub in subscriptions)
+        {
+            if (sub == null || string.IsNullOrWhiteSpace(sub.Id))
+                continue;
+
+            string contentIdentity = ContentIdentityKey(sub);
+            var titles = TitleCandidates(sub);
+            if (string.IsNullOrWhiteSpace(contentIdentity) || titles.Count == 0)
+                continue;
+
+            int season = Math.Max(1, sub.CurrentSeason.GetValueOrDefault(1));
+            foreach (string title in titles)
+            {
+                for (int episode = 1; episode <= MaxEpisodeScan; episode++)
+                {
+                    string hash = LampaHash(BuildEpisodeHashInput(season, episode, title));
+                    if (!rows.ContainsKey(hash))
+                        continue;
+
+                    if (!result.TryGetValue(hash, out var owners))
+                    {
+                        owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        result[hash] = owners;
+                    }
+
+                    owners.Add(contentIdentity);
+                }
+            }
+        }
+
+        return result;
+    }
+
     static int FindWatchedEpisode(
         TranslationSubscription sub,
         int season,
-        Dictionary<string, List<TimeCodeRow>> rows)
+        Dictionary<string, List<TimeCodeRow>> rows,
+        IReadOnlyDictionary<string, HashSet<string>> fallbackOwners)
     {
         var titles = TitleCandidates(sub);
         if (titles.Count == 0)
             return -1;
 
         var cards = CardCandidates(sub);
-        int scanTo = Math.Max(
-            32,
-            Math.Max(
-                sub.LastEpisode.GetValueOrDefault(0) + 8,
-                sub.TmdbTargetSeasonEpisodes.GetValueOrDefault(0) + 3
-            )
-        );
-        scanTo = Math.Min(MaxEpisodeScan, scanTo);
+        string contentIdentity = ContentIdentityKey(sub);
+        int scanTo = EpisodeScanLimit(sub);
 
         int watched = 0;
         bool foundAnyTimelineRow = false;
@@ -198,10 +235,13 @@ public static class TimeCodeProgressService
                 bool exactWatched = matchingRows.Any(x =>
                     x.Percent >= WatchedPercent && cards.Contains(x.Card));
 
-                // The TimeCode card key depends on the Lampa card source. If the user
-                // watched the same TMDB show after switching TMDB/CUB, the episode hash
-                // remains identical, so allow the hash as a source-independent fallback.
-                bool hashWatched = matchingRows.Any(x => x.Percent >= WatchedPercent);
+                // TimeCode card ids can change when the same show is opened from a
+                // different Lampa source. Keep the source-independent hash fallback,
+                // but only if this hash maps to one logical subscribed work. This
+                // prevents equal titles from leaking watched progress into each other.
+                bool hashWatched = IsUnambiguousFallback(hash, contentIdentity, fallbackOwners)
+                    && matchingRows.Any(x => x.Percent >= WatchedPercent);
+
                 if (exactWatched || hashWatched)
                 {
                     episodeWatched = true;
@@ -216,6 +256,55 @@ public static class TimeCodeProgressService
         return foundAnyTimelineRow ? watched : -1;
     }
 
+    static bool IsUnambiguousFallback(
+        string hash,
+        string contentIdentity,
+        IReadOnlyDictionary<string, HashSet<string>> fallbackOwners)
+    {
+        if (string.IsNullOrWhiteSpace(hash)
+            || string.IsNullOrWhiteSpace(contentIdentity)
+            || fallbackOwners == null
+            || !fallbackOwners.TryGetValue(hash, out var owners)
+            || owners == null
+            || owners.Count != 1)
+            return false;
+
+        return owners.Contains(contentIdentity);
+    }
+
+    static int EpisodeScanLimit(TranslationSubscription sub)
+    {
+        int available = sub == null ? 0 : sub.LastEpisode.GetValueOrDefault(0);
+        int target = sub == null ? 0 : sub.TmdbTargetSeasonEpisodes.GetValueOrDefault(0);
+        int scanTo = Math.Max(32, Math.Max(available + 8, target + 3));
+        return Math.Min(MaxEpisodeScan, scanTo);
+    }
+
+    static string ContentIdentityKey(TranslationSubscription sub)
+    {
+        if (sub == null)
+            return string.Empty;
+
+        string tmdb = (sub.TmdbId ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(tmdb))
+            return "tmdb:" + tmdb.ToLowerInvariant();
+
+        string imdb = (sub.ImdbId ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(imdb))
+            return "imdb:" + imdb.ToLowerInvariant();
+
+        string kp = (sub.KpId ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(kp))
+            return "kp:" + kp.ToLowerInvariant();
+
+        string content = (sub.ContentId ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(content))
+            return "content:" + content.ToLowerInvariant();
+
+        string id = (sub.Id ?? string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(id) ? string.Empty : "subscription:" + id;
+    }
+
     static HashSet<string> CardCandidates(TranslationSubscription sub)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -223,6 +312,7 @@ public static class TimeCodeProgressService
         AddCard(result, sub.TmdbId);
         AddCard(result, sub.ContentId);
         AddCard(result, sub.KpId);
+        AddCard(result, sub.ImdbId);
 
         return result;
     }
@@ -255,11 +345,8 @@ public static class TimeCodeProgressService
 
     static string BuildProgressCacheKey(TranslationSubscription sub, int season)
         => string.Join("|",
-            sub.TmdbId ?? string.Empty,
-            sub.ContentId ?? string.Empty,
-            season.ToString(CultureInfo.InvariantCulture),
-            sub.OriginalTitle ?? string.Empty,
-            sub.Title ?? string.Empty);
+            ContentIdentityKey(sub),
+            season.ToString(CultureInfo.InvariantCulture));
 
     static string BuildEpisodeHashInput(int season, int episode, string title)
         => season.ToString(CultureInfo.InvariantCulture)
