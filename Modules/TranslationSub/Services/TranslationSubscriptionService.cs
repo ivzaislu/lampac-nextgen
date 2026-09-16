@@ -588,7 +588,5 @@ public static class TranslationSubscriptionService
                 && string.Equals(x.Id, sub.Id, StringComparison.Ordinal)
                 && string.Equals(x.Uid, sub.Uid, StringComparison.Ordinal)) > 0;
         });
-
-        ProfileProgressStore.RemoveSubscription(sub.Uid, sub.Id);
     }
 }
