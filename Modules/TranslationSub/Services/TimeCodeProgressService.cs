@@ -44,12 +44,10 @@ public static class TimeCodeProgressService
                 .Where(x => x.IsSerial && string.Equals(x.Uid, uid, StringComparison.Ordinal))
                 .ToList();
 
-            if (subscriptions.Count == 0)
-                return 0;
-
+            // Reconciliation is allowed only after TimeCode was opened and read
+            // successfully. An empty result is authoritative: this user/profile
+            // currently has no persisted watched progress.
             var rows = LoadRows(timeCodeUser);
-            if (rows.Count == 0)
-                return 0;
 
             var watchedBySubscription = new Dictionary<string, int>(StringComparer.Ordinal);
             var progressCache = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -64,25 +62,26 @@ public static class TimeCodeProgressService
 
                 if (!progressCache.TryGetValue(cacheKey, out int watched))
                 {
-                    watched = FindWatchedEpisode(sub, season, rows);
+                    watched = rows.Count == 0
+                        ? 0
+                        : FindWatchedEpisode(sub, season, rows);
+                    watched = Math.Max(0, watched);
                     progressCache[cacheKey] = watched;
                 }
 
-                if (watched >= 0)
-                    watchedBySubscription[sub.Id] = watched;
+                watchedBySubscription[sub.Id] = watched;
             }
-
-            if (watchedBySubscription.Count == 0)
-                return 0;
 
             // Only profile-scoped state changes here. Shared subscription metadata
             // (voice, sources, available episode, TMDB state) remains untouched.
-            return ProfileProgressStore.Upsert(uid, profileId, watchedBySubscription);
+            // Missing/zero TimeCode progress removes stale projection rows.
+            return ProfileProgressStore.Reconcile(uid, profileId, watchedBySubscription);
         }
         catch
         {
             // TimeCode may be disabled, being migrated, or momentarily locked.
-            // Progress reconciliation is best-effort; never break subscriptions/API.
+            // A read failure is not equivalent to zero progress, so preserve the
+            // last successful projection and never break subscriptions/API.
             return 0;
         }
     }
