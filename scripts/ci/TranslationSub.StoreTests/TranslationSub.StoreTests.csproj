@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="TestStubs.cs" />
+    <Compile Include="../../../Modules/TranslationSub/Services/SubscriptionStore.cs" Link="Production/SubscriptionStore.cs" />
+    <Compile Include="../../../Modules/TranslationSub/Models/TranslationSubscription.cs" Link="Production/TranslationSubscription.cs" />
+  </ItemGroup>
+</Project>
