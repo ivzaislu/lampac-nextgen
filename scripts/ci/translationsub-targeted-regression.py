@@ -239,6 +239,10 @@ def test_new_season_transition():
     assert not progress_for(auto), progress_for(auto)
 
     print("2. existing target season is reused and old season is removed", flush=True)
+    # /check reconciles profile_progress from TimeCode before the scheduler runs.
+    # Give the already-existing S29 a real watched row so the test verifies that
+    # valid target-season progress survives while S28 and its projection disappear.
+    put_timecode(existing, "2191_tv", episode_hash(29, 1, "South Park"), 100)
     run_check(existing)
     rows = rows_for(existing)
     assert len(rows) == 1, rows
@@ -246,7 +250,10 @@ def test_new_season_transition():
     assert rows[0]["current_season"] == 29, rows
     progress = progress_for(existing)
     assert all(x["subscription_id"] != "existing-old" for x in progress), progress
-    assert any(x["subscription_id"] == "existing-new" for x in progress), progress
+    assert any(
+        x["subscription_id"] == "existing-new" and x["watched_episode"] == 1
+        for x in progress
+    ), progress
 
     print("3. notify mode keeps old season and sets availability flag", flush=True)
     run_check(notify)
