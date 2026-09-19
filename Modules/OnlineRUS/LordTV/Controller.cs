@@ -411,7 +411,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         }
     }
 
-    List<HeadersModel> RequestHeaders(bool bearer)
+    IReadOnlyList<HeadersModel> RequestHeaders(bool bearer)
     {
         string origin = string.IsNullOrWhiteSpace(init.player_origin) ? init.host.TrimEnd('/') : init.player_origin.TrimEnd('/');
         string referer = string.IsNullOrWhiteSpace(init.referer) ? origin + "/" : init.referer;
@@ -432,7 +432,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         );
     }
 
-    List<HeadersModel> StreamHeaders()
+    IReadOnlyList<HeadersModel> StreamHeaders()
     {
         if (init.headers_stream != null && init.headers_stream.Count > 0)
             return httpHeaders(init.host, init.headers_stream);
