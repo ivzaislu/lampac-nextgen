@@ -29,7 +29,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (checksearch)
             return await CheckSearch(title, original_title, kinopoisk_id, year);
 
-        var series = await ResolveSeries(cid, kinopoisk_id, imdb_id, title, original_title, year);
+        var series = await ResolveSeries(cid, kinopoisk_id, title, original_title, year);
         if (series == null || string.IsNullOrEmpty(series.id))
             return OnError();
 
@@ -177,14 +177,14 @@ public class LordTVController : BaseOnlineController<ModuleConf>
 
     async Task<ActionResult> CheckSearch(string title, string originalTitle, long kinopoiskId, short year)
     {
-        var series = await ResolveSeries(null, kinopoiskId, null, title, originalTitle, year);
+        var series = await ResolveSeries(null, kinopoiskId, title, originalTitle, year);
         if (series == null)
             return Json(new { rch = false });
 
         return Json(new { rch = true, type = "serial", quality = "HD" });
     }
 
-    async Task<SeriesItem> ResolveSeries(string cid, long kinopoiskId, string imdbId, string title, string originalTitle, short year)
+    async Task<SeriesItem> ResolveSeries(string cid, long kinopoiskId, string title, string originalTitle, short year)
     {
         if (!string.IsNullOrWhiteSpace(cid))
         {
@@ -195,7 +195,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
 
         if (!string.IsNullOrWhiteSpace(title))
         {
-            var byTitle = await FindSeries(title, kinopoiskId, imdbId, year);
+            var byTitle = await FindSeries(title, kinopoiskId, year);
             if (byTitle != null)
                 return await EnsureSeasons(byTitle);
         }
@@ -203,7 +203,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (!string.IsNullOrWhiteSpace(originalTitle) &&
             !string.Equals(title, originalTitle, StringComparison.OrdinalIgnoreCase))
         {
-            var byOrig = await FindSeries(originalTitle, kinopoiskId, imdbId, year);
+            var byOrig = await FindSeries(originalTitle, kinopoiskId, year);
             if (byOrig != null)
                 return await EnsureSeasons(byOrig);
         }
@@ -211,10 +211,10 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         return null;
     }
 
-    async Task<SeriesItem> FindSeries(string query, long kinopoiskId, string imdbId, short year)
+    async Task<SeriesItem> FindSeries(string query, long kinopoiskId, short year)
     {
         string search = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
-        string cacheKey = $"lordtv:search:{init.host}:{search}:{kinopoiskId}:{imdbId}:{year}";
+        string cacheKey = $"lordtv:search:{init.host}:{search}:{kinopoiskId}:{year}";
 
         var cache = await InvokeCacheResult<List<SeriesItem>>(cacheKey, 40, async err =>
         {
@@ -232,10 +232,10 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (!cache.IsSuccess)
             return null;
 
-        return PickSeries(cache.Value, query, kinopoiskId, imdbId, year);
+        return PickSeries(cache.Value, query, kinopoiskId, year);
     }
 
-    static SeriesItem PickSeries(List<SeriesItem> items, string query, long kinopoiskId, string imdbId, short year)
+    static SeriesItem PickSeries(List<SeriesItem> items, string query, long kinopoiskId, short year)
     {
         if (items == null || items.Count == 0)
             return null;
@@ -247,12 +247,6 @@ public class LordTVController : BaseOnlineController<ModuleConf>
                 return kp;
         }
 
-        if (!string.IsNullOrWhiteSpace(imdbId))
-        {
-            var imdb = items.FirstOrDefault(i => string.Equals(i.imdb_id, imdbId, StringComparison.OrdinalIgnoreCase));
-            if (imdb != null)
-                return imdb;
-        }
 
         string want = Norm(query);
         SeriesItem best = null;
