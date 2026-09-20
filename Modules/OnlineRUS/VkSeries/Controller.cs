@@ -251,41 +251,76 @@ public class VkSeriesController : BaseOnlineController
     {
         return await InvokeCache<List<Video>>(ipkey($"vkseries:album:{ownerId}:{albumId}"), 20, async () =>
         {
-            const int pageSize = 200;
-            var videos = new List<Video>();
-            int offset = 0;
-            int total = int.MaxValue;
+            var videos = await FetchAlbumVideos("video.getFromAlbum", ownerId, albumId);
+            if (videos == null || videos.Count == 0)
+                videos = await FetchAlbumVideos("video.get", ownerId, albumId);
 
-            while (offset < total)
-            {
-                string url = $"{init.host}/method/video.get?v=5.264&client_id={client_id}";
-                string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&sort_album=1&extended=1&access_token={access_token}";
-
-                var root = await httpHydra.Post<VideoGetRoot>(url, data, textJson: true);
-                if (root?.error != null || root?.response == null)
-                    return null;
-
-                var items = root.response.items;
-                total = root.response.count;
-
-                if (items == null || items.Count == 0)
-                    break;
-
-                videos.AddRange(items);
-
-                int nextOffset = offset + items.Count;
-                if (nextOffset <= offset)
-                    break;
-
-                offset = nextOffset;
-            }
-
-            return videos
+            return videos?
                 .Where(i => i != null && i.id > 0 && i.owner_id != 0)
                 .GroupBy(i => $"{i.owner_id}:{i.id}")
                 .Select(g => g.First())
                 .ToList();
         });
+    }
+
+    async Task<List<Video>> FetchAlbumVideos(string method, long ownerId, long albumId)
+    {
+        const int pageSize = 200;
+        var videos = new List<Video>();
+        int offset = 0;
+        int total = int.MaxValue;
+        bool tokenRefreshed = false;
+
+        while (offset < total)
+        {
+            string url = $"{init.host}/method/{method}?v=5.264&client_id={client_id}";
+            string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&sort_album=1&extended=1&access_token={access_token}";
+
+            var root = await httpHydra.Post<JObject>(url, data, textJson: true);
+            int errorCode = root?["error"]?["error_code"]?.ToObject<int>() ?? 0;
+
+            if (errorCode == 5 && !tokenRefreshed)
+            {
+                access_token = null;
+                token_expires = default;
+
+                if (await EnsureAnonymToken(init, proxy))
+                {
+                    tokenRefreshed = true;
+                    continue;
+                }
+            }
+
+            if (errorCode != 0)
+                return null;
+
+            var response = root?["response"];
+            if (response == null)
+                return null;
+
+            total = response["count"]?.ToObject<int>() ?? 0;
+            var items = response["items"] as JArray;
+
+            if (items == null || items.Count == 0)
+                break;
+
+            foreach (var item in items)
+            {
+                var videoToken = item?["video"] ?? item;
+                var video = videoToken?.ToObject<Video>();
+
+                if (video != null)
+                    videos.Add(video);
+            }
+
+            int nextOffset = offset + items.Count;
+            if (nextOffset <= offset)
+                break;
+
+            offset = nextOffset;
+        }
+
+        return videos;
     }
 
     static List<ParsedEpisode> ParseVideos(IEnumerable<Video> videos, short albumSeasonHint)
