@@ -154,7 +154,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
 
         var streamquality = new StreamQualityTpl(
             cache.Value,
-            link => HostStreamProxy(link, StreamHeaders(), force_streamproxy: true)
+            link => HostStreamProxy(link, StreamHeaders())
         );
 
         var first = streamquality.Firts();
@@ -171,7 +171,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             streamquality: streamquality,
             vast: init.vast,
             httpContext: HttpContext,
-            headers: init.streamproxy ? null : httpHeaders(init.host, init.headers_stream)
+            headers: init.streamproxy ? null : StreamHeaders()
         ));
     }
 
@@ -617,7 +617,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
 
         string origin = string.IsNullOrWhiteSpace(init.player_origin) ? init.host.TrimEnd('/') : init.player_origin.TrimEnd('/');
         string referer = string.IsNullOrWhiteSpace(init.referer) ? origin + "/" : init.referer;
-        return HeadersModel.Init(
+        return HeadersModel.Init(Http.defaultFullHeaders,
             ("accept", "*/*"),
             ("origin", origin),
             ("referer", referer)
