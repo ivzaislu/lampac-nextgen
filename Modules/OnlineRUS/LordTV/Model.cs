@@ -7,6 +7,12 @@ public class CatalogList<T>
     public List<T> items { get; set; }
 
     public int total { get; set; }
+
+    public int page { get; set; }
+
+    public int page_size { get; set; }
+
+    public int pages { get; set; }
 }
 
 public class SeriesItem
