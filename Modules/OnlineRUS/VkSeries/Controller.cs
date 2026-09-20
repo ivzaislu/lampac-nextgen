@@ -22,8 +22,9 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private const string search_api_version = "5.264";
+    private const string search_api_version = "5.289";
     private const string series_api_version = "5.289";
+    private const string video_api_version = "5.264";
     private static string access_token;
     private static DateTime token_expires;
 
@@ -66,7 +67,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v2:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v3:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchAlbums(title, original_title, year);
             var best = await SelectBestPlaylist(albums, searchTitle, searchOriginalTitle, year);
@@ -217,7 +218,7 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string query in queries)
         {
-            string data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1";
+            string data = $"screen_ref=search_video_service&q={HttpUtility.UrlEncode(query)}&input_method=keyboard_search_button";
             var root = await PostVkMethod("catalog.getVideoSearchWeb2", data, search_api_version);
 
             var found = root?["response"]?["albums"]?.ToObject<List<VideoAlbum>>();
@@ -241,7 +242,7 @@ public class VkSeriesController : BaseOnlineController
         string searchOriginalTitle = SearchNameTo.Convert(originalTitle) ?? string.Empty;
 
         return await InvokeCache<List<Video>>(
-            ipkey($"vkseries:v2:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
+            ipkey($"vkseries:v3:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
             10,
             async () =>
             {
@@ -266,6 +267,9 @@ public class VkSeriesController : BaseOnlineController
                 }
                 else
                 {
+                    AddQuery(title);
+                    AddQuery(originalTitle);
+
                     if (year > 0)
                     {
                         AddQuery($"{title} {year}");
@@ -274,38 +278,62 @@ public class VkSeriesController : BaseOnlineController
 
                     AddQuery($"{title} сезон");
                     AddQuery($"{originalTitle} season");
-                    AddQuery(title);
-                    AddQuery(originalTitle);
                 }
 
                 foreach (string query in queries)
                 {
                     string data =
-                        $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1";
+                        $"screen_ref=search_video_service&q={HttpUtility.UrlEncode(query)}&input_method=keyboard_search_button";
 
                     var root = await PostVkMethod("catalog.getVideoSearchWeb2", data, search_api_version);
+                    if (root?["error"] != null)
+                        continue;
+
                     var response = root?["response"];
+                    if (response == null)
+                        continue;
 
-                    var catalog = response?["catalog_videos"] as JArray;
-                    if (catalog != null)
-                    {
-                        foreach (var item in catalog)
-                        {
-                            var video = (item?["video"] ?? item)?.ToObject<Video>();
-                            if (video != null)
-                                videos.Add(video);
-                        }
-                    }
+                    AppendSearchVideos(response, videos);
 
-                    var direct = response?["videos"] as JArray;
-                    if (direct != null)
+                    string sectionId = response["catalog"]?["default_section"]?.ToString();
+                    var sections = response["catalog"]?["sections"] as JArray;
+                    var section = sections?.OfType<JObject>()
+                        .FirstOrDefault(i => i["id"]?.ToString() == sectionId)
+                        ?? sections?.OfType<JObject>().FirstOrDefault();
+
+                    sectionId ??= section?["id"]?.ToString();
+                    string nextFrom = section?["next_from"]?.ToString();
+
+                    // vkvideo.ru loads the rest of search results through catalog.getSection.
+                    for (int page = 0; page < 5 &&
+                         !string.IsNullOrEmpty(sectionId) &&
+                         !string.IsNullOrEmpty(nextFrom); page++)
                     {
-                        foreach (var item in direct)
+                        string sectionData =
+                            $"section_id={HttpUtility.UrlEncode(sectionId)}" +
+                            $"&start_from={HttpUtility.UrlEncode(nextFrom)}" +
+                            "&enabled_features=%5B%7B%22name%22%3A%22safe_mode%22%2C%22enabled%22%3Afalse%7D%5D";
+
+                        var sectionRoot = await PostVkMethod("catalog.getSection", sectionData, search_api_version);
+                        if (sectionRoot?["error"] != null)
+                            break;
+
+                        var sectionResponse = sectionRoot?["response"];
+                        if (sectionResponse == null)
+                            break;
+
+                        AppendSearchVideos(sectionResponse, videos);
+
+                        var nextSection = sectionResponse["section"];
+                        string newNextFrom = nextSection?["next_from"]?.ToString();
+
+                        if (string.IsNullOrEmpty(newNextFrom) ||
+                            string.Equals(newNextFrom, nextFrom, StringComparison.Ordinal))
                         {
-                            var video = (item?["video"] ?? item)?.ToObject<Video>();
-                            if (video != null)
-                                videos.Add(video);
+                            break;
                         }
+
+                        nextFrom = newNextFrom;
                     }
                 }
 
@@ -321,6 +349,28 @@ public class VkSeriesController : BaseOnlineController
             },
             textJson: true
         );
+    }
+
+    static void AppendSearchVideos(JToken response, List<Video> videos)
+    {
+        if (response == null || videos == null)
+            return;
+
+        void Append(JArray items)
+        {
+            if (items == null)
+                return;
+
+            foreach (var item in items)
+            {
+                var video = (item?["video"] ?? item)?.ToObject<Video>();
+                if (video != null)
+                    videos.Add(video);
+            }
+        }
+
+        Append(response["catalog_videos"] as JArray);
+        Append(response["videos"] as JArray);
     }
 
     async Task<SeriesPlaylist> SelectBestPlaylist(List<VideoAlbum> albums, string searchTitle, string searchOriginalTitle, short year)
@@ -587,7 +637,7 @@ public class VkSeriesController : BaseOnlineController
     {
         bool fromAlbum = method == "video.getFromAlbum";
         int pageSize = fromAlbum ? 50 : 200;
-        string apiVersion = fromAlbum ? series_api_version : search_api_version;
+        string apiVersion = fromAlbum ? series_api_version : video_api_version;
 
         var videos = new List<Video>();
         var seen = new HashSet<string>();
