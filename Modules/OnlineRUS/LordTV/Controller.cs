@@ -131,6 +131,9 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (string.IsNullOrEmpty(eid) && string.IsNullOrEmpty(cid))
             return OnError();
 
+        if (string.IsNullOrEmpty(EmbedToken()) && string.IsNullOrEmpty(ApiToken()))
+            return ShowError("Укажите LordTV.embed_token или LordTV.apitoken в init.conf");
+
     rhubFallback:
         var cache = await InvokeCacheResult<string>(ipkey($"lordtv:video:{cid}:{eid}:{s}:{e}:{t}"), 15, async err =>
         {
@@ -145,7 +148,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             goto rhubFallback;
 
         if (!cache.IsSuccess)
-            return OnError(cache.ErrorMsg);
+            return ShowError("LORD.TV не отдал HLS. Проверь embed_token / apitoken");
 
         string link = HostStreamProxy(cache.Value, StreamHeaders());
 
@@ -354,7 +357,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             string url = FirstUrl(
                 data?.current_video_url,
                 data?.voiceovers?.FirstOrDefault(v => string.IsNullOrEmpty(voice) || v.slug == voice)?.video_url,
-                data?.episodes?.FirstOrDefault(e => e.episode_number == episode)?.video_url
+                data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
             );
 
             if (!string.IsNullOrEmpty(url))
