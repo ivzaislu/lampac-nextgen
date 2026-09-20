@@ -31,7 +31,7 @@ public class VkSeriesController : BaseOnlineController
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/vkseries")]
-    public async Task<ActionResult> Index(string title, string original_title, short year, byte serial, short s = -1, long owner_id = 0, long album_id = 0, short album_s = 0, bool rjson = false)
+    public async Task<ActionResult> Index(string title, string original_title, short year, byte serial, short s = -1, long owner_id = 0, long album_id = 0, short album_s = 0, bool search = false, bool rjson = false)
     {
         if (serial <= 0)
             return OnError();
@@ -54,6 +54,9 @@ public class VkSeriesController : BaseOnlineController
         if (s == -1)
             return await Seasons(title, original_title, year, serial, searchTitle, searchOriginalTitle, rjson);
 
+        if (search)
+            return await EpisodesSearch(title, original_title, year, s);
+
         if (owner_id == 0 || album_id <= 0)
             return OnError("album");
 
@@ -63,7 +66,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v2:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchAlbums(title, original_title, year);
             var best = await SelectBestPlaylist(albums, searchTitle, searchOriginalTitle, year);
@@ -77,7 +80,22 @@ public class VkSeriesController : BaseOnlineController
             }
 
             if (best == null)
-                return e.Fail("playlist episodes");
+            {
+                var searchVideos = await SearchEpisodeVideos(title, original_title, year);
+                var parsedSearch = ParseVideos(searchVideos, 0);
+
+                if (parsedSearch.Count > 0)
+                {
+                    best = new SeriesPlaylist
+                    {
+                        search = true,
+                        videos = searchVideos
+                    };
+                }
+            }
+
+            if (best == null)
+                return e.Fail("episodes not found");
 
             return e.Success(best);
         });
@@ -88,7 +106,8 @@ public class VkSeriesController : BaseOnlineController
         return ContentTpl(cache, () =>
         {
             var playlist = cache.Value;
-            var parsed = ParseVideos(playlist.videos, (short)playlist.album.season);
+            short albumSeasonHint = (short)(playlist.album?.season ?? 0);
+            var parsed = ParseVideos(playlist.videos, albumSeasonHint);
 
             var seasons = parsed
                 .Select(i => i.season)
@@ -104,11 +123,11 @@ public class VkSeriesController : BaseOnlineController
 
             foreach (short season in seasons)
             {
-                stpl.Append(
-                    $"{season} сезон",
-                    $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}&owner_id={playlist.album.owner_id}&album_id={playlist.album.id}&album_s={playlist.album.season}&rjson={encRjson}",
-                    season
-                );
+                string link = playlist.search || playlist.album == null
+                    ? $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}&search=true&rjson={encRjson}"
+                    : $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}&owner_id={playlist.album.owner_id}&album_id={playlist.album.id}&album_s={playlist.album.season}&rjson={encRjson}";
+
+                stpl.Append($"{season} сезон", link, season);
             }
 
             return stpl;
@@ -121,7 +140,21 @@ public class VkSeriesController : BaseOnlineController
         if (videos == null || videos.Count == 0)
             return OnError("video.get");
 
-        var parsed = ParseVideos(videos, albumSeasonHint)
+        return BuildEpisodes(title, original_title, season, videos, albumSeasonHint);
+    }
+
+    async Task<ActionResult> EpisodesSearch(string title, string original_title, short year, short season)
+    {
+        var videos = await SearchEpisodeVideos(title, original_title, year, season);
+        if (videos == null || videos.Count == 0)
+            return OnError("search episodes");
+
+        return BuildEpisodes(title, original_title, season, videos, season);
+    }
+
+    ActionResult BuildEpisodes(string title, string original_title, short season, List<Video> videos, short seasonHint)
+    {
+        var parsed = ParseVideos(videos, seasonHint)
             .Where(i => i.season == season)
             .GroupBy(i => i.episode)
             .Select(g => g
@@ -202,6 +235,94 @@ public class VkSeriesController : BaseOnlineController
             .ToList();
     }
 
+    async Task<List<Video>> SearchEpisodeVideos(string title, string originalTitle, short year, short season = 0)
+    {
+        string searchTitle = SearchNameTo.Convert(title) ?? string.Empty;
+        string searchOriginalTitle = SearchNameTo.Convert(originalTitle) ?? string.Empty;
+
+        return await InvokeCache<List<Video>>(
+            ipkey($"vkseries:v2:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
+            10,
+            async () =>
+            {
+                var videos = new List<Video>();
+                var queries = new List<string>(8);
+
+                void AddQuery(string value)
+                {
+                    if (string.IsNullOrWhiteSpace(value))
+                        return;
+
+                    if (!queries.Any(i => string.Equals(i, value, StringComparison.OrdinalIgnoreCase)))
+                        queries.Add(value);
+                }
+
+                if (season > 0)
+                {
+                    AddQuery($"{title} {season} сезон");
+                    AddQuery($"{title} {season} сезон серия");
+                    AddQuery($"{originalTitle} season {season}");
+                    AddQuery($"{originalTitle} S{season:00}");
+                }
+                else
+                {
+                    if (year > 0)
+                    {
+                        AddQuery($"{title} {year}");
+                        AddQuery($"{originalTitle} {year}");
+                    }
+
+                    AddQuery($"{title} сезон");
+                    AddQuery($"{originalTitle} season");
+                    AddQuery(title);
+                    AddQuery(originalTitle);
+                }
+
+                foreach (string query in queries)
+                {
+                    string data =
+                        $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1";
+
+                    var root = await PostVkMethod("catalog.getVideoSearchWeb2", data, search_api_version);
+                    var response = root?["response"];
+
+                    var catalog = response?["catalog_videos"] as JArray;
+                    if (catalog != null)
+                    {
+                        foreach (var item in catalog)
+                        {
+                            var video = (item?["video"] ?? item)?.ToObject<Video>();
+                            if (video != null)
+                                videos.Add(video);
+                        }
+                    }
+
+                    var direct = response?["videos"] as JArray;
+                    if (direct != null)
+                    {
+                        foreach (var item in direct)
+                        {
+                            var video = (item?["video"] ?? item)?.ToObject<Video>();
+                            if (video != null)
+                                videos.Add(video);
+                        }
+                    }
+                }
+
+                return videos
+                    .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                    .Where(i => !IsNoise(i.title))
+                    .GroupBy(i => $"{i.owner_id}:{i.id}")
+                    .Select(g => g
+                        .OrderByDescending(i => QualityScore(i.files))
+                        .ThenByDescending(i => i.views ?? 0)
+                        .First())
+                    .ToList();
+            },
+            textJson: true
+        );
+    }
+
     async Task<SeriesPlaylist> SelectBestPlaylist(List<VideoAlbum> albums, string searchTitle, string searchOriginalTitle, short year)
     {
         if (albums == null || albums.Count == 0)
@@ -263,8 +384,10 @@ public class VkSeriesController : BaseOnlineController
             double pollutionRatio = 1d - seriesMatchRatio;
             double compilationRatio = videos.Count(IsCompilationVideo) / (double)Math.Max(videos.Count, 1);
 
-            if (videos.Count >= 5 && recognitionRatio < 0.12d)
-                continue;
+            int sparseRecognitionPenalty =
+                videos.Count >= 5 && recognitionRatio < 0.12d
+                    ? 260
+                    : 0;
 
             int score =
                 preScore +
@@ -275,7 +398,8 @@ public class VkSeriesController : BaseOnlineController
                 (int)Math.Round(recognitionRatio * 100d) +
                 (int)Math.Round(seriesMatchRatio * 100d) -
                 (int)Math.Round(pollutionRatio * 180d) -
-                (int)Math.Round(compilationRatio * 220d);
+                (int)Math.Round(compilationRatio * 220d) -
+                sparseRecognitionPenalty;
 
             if (score < bestScore)
                 continue;
@@ -442,11 +566,14 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v2:album:{ownerId}:{albumId}"), 20, async () =>
         {
-            var videos = await FetchAlbumVideos("video.getFromAlbum", ownerId, albumId);
+            var album = await GetAlbumInfo(ownerId, albumId);
+            string focusVideo = album?.first_video_id;
+
+            var videos = await FetchAlbumVideos("video.getFromAlbum", ownerId, albumId, focusVideo);
             if (videos == null || videos.Count == 0 || !videos.Any(i => QualityScore(i?.files) > 0))
-                videos = await FetchAlbumVideos("video.get", ownerId, albumId);
+                videos = await FetchAlbumVideos("video.get", ownerId, albumId, null);
 
             return videos?
                 .Where(i => i != null && i.id > 0 && i.owner_id != 0)
@@ -456,7 +583,7 @@ public class VkSeriesController : BaseOnlineController
         });
     }
 
-    async Task<List<Video>> FetchAlbumVideos(string method, long ownerId, long albumId)
+    async Task<List<Video>> FetchAlbumVideos(string method, long ownerId, long albumId, string focusVideo)
     {
         bool fromAlbum = method == "video.getFromAlbum";
         int pageSize = fromAlbum ? 50 : 200;
@@ -470,8 +597,22 @@ public class VkSeriesController : BaseOnlineController
         while (offset < total)
         {
             string data =
-                $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&extended=1" +
-                (fromAlbum ? string.Empty : "&sort_album=1");
+                $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&extended=1";
+
+            if (fromAlbum)
+            {
+                data += "&fields=is_esia_verified%2Cis_sber_verified%2Cis_tinkoff_verified%2Cphoto_50%2Cverified";
+
+                if (!string.IsNullOrWhiteSpace(focusVideo))
+                {
+                    string focus = HttpUtility.UrlEncode(focusVideo);
+                    data += $"&focus_on_video={focus}&shuffle_first_video={focus}";
+                }
+            }
+            else
+            {
+                data += "&sort_album=1";
+            }
 
             var root = await PostVkMethod(method, data, apiVersion);
             if (root?["error"] != null)

@@ -29,6 +29,7 @@ public class VideoAlbum
 
 public class SeriesPlaylist
 {
+    public bool search { get; set; }
     public VideoAlbum album { get; set; }
     public List<Video> videos { get; set; }
 }
