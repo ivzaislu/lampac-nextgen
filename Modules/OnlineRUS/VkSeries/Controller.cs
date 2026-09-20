@@ -967,6 +967,13 @@ public class VkSeriesController : BaseOnlineController
 
         if (Regex.IsMatch(
             title,
+            @"(?i)\b\d{1,3}\s*[-–—]\s*\d{1,3}\s*(?:серия|серии|серий|episodes?|ep)\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(
+            title,
             @"(?i)\b\d{1,2}(?:\s*[,/&]\s*\d{1,2}|\s+и\s+\d{1,2})+[^.]{0,32}\b(?:сезон(?:ы|ов)?|seasons?)\b"))
         {
             return true;
