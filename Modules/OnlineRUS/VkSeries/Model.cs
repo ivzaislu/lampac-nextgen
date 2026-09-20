@@ -32,18 +32,6 @@ public class SeriesPlaylist
     public List<Video> videos { get; set; }
 }
 
-public class VideoGetRoot
-{
-    public VideoGetResponse response { get; set; }
-    public VkError error { get; set; }
-}
-
-public class VideoGetResponse
-{
-    public int count { get; set; }
-    public List<Video> items { get; set; }
-}
-
 public class VkError
 {
     public int error_code { get; set; }
