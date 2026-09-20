@@ -449,6 +449,32 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             }
         }
 
+        // Some LORD.TV player responses may omit available_qualities/current_video_url
+        // until an explicit quality is requested. Preserve the legacy scan as a last fallback.
+        foreach (var target in targets)
+        {
+            var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var qualities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string requestedQuality in QualityOrder)
+            {
+                var data = await GetJson<PlayerData>(
+                    PlayerPath(target.type, target.id, token, season, episode, voice, requestedQuality),
+                    useBearer: false
+                );
+
+                string url = PlayerVideoUrl(data, voice, episode);
+                if (string.IsNullOrEmpty(url))
+                    continue;
+
+                string quality = QualityLabel(data?.quality) ?? requestedQuality;
+                AddStream(result, urls, qualities, url, quality);
+            }
+
+            if (result.Count > 0)
+                return result;
+        }
+
         return result;
     }
 
