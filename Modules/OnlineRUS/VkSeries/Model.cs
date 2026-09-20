@@ -22,6 +22,7 @@ public class VideoAlbum
     public string title { get; set; }
     public int count { get; set; }
     public long? updated_time { get; set; }
+    public string first_video_id { get; set; }
 
     public int season { get; set; }
 }
@@ -52,6 +53,7 @@ public class Video
     public long duration { get; set; }
     public long? views { get; set; }
     public string owner_name { get; set; }
+    public int playlist_position { get; set; }
     public VideoFiles files { get; set; }
     public VideoSubtitle[] subtitles { get; set; }
 }

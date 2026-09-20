@@ -22,6 +22,8 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
+    private const string search_api_version = "5.264";
+    private const string series_api_version = "5.289";
     private static string access_token;
     private static DateTime token_expires;
 
@@ -64,102 +66,17 @@ public class VkSeriesController : BaseOnlineController
         var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchAlbums(title, original_title, year);
-            if (albums == null || albums.Count == 0)
-                return e.Fail("albums");
+            var best = await SelectBestPlaylist(albums, searchTitle, searchOriginalTitle, year);
 
-            var ranked = albums
-                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                .Select(i => new
-                {
-                    album = i,
-                    score = AlbumPreScore(i, searchTitle, searchOriginalTitle, year)
-                })
-                .Where(i => i.score > 0)
-                .OrderByDescending(i => i.score)
-                .ThenByDescending(i => i.album.updated_time ?? 0)
-                .ThenBy(i => i.album.owner_id)
-                .ThenBy(i => i.album.id)
-                .Take(10)
-                .ToList();
-
-            if (ranked.Count == 0)
-                return e.Fail("album match");
-
-            SeriesPlaylist best = null;
-            int bestEpisodes = 0;
-            int bestScore = int.MinValue;
-
-            foreach (var candidate in ranked)
+            if (best == null)
             {
-                var videos = await GetAlbumVideos(candidate.album.owner_id, candidate.album.id);
-                if (videos == null || videos.Count == 0)
-                    continue;
-
-                short seasonHint = (short)ParseSeason(candidate.album.title);
-                var parsed = ParseVideos(videos, seasonHint);
-
-                int episodeCount = parsed
-                    .Select(i => $"{i.season}:{i.episode}")
-                    .Distinct()
-                    .Count();
-
-                if (episodeCount == 0)
-                    continue;
-
-                int seasonCount = parsed
-                    .Select(i => i.season)
-                    .Where(i => i > 0)
-                    .Distinct()
-                    .Count();
-
-                double recognitionRatio = parsed.Count / (double)Math.Max(videos.Count, 1);
-                double playableRatio = videos.Count(i => QualityScore(i?.files) > 0) / (double)Math.Max(videos.Count, 1);
-                double continuityRatio = EpisodeContinuityRatio(parsed);
-                double seriesMatchRatio = videos.Count(i => IsSeriesMatch(i, searchTitle, searchOriginalTitle)) / (double)Math.Max(videos.Count, 1);
-                double pollutionRatio = 1d - seriesMatchRatio;
-                double compilationRatio = videos.Count(IsCompilationVideo) / (double)Math.Max(videos.Count, 1);
-
-                // Большой плейлист-сборник не должен побеждать только за счет количества роликов.
-                if (videos.Count >= 5 && recognitionRatio < 0.12d)
-                    continue;
-
-                int score =
-                    candidate.score +
-                    Math.Min(episodeCount, 40) * 6 +
-                    Math.Min(seasonCount, 4) * 30 +
-                    (int)Math.Round(continuityRatio * 120d) +
-                    (int)Math.Round(playableRatio * 60d) +
-                    (int)Math.Round(recognitionRatio * 100d) +
-                    (int)Math.Round(seriesMatchRatio * 100d) -
-                    (int)Math.Round(pollutionRatio * 180d) -
-                    (int)Math.Round(compilationRatio * 220d);
-
-                if (score < bestScore)
-                    continue;
-
-                if (score == bestScore && best != null)
-                {
-                    if (episodeCount < bestEpisodes)
-                        continue;
-
-                    if (episodeCount == bestEpisodes &&
-                        (candidate.album.updated_time ?? 0) <= (best.album.updated_time ?? 0))
-                    {
-                        continue;
-                    }
-                }
-
-                candidate.album.season = seasonHint;
-                best = new SeriesPlaylist
-                {
-                    album = candidate.album,
-                    videos = videos
-                };
-                bestEpisodes = episodeCount;
-                bestScore = score;
+                // VK serial showcase exposes curated playlist marks which may be absent
+                // from the ordinary search response.
+                var showcaseAlbums = await SearchShowcaseAlbums(searchTitle, searchOriginalTitle, year);
+                best = await SelectBestPlaylist(showcaseAlbums, searchTitle, searchOriginalTitle, year);
             }
 
-            if (best == null || bestEpisodes == 0)
+            if (best == null)
                 return e.Fail("playlist episodes");
 
             return e.Success(best);
@@ -267,32 +184,12 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string query in queries)
         {
-            string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
-            string data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1&access_token={access_token}";
+            string data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1";
+            var root = await PostVkMethod("catalog.getVideoSearchWeb2", data, search_api_version);
 
-            Root root = null;
-
-            for (int attempt = 0; attempt < 2; attempt++)
-            {
-                root = await httpHydra.Post<Root>(url, data, textJson: true);
-
-                if (root?.error?.error_code != 5)
-                    break;
-
-                access_token = null;
-                token_expires = default;
-
-                if (!await EnsureAnonymToken(init, proxy))
-                    break;
-
-                data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1&access_token={access_token}";
-            }
-
-            if (root?.error != null)
-                continue;
-
-            if (root?.response?.albums != null)
-                albums.AddRange(root.response.albums);
+            var found = root?["response"]?["albums"]?.ToObject<List<VideoAlbum>>();
+            if (found != null)
+                albums.AddRange(found);
         }
 
         return albums
@@ -303,6 +200,244 @@ public class VkSeriesController : BaseOnlineController
                 .ThenByDescending(i => i.updated_time ?? 0)
                 .First())
             .ToList();
+    }
+
+    async Task<SeriesPlaylist> SelectBestPlaylist(List<VideoAlbum> albums, string searchTitle, string searchOriginalTitle, short year)
+    {
+        if (albums == null || albums.Count == 0)
+            return null;
+
+        var ranked = albums
+            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+            .Select(i => new
+            {
+                album = i,
+                score = AlbumPreScore(i, searchTitle, searchOriginalTitle, year)
+            })
+            .Where(i => i.score > 0)
+            .OrderByDescending(i => i.score)
+            .ThenByDescending(i => i.album.updated_time ?? 0)
+            .ThenBy(i => i.album.owner_id)
+            .ThenBy(i => i.album.id)
+            .Take(10)
+            .ToList();
+
+        SeriesPlaylist best = null;
+        int bestEpisodes = 0;
+        int bestScore = int.MinValue;
+
+        foreach (var candidate in ranked)
+        {
+            // getAlbumById is the authoritative playlist metadata used by vkvideo.ru.
+            var album = await GetAlbumInfo(candidate.album.owner_id, candidate.album.id) ?? candidate.album;
+            int preScore = AlbumPreScore(album, searchTitle, searchOriginalTitle, year);
+
+            if (preScore == 0)
+                continue;
+
+            var videos = await GetAlbumVideos(album.owner_id, album.id);
+            if (videos == null || videos.Count == 0)
+                continue;
+
+            short seasonHint = (short)ParseSeason(album.title);
+            var parsed = ParseVideos(videos, seasonHint);
+
+            int episodeCount = parsed
+                .Select(i => $"{i.season}:{i.episode}")
+                .Distinct()
+                .Count();
+
+            if (episodeCount == 0)
+                continue;
+
+            int seasonCount = parsed
+                .Select(i => i.season)
+                .Where(i => i > 0)
+                .Distinct()
+                .Count();
+
+            double recognitionRatio = parsed.Count / (double)Math.Max(videos.Count, 1);
+            double playableRatio = videos.Count(i => QualityScore(i?.files) > 0) / (double)Math.Max(videos.Count, 1);
+            double continuityRatio = EpisodeContinuityRatio(parsed);
+            double seriesMatchRatio = videos.Count(i => IsSeriesMatch(i, searchTitle, searchOriginalTitle)) / (double)Math.Max(videos.Count, 1);
+            double pollutionRatio = 1d - seriesMatchRatio;
+            double compilationRatio = videos.Count(IsCompilationVideo) / (double)Math.Max(videos.Count, 1);
+
+            if (videos.Count >= 5 && recognitionRatio < 0.12d)
+                continue;
+
+            int score =
+                preScore +
+                Math.Min(episodeCount, 40) * 6 +
+                Math.Min(seasonCount, 4) * 30 +
+                (int)Math.Round(continuityRatio * 120d) +
+                (int)Math.Round(playableRatio * 60d) +
+                (int)Math.Round(recognitionRatio * 100d) +
+                (int)Math.Round(seriesMatchRatio * 100d) -
+                (int)Math.Round(pollutionRatio * 180d) -
+                (int)Math.Round(compilationRatio * 220d);
+
+            if (score < bestScore)
+                continue;
+
+            if (score == bestScore && best != null)
+            {
+                if (episodeCount < bestEpisodes)
+                    continue;
+
+                if (episodeCount == bestEpisodes &&
+                    (album.updated_time ?? 0) <= (best.album.updated_time ?? 0))
+                {
+                    continue;
+                }
+            }
+
+            album.season = seasonHint;
+            best = new SeriesPlaylist
+            {
+                album = album,
+                videos = videos
+            };
+            bestEpisodes = episodeCount;
+            bestScore = score;
+        }
+
+        return best;
+    }
+
+    async Task<VideoAlbum> GetAlbumInfo(long ownerId, long albumId)
+    {
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:album-info:{ownerId}:{albumId}"), 60, async () =>
+        {
+            string data = $"album_id={albumId}&owner_id={ownerId}";
+            var root = await PostVkMethod("video.getAlbumById", data, series_api_version);
+            var album = root?["response"]?.ToObject<VideoAlbum>();
+
+            if (album == null || album.id <= 0 || album.owner_id == 0)
+                return null;
+
+            return album;
+        }, textJson: true);
+    }
+
+    async Task<List<VideoAlbum>> SearchShowcaseAlbums(string searchTitle, string searchOriginalTitle, short year)
+    {
+        var albums = new List<VideoAlbum>();
+
+        string data = "url=https%3A%2F%2Fvkvideo.ru%2Fmovies_serials%2Fserials&ref=&from_trackcode=&need_blocks=1&section_id=";
+        var root = await PostVkMethod("catalog.getVideoShowcase", data, series_api_version);
+
+        for (int page = 0; page < 5 && root != null; page++)
+        {
+            var response = root["response"];
+            if (response == null)
+                break;
+
+            AddShowcaseAlbums(response["video_showcase_meta_info"] as JArray, albums, searchTitle, searchOriginalTitle, year);
+
+            if (albums.Count >= 10)
+                break;
+
+            var block = FindShowcaseBlock(response);
+            string sectionId = block?["id"]?.ToString();
+            string nextFrom = block?["next_from"]?.ToString();
+
+            if (string.IsNullOrEmpty(sectionId) || string.IsNullOrEmpty(nextFrom))
+                break;
+
+            string sectionData =
+                $"section_id={HttpUtility.UrlEncode(sectionId)}&start_from={HttpUtility.UrlEncode(nextFrom)}&from_trackcode=&enabled_features=";
+
+            root = await PostVkMethod("catalog.getSection", sectionData, series_api_version);
+        }
+
+        return albums
+            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+            .GroupBy(i => $"{i.owner_id}:{i.id}")
+            .Select(g => g.First())
+            .ToList();
+    }
+
+    static JObject FindShowcaseBlock(JToken response)
+    {
+        JToken section = null;
+
+        var sections = response?["catalog"]?["sections"] as JArray;
+        if (sections != null && sections.Count > 0)
+            section = sections[0];
+
+        section ??= response?["section"];
+
+        var blocks = section?["blocks"] as JArray;
+        if (blocks == null)
+            return null;
+
+        return blocks
+            .OfType<JObject>()
+            .FirstOrDefault(i =>
+                i["data_type"]?.ToString() == "videos" &&
+                (i["url"]?.ToString()?.Contains("/movies_serials/serials") == true ||
+                 string.IsNullOrEmpty(i["url"]?.ToString())));
+    }
+
+    static void AddShowcaseAlbums(JArray meta, List<VideoAlbum> albums, string searchTitle, string searchOriginalTitle, short year)
+    {
+        if (meta == null)
+            return;
+
+        foreach (var item in meta.OfType<JObject>())
+        {
+            string title = item["title"]?.ToString();
+            var marks = item["linked_to_playlist_marks"] as JArray;
+
+            if (marks == null || marks.Count == 0)
+                continue;
+
+            int count = ParseBadgeCount(item["badge"]?.ToString());
+
+            foreach (var mark in marks)
+            {
+                if (!TryParsePlaylistId(mark?.ToString(), out long ownerId, out long albumId))
+                    continue;
+
+                var album = new VideoAlbum
+                {
+                    id = albumId,
+                    owner_id = ownerId,
+                    title = title,
+                    count = count
+                };
+
+                if (AlbumPreScore(album, searchTitle, searchOriginalTitle, year) > 0)
+                    albums.Add(album);
+            }
+        }
+    }
+
+    static int ParseBadgeCount(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return 0;
+
+        var match = Regex.Match(value, @"\d+");
+        return match.Success && int.TryParse(match.Value, out int count) ? count : 0;
+    }
+
+    static bool TryParsePlaylistId(string value, out long ownerId, out long albumId)
+    {
+        ownerId = 0;
+        albumId = 0;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        int split = value.LastIndexOf('_');
+        if (split <= 0 || split >= value.Length - 1)
+            return false;
+
+        return long.TryParse(value.Substring(0, split), out ownerId) &&
+               long.TryParse(value.Substring(split + 1), out albumId) &&
+               ownerId != 0 && albumId > 0;
     }
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
@@ -323,34 +458,23 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> FetchAlbumVideos(string method, long ownerId, long albumId)
     {
-        const int pageSize = 200;
+        bool fromAlbum = method == "video.getFromAlbum";
+        int pageSize = fromAlbum ? 50 : 200;
+        string apiVersion = fromAlbum ? series_api_version : search_api_version;
+
         var videos = new List<Video>();
         var seen = new HashSet<string>();
         int offset = 0;
         int total = int.MaxValue;
-        bool tokenRefreshed = false;
 
         while (offset < total)
         {
-            string url = $"{init.host}/method/{method}?v=5.264&client_id={client_id}";
-            string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&sort_album=1&extended=1&access_token={access_token}";
+            string data =
+                $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&extended=1" +
+                (fromAlbum ? string.Empty : "&sort_album=1");
 
-            var root = await httpHydra.Post<JObject>(url, data, textJson: true);
-            int errorCode = root?["error"]?["error_code"]?.ToObject<int>() ?? 0;
-
-            if (errorCode == 5 && !tokenRefreshed)
-            {
-                access_token = null;
-                token_expires = default;
-
-                if (await EnsureAnonymToken(init, proxy))
-                {
-                    tokenRefreshed = true;
-                    continue;
-                }
-            }
-
-            if (errorCode != 0)
+            var root = await PostVkMethod(method, data, apiVersion);
+            if (root?["error"] != null)
                 return null;
 
             var response = root?["response"];
@@ -367,11 +491,15 @@ public class VkSeriesController : BaseOnlineController
 
             foreach (var item in items)
             {
+                int playlistPosition = item?["playlist_position"]?.ToObject<int>() ?? 0;
                 var videoToken = item?["video"] ?? item;
                 var video = videoToken?.ToObject<Video>();
 
                 if (video == null || video.id <= 0 || video.owner_id == 0)
                     continue;
+
+                if (playlistPosition > 0)
+                    video.playlist_position = playlistPosition;
 
                 if (seen.Add($"{video.owner_id}:{video.id}"))
                 {
@@ -391,6 +519,31 @@ public class VkSeriesController : BaseOnlineController
         }
 
         return videos;
+    }
+
+    async Task<JObject> PostVkMethod(string method, string data, string version)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            string url = $"{init.host}/method/{method}?v={version}&client_id={client_id}";
+            string payload = string.IsNullOrEmpty(data)
+                ? $"access_token={access_token}"
+                : $"{data}&access_token={access_token}";
+
+            var root = await httpHydra.Post<JObject>(url, payload, textJson: true);
+            int errorCode = root?["error"]?["error_code"]?.ToObject<int>() ?? 0;
+
+            if (errorCode != 5)
+                return root;
+
+            access_token = null;
+            token_expires = default;
+
+            if (!await EnsureAnonymToken(init, proxy))
+                return root;
+        }
+
+        return null;
     }
 
     static List<ParsedEpisode> ParseVideos(IEnumerable<Video> videos, short albumSeasonHint)
@@ -699,6 +852,15 @@ public class VkSeriesController : BaseOnlineController
             TryGenericEpisode(video?.description, out episode))
         {
             season = albumSeasonHint;
+            return true;
+        }
+
+        if (video?.playlist_position > 0 &&
+            video.playlist_position <= short.MaxValue &&
+            !IsCompilationVideo(video))
+        {
+            season = albumSeasonHint;
+            episode = (short)video.playlist_position;
             return true;
         }
 
