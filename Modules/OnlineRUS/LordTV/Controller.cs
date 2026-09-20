@@ -16,6 +16,8 @@ public class LordTVController : BaseOnlineController<ModuleConf>
 {
     public LordTVController() : base(ModInit.conf) { }
 
+    static readonly string[] QualityOrder = { "1080p", "720p", "480p", "360p" };
+
     [HttpGet, Staticache(manually: true)]
     [Route("lite/lordtv")]
     async public Task<ActionResult> Index(string imdb_id, long kinopoisk_id, string title, string original_title,
@@ -139,7 +141,7 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         {
             string hls = await ResolveStream(cid, eid, s, e, t);
             if (string.IsNullOrEmpty(hls))
-                return err.Fail("hls", refresh_proxy: true);
+                return err.Fail("stream", refresh_proxy: true);
 
             return err.Success(hls);
         });
@@ -148,9 +150,9 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             goto rhubFallback;
 
         if (!cache.IsSuccess)
-            return ShowError("LORD.TV не отдал HLS. Проверь embed_token / apitoken");
+            return ShowError("LORD.TV не отдал поток. Проверь embed_token / origin");
 
-        string link = HostStreamProxy(cache.Value, StreamHeaders());
+        string link = HostStreamProxy(cache.Value, StreamHeaders(), force_streamproxy: true);
 
         if (play)
             return RedirectToPlay(link);
@@ -294,13 +296,9 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(seriesId))
             return result;
 
-        string path = $"/api/v1/player/data/series/{seriesId}?token={HttpUtility.UrlEncode(token)}&season={season}";
-        if (episode != null)
-        {
-            path += $"&episode={episode.episode_number}";
-            if (!string.IsNullOrEmpty(episode.id))
-                path += $"&playback={HttpUtility.UrlEncode(episode.id)}";
-        }
+        string path = PlayerPath("series", seriesId, token, (short)season, episode != null ? (short)episode.episode_number : (short)0, null, null);
+        if (episode != null && !string.IsNullOrEmpty(episode.id))
+            path += $"&playback={HttpUtility.UrlEncode(episode.id)}";
 
         var data = await GetJson<PlayerData>(path, useBearer: false);
         if (data?.all_voiceovers != null)
@@ -343,25 +341,26 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (string.IsNullOrEmpty(token))
             return null;
 
-        var paths = new List<string>();
-
-        if (!string.IsNullOrEmpty(eid))
-            paths.Add(PlayerPath("episode", eid, token, season, episode, voice));
-
-        if (!string.IsNullOrEmpty(cid))
-            paths.Add(PlayerPath("series", cid, token, season, episode, voice));
-
-        foreach (string path in paths)
+        foreach (string quality in QualityOrder.Concat(new[] { (string)null }))
         {
-            var data = await GetJson<PlayerData>(path, useBearer: false);
-            string url = FirstUrl(
-                data?.current_video_url,
-                data?.voiceovers?.FirstOrDefault(v => string.IsNullOrEmpty(voice) || v.slug == voice)?.video_url,
-                data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
-            );
+            var paths = new List<string>();
+            if (!string.IsNullOrEmpty(eid))
+                paths.Add(PlayerPath("episode", eid, token, season, episode, voice, quality));
+            if (!string.IsNullOrEmpty(cid))
+                paths.Add(PlayerPath("series", cid, token, season, episode, voice, quality));
 
-            if (!string.IsNullOrEmpty(url))
-                return url;
+            foreach (string path in paths)
+            {
+                var data = await GetJson<PlayerData>(path, useBearer: false);
+                string url = FirstUrl(
+                    data?.current_video_url,
+                    data?.voiceovers?.FirstOrDefault(v => string.IsNullOrEmpty(voice) || v.slug == voice)?.video_url,
+                    data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
+                );
+
+                if (!string.IsNullOrEmpty(url))
+                    return url;
+            }
         }
 
         return null;
@@ -375,32 +374,35 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (!string.IsNullOrEmpty(eid))
         {
             var play = await GetJson<PartnerPlay>($"/api/v1/stream/episode/{eid}/play", useBearer: true);
-            if (!string.IsNullOrEmpty(play?.content?.video_url))
-                return play.content.video_url;
+            string url = FirstUrl(play?.content?.video_url);
+            if (!string.IsNullOrEmpty(url))
+                return url;
         }
 
         if (!string.IsNullOrEmpty(cid))
         {
             var play = await GetJson<PartnerPlay>($"/api/v1/stream/series/{cid}/play", useBearer: true);
-            if (!string.IsNullOrEmpty(play?.content?.video_url))
-                return play.content.video_url;
+            string url = FirstUrl(play?.content?.video_url);
+            if (!string.IsNullOrEmpty(url))
+                return url;
         }
 
         return null;
     }
 
-    string PlayerPath(string type, string id, string token, short season, short episode, string voice)
+    string PlayerPath(string type, string id, string token, short season, short episode, string voice, string quality)
     {
         var q = new List<string> { $"token={HttpUtility.UrlEncode(token)}" };
         if (season > 0) q.Add($"season={season}");
         if (episode > 0) q.Add($"episode={episode}");
         if (!string.IsNullOrEmpty(voice)) q.Add($"voiceover={HttpUtility.UrlEncode(voice)}");
+        if (!string.IsNullOrEmpty(quality)) q.Add($"quality={HttpUtility.UrlEncode(quality)}");
         return $"/api/v1/player/data/{type}/{id}?{string.Join("&", q)}";
     }
 
     async Task<T> GetJson<T>(string path, bool useBearer = false) where T : class
     {
-        string url = init.host.TrimEnd('/') + (path.StartsWith('/') ? path : "/" + path);
+        string url = AbsUrl(path);
         var headers = RequestHeaders(useBearer);
 
         try
@@ -465,13 +467,30 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         return string.IsNullOrWhiteSpace(init.token) ? null : init.token.Trim();
     }
 
-    static string FirstUrl(params string[] urls)
+    string FirstUrl(params string[] urls)
     {
         foreach (string url in urls)
         {
-            if (!string.IsNullOrWhiteSpace(url) && Regex.IsMatch(url, "^https?://", RegexOptions.IgnoreCase))
-                return url;
+            string abs = AbsUrl(url);
+            if (!string.IsNullOrEmpty(abs))
+                return abs;
         }
+
+        return null;
+    }
+
+    string AbsUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return null;
+
+        url = url.Trim();
+        if (url.StartsWith("//"))
+            return "https:" + url;
+        if (url.StartsWith("/"))
+            return init.host.TrimEnd('/') + url;
+        if (Regex.IsMatch(url, "^https?://", RegexOptions.IgnoreCase))
+            return url;
 
         return null;
     }
