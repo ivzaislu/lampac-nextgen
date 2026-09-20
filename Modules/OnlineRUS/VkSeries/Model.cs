@@ -10,6 +10,30 @@ public class Root
 public class Response
 {
     public List<CatalogVideo> catalog_videos { get; set; }
+    public List<VideoAlbum> albums { get; set; }
+    public List<Video> videos { get; set; }
+}
+
+public class VideoAlbum
+{
+    public long id { get; set; }
+    public long owner_id { get; set; }
+    public string title { get; set; }
+    public int count { get; set; }
+    public long? updated_time { get; set; }
+
+    public int season { get; set; }
+}
+
+public class VideoGetRoot
+{
+    public VideoGetResponse response { get; set; }
+}
+
+public class VideoGetResponse
+{
+    public int count { get; set; }
+    public List<Video> items { get; set; }
 }
 
 public class CatalogVideo
@@ -24,6 +48,8 @@ public class Video
     public string title { get; set; }
     public string description { get; set; }
     public long duration { get; set; }
+    public long? views { get; set; }
+    public string owner_name { get; set; }
     public VideoFiles files { get; set; }
     public VideoSubtitle[] subtitles { get; set; }
 }
