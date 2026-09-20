@@ -2,7 +2,7 @@
 
 Онлайн-балансер **LORD.TV** (панель `lordsilver.biz`) для Lampac NextGen.
 
-Каталог сериалов читается из публичного API. Потоки только с **embed-token** и **Origin домена, на который токен выдан**.
+Каталог сериалов читается из публичного API. Потоки требуют **embed-token** и **Origin домена, на который токен выдан**. Рабочий embed-token уже задан в модуле по умолчанию и при необходимости может быть переопределён через `init.conf`.
 
 ## Почему был 403
 
@@ -10,20 +10,17 @@
 
 `Domain lordsilver.biz is not allowed for this token`
 
-Для токена из HAR doramaru нужно:
+По умолчанию модуль уже настроен на partner-origin doramaru и не требует добавлять `embed_token` в `init.conf`.
+
+Если токен сменится или будет выписан на другой сайт, значения можно переопределить:
 
 ```json
 "LordTV": {
-  "enable": true,
-  "host": "https://lordsilver.biz",
-  "embed_token": "<query-token из iframe>",
-  "player_origin": "https://sled-chikatilo-episode.doramaru-hd.biz",
-  "referer": "https://sled-chikatilo-episode.doramaru-hd.biz/",
-  "streamproxy": true
+  "embed_token": "<новый query-token из iframe>",
+  "player_origin": "https://partner.example",
+  "referer": "https://partner.example/"
 }
 ```
-
-Если токен выписан на другой сайт — поменяй `player_origin` / `referer` на тот домен.
 
 ## Маршруты
 
