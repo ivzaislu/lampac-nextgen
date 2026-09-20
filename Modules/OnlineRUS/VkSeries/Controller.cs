@@ -72,13 +72,14 @@ public class VkSeriesController : BaseOnlineController
                 .Select(i => new
                 {
                     album = i,
-                    score = AlbumScore(i, searchTitle, searchOriginalTitle, year)
+                    score = AlbumPreScore(i, searchTitle, searchOriginalTitle, year)
                 })
                 .Where(i => i.score > 0)
                 .OrderByDescending(i => i.score)
-                .ThenByDescending(i => i.album.count)
                 .ThenByDescending(i => i.album.updated_time ?? 0)
-                .Take(5)
+                .ThenBy(i => i.album.owner_id)
+                .ThenBy(i => i.album.id)
+                .Take(10)
                 .ToList();
 
             if (ranked.Count == 0)
@@ -96,6 +97,7 @@ public class VkSeriesController : BaseOnlineController
 
                 short seasonHint = (short)ParseSeason(candidate.album.title);
                 var parsed = ParseVideos(videos, seasonHint);
+
                 int episodeCount = parsed
                     .Select(i => $"{i.season}:{i.episode}")
                     .Distinct()
@@ -104,9 +106,48 @@ public class VkSeriesController : BaseOnlineController
                 if (episodeCount == 0)
                     continue;
 
-                int score = candidate.score + Math.Min(episodeCount, 100) * 3;
-                if (score <= bestScore)
+                int seasonCount = parsed
+                    .Select(i => i.season)
+                    .Where(i => i > 0)
+                    .Distinct()
+                    .Count();
+
+                double recognitionRatio = parsed.Count / (double)Math.Max(videos.Count, 1);
+                double playableRatio = videos.Count(i => QualityScore(i?.files) > 0) / (double)Math.Max(videos.Count, 1);
+                double continuityRatio = EpisodeContinuityRatio(parsed);
+                double seriesMatchRatio = videos.Count(i => IsSeriesMatch(i, searchTitle, searchOriginalTitle)) / (double)Math.Max(videos.Count, 1);
+                double pollutionRatio = 1d - seriesMatchRatio;
+                double compilationRatio = videos.Count(IsCompilationVideo) / (double)Math.Max(videos.Count, 1);
+
+                // Большой плейлист-сборник не должен побеждать только за счет количества роликов.
+                if (videos.Count >= 5 && recognitionRatio < 0.12d)
                     continue;
+
+                int score =
+                    candidate.score +
+                    Math.Min(episodeCount, 40) * 6 +
+                    Math.Min(seasonCount, 4) * 30 +
+                    (int)Math.Round(continuityRatio * 120d) +
+                    (int)Math.Round(playableRatio * 60d) +
+                    (int)Math.Round(recognitionRatio * 100d) +
+                    (int)Math.Round(seriesMatchRatio * 100d) -
+                    (int)Math.Round(pollutionRatio * 180d) -
+                    (int)Math.Round(compilationRatio * 220d);
+
+                if (score < bestScore)
+                    continue;
+
+                if (score == bestScore && best != null)
+                {
+                    if (episodeCount < bestEpisodes)
+                        continue;
+
+                    if (episodeCount == bestEpisodes &&
+                        (candidate.album.updated_time ?? 0) <= (best.album.updated_time ?? 0))
+                    {
+                        continue;
+                    }
+                }
 
                 candidate.album.season = seasonHint;
                 best = new SeriesPlaylist
@@ -428,7 +469,7 @@ public class VkSeriesController : BaseOnlineController
         return tpl.IsEmpty ? null : tpl;
     }
 
-    static int AlbumScore(VideoAlbum album, string searchTitle, string searchOriginalTitle, short year)
+    static int AlbumPreScore(VideoAlbum album, string searchTitle, string searchOriginalTitle, short year)
     {
         string value = SearchNameTo.Convert(album?.title);
         if (value == null)
@@ -442,11 +483,13 @@ public class VkSeriesController : BaseOnlineController
                 return;
 
             if (value == query)
-                score = Math.Max(score, 220);
+                score = Math.Max(score, 240);
             else if (value.StartsWith(query))
-                score = Math.Max(score, 180);
+                score = Math.Max(score, 200);
             else if (value.Contains(query))
-                score = Math.Max(score, 120);
+                score = Math.Max(score, 150);
+            else if (ContainsAllSignificantWords(value, query))
+                score = Math.Max(score, 100);
         }
 
         Match(searchTitle);
@@ -455,16 +498,151 @@ public class VkSeriesController : BaseOnlineController
         if (score == 0)
             return 0;
 
-        if (year > 0)
+        int yearScore = YearScore(album.title, year);
+        if (yearScore == int.MinValue)
+            return 0;
+
+        score += yearScore;
+
+        if (ParseSeason(album.title) > 0)
+            score += 10;
+
+        if (album.count >= 3 && album.count <= 100)
+            score += 10;
+
+        return score;
+    }
+
+    static int YearScore(string value, short year)
+    {
+        if (year <= 0 || string.IsNullOrWhiteSpace(value))
+            return 0;
+
+        var matches = Regex.Matches(
+            value,
+            @"(?<!\d)(?<from>(?:19|20)\d{2})(?:\s*[-–—/]\s*(?<to>(?:19|20)\d{2}))?(?!\d)",
+            RegexOptions.IgnoreCase
+        );
+
+        if (matches.Count == 0)
+            return 0;
+
+        foreach (Match match in matches)
         {
-            if (value.Contains(year.ToString()))
-                score += 30;
-            else if (Regex.IsMatch(value, @"\b(?:19|20)\d{2}\b"))
-                score -= 20;
+            if (!int.TryParse(match.Groups["from"].Value, out int from))
+                continue;
+
+            int to = from;
+            if (match.Groups["to"].Success)
+                int.TryParse(match.Groups["to"].Value, out to);
+
+            if (to < from)
+                (from, to) = (to, from);
+
+            if (year >= from && year <= to)
+                return 80;
         }
 
-        score += Math.Min(album.count, 50);
-        return score;
+        return int.MinValue;
+    }
+
+    static bool ContainsAllSignificantWords(string value, string query)
+    {
+        var words = query
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(i => i.Length >= 3)
+            .Distinct()
+            .ToArray();
+
+        return words.Length >= 2 && words.All(value.Contains);
+    }
+
+    static double EpisodeContinuityRatio(List<ParsedEpisode> parsed)
+    {
+        var values = parsed
+            .Where(i => i.season > 0 && i.episode > 0)
+            .GroupBy(i => i.season)
+            .Select(g =>
+            {
+                var episodes = g
+                    .Select(i => (int)i.episode)
+                    .Distinct()
+                    .OrderBy(i => i)
+                    .ToList();
+
+                if (episodes.Count == 0)
+                    return 0d;
+
+                int maxEpisode = episodes[^1];
+                if (maxEpisode <= 0)
+                    return 0d;
+
+                return Math.Min(1d, episodes.Count / (double)maxEpisode);
+            })
+            .ToList();
+
+        return values.Count == 0 ? 0d : values.Average();
+    }
+
+    static bool IsSeriesMatch(Video video, string searchTitle, string searchOriginalTitle)
+    {
+        return MatchSeriesText(video?.title, searchTitle, searchOriginalTitle) ||
+               MatchSeriesText(video?.description, searchTitle, searchOriginalTitle);
+    }
+
+    static bool MatchSeriesText(string text, string searchTitle, string searchOriginalTitle)
+    {
+        string value = SearchNameTo.Convert(text);
+        if (value == null)
+            return false;
+
+        bool Match(string query)
+            => !string.IsNullOrWhiteSpace(query) &&
+               (value == query || value.StartsWith(query) || value.Contains(query));
+
+        return Match(searchTitle) || Match(searchOriginalTitle);
+    }
+
+    static bool IsCompilationVideo(Video video)
+    {
+        if (video == null)
+            return false;
+
+        string value = SearchNameTo.Convert(video.title);
+
+        if (value != null &&
+            (value.Contains("все серии") ||
+             value.Contains("all episodes") ||
+             value.Contains("полный сезон") ||
+             value.Contains("полностью")))
+        {
+            return true;
+        }
+
+        string title = video.title ?? string.Empty;
+
+        if (Regex.IsMatch(
+            title,
+            @"(?i)\b\d{1,2}(?:\s*[,/&]\s*\d{1,2}|\s+и\s+\d{1,2})+[^.]{0,32}\b(?:сезон(?:ы|ов)?|seasons?)\b"))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(
+            title,
+            @"(?i)\b\d{1,2}\s*[-–—]\s*\d{1,2}\s*(?:сезон(?:ы|ов)?|seasons?)\b"))
+        {
+            return true;
+        }
+
+        if (video.duration >= 4 * 60 * 60 &&
+            ParseSeason(title) > 0 &&
+            !TrySeasonEpisode(title, out _, out _))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     static int ParseSeason(string value)
