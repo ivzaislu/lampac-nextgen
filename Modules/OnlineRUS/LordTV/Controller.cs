@@ -214,68 +214,102 @@ public class LordTVController : BaseOnlineController<ModuleConf>
     async Task<SeriesItem> FindSeries(string query, long kinopoiskId, short year)
     {
         string search = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+        if (string.IsNullOrEmpty(search))
+            return null;
+
         string cacheKey = $"lordtv:search:{init.host}:{search}:{kinopoiskId}:{year}";
 
         var cache = await InvokeCacheResult<List<SeriesItem>>(cacheKey, 40, async err =>
         {
-            string path = "/api/v1/series/?page=1&page_size=40";
-            if (!string.IsNullOrEmpty(search))
-                path += $"&search={HttpUtility.UrlEncode(search)}";
+            const int pageSize = 20;
+            int page = 1;
+            int pages = 1;
+            var titleMatches = new List<SeriesItem>();
 
-            var root = await GetJson<CatalogList<SeriesItem>>(path);
-            if (root?.items == null || root.items.Count == 0)
-                return err.Fail("items");
+            do
+            {
+                string path = $"/api/v1/series/?page={page}&page_size={pageSize}&search={HttpUtility.UrlEncode(search)}";
+                var root = await GetJson<CatalogList<SeriesItem>>(path);
 
-            return err.Success(root.items);
+                if (root?.items == null || root.items.Count == 0)
+                {
+                    if (page == 1)
+                        return err.Fail("items");
+
+                    break;
+                }
+
+                if (kinopoiskId > 0)
+                {
+                    string kpId = kinopoiskId.ToString();
+                    var kp = root.items.FirstOrDefault(i =>
+                        i != null &&
+                        string.Equals(i.kinopoisk_id?.Trim(), kpId, StringComparison.Ordinal)
+                    );
+
+                    if (kp != null)
+                        return err.Success(new List<SeriesItem> { kp });
+                }
+                else
+                {
+                    string want = Norm(search);
+                    titleMatches.AddRange(root.items.Where(i =>
+                        i != null &&
+                        (Norm(i.title) == want || Norm(i.original_title) == want)
+                    ));
+                }
+
+                pages = root.pages > 0
+                    ? root.pages
+                    : root.page_size > 0 && root.total > 0
+                        ? Math.Max(1, (root.total + root.page_size - 1) / root.page_size)
+                        : 1;
+
+                page++;
+            }
+            while (page <= pages);
+
+            if (kinopoiskId > 0)
+                return err.Fail("kinopoisk");
+
+            var picked = PickSeries(titleMatches, search, year);
+            if (picked == null)
+                return err.Fail("title");
+
+            return err.Success(new List<SeriesItem> { picked });
         });
 
-        if (!cache.IsSuccess)
+        if (!cache.IsSuccess || cache.Value == null || cache.Value.Count == 0)
             return null;
 
-        return PickSeries(cache.Value, query, kinopoiskId, year);
+        return cache.Value[0];
     }
 
-    static SeriesItem PickSeries(List<SeriesItem> items, string query, long kinopoiskId, short year)
+    static SeriesItem PickSeries(List<SeriesItem> items, string query, short year)
     {
         if (items == null || items.Count == 0)
             return null;
 
-        if (kinopoiskId > 0)
-        {
-            var kp = items.FirstOrDefault(i => i.kinopoisk_id == kinopoiskId.ToString());
-            if (kp != null)
-                return kp;
-        }
-
-
         string want = Norm(query);
-        SeriesItem best = null;
-        int bestScore = -1;
+        var exact = items
+            .Where(i => i != null && (Norm(i.title) == want || Norm(i.original_title) == want))
+            .ToList();
 
-        foreach (var item in items)
+        if (exact.Count == 0)
+            return null;
+
+        if (year > 0)
         {
-            int score = 0;
-            string name = Norm(item.title);
-            string orig = Norm(item.original_title);
+            var byYear = exact.FirstOrDefault(i => i.year == year);
+            if (byYear != null)
+                return byYear;
 
-            if (want.Length > 0 && (name == want || orig == want))
-                score += 6;
-            else if (want.Length > 0 && (name.Contains(want) || orig.Contains(want) || want.Contains(name)))
-                score += 3;
-
-            if (year > 0 && item.year == year)
-                score += 3;
-            else if (year > 0 && item.year.HasValue && Math.Abs(item.year.Value - year) <= 1)
-                score += 1;
-
-            if (score > bestScore)
-            {
-                bestScore = score;
-                best = item;
-            }
+            var nearYear = exact.FirstOrDefault(i => i.year.HasValue && Math.Abs(i.year.Value - year) <= 1);
+            if (nearYear != null)
+                return nearYear;
         }
 
-        return bestScore > 0 ? best : items.Count == 1 ? items[0] : null;
+        return exact[0];
     }
 
     async Task<SeriesItem> EnsureSeasons(SeriesItem series)
