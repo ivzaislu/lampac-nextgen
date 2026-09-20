@@ -13,6 +13,8 @@ public class ModInit : IModuleLoaded, IModuleOnline
 {
     public static ModuleConf conf;
 
+    const string PartnerOrigin = "https://sled-chikatilo-episode.doramaru-hd.biz";
+
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
         if (args.isanime)
@@ -45,23 +47,20 @@ public class ModInit : IModuleLoaded, IModuleOnline
         conf = ModuleInvoke.Init("LordTV", new ModuleConf("LordTV", "https://lordsilver.biz", streamproxy: true)
         {
             displayindex = 545,
-            player_origin = "https://lordsilver.biz",
-            referer = "https://lordsilver.biz/",
+            player_origin = PartnerOrigin,
+            referer = PartnerOrigin + "/",
             rch_access = "apk,cors",
             stream_access = "apk,cors,web",
             httptimeout = 10,
             headers = HeadersModel.Init(Http.defaultFullHeaders,
                 ("accept", "application/json"),
-                ("origin", "https://lordsilver.biz"),
-                ("referer", "https://lordsilver.biz/")
+                ("origin", PartnerOrigin),
+                ("referer", PartnerOrigin + "/")
             ).ToDictionary(),
             headers_stream = HeadersModel.Init(Http.defaultFullHeaders,
                 ("accept", "*/*"),
-                ("origin", "https://lordsilver.biz"),
-                ("referer", "https://lordsilver.biz/"),
-                ("sec-fetch-dest", "empty"),
-                ("sec-fetch-mode", "cors"),
-                ("sec-fetch-site", "cross-site")
+                ("origin", PartnerOrigin),
+                ("referer", PartnerOrigin + "/")
             ).ToDictionary()
         });
     }
