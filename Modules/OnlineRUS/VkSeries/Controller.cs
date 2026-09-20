@@ -67,7 +67,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v4:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v5:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             // Основной путь: тот же typed catalog.getVideoSearchWeb2, что уже используется в VkMovie.
             // Живой HAR показывает, что отдельные серии лежат прямо в catalog_videos,
@@ -158,7 +158,8 @@ public class VkSeriesController : BaseOnlineController
             .Where(i => i.season == season)
             .GroupBy(i => i.episode)
             .Select(g => g
-                .OrderByDescending(i => QualityScore(i.video.files))
+                .OrderByDescending(i => EpisodeCandidateScore(i.video, title, original_title, season))
+                .ThenByDescending(i => QualityScore(i.video.files))
                 .ThenByDescending(i => i.video.duration)
                 .ThenByDescending(i => i.video.views ?? 0)
                 .First())
@@ -241,12 +242,12 @@ public class VkSeriesController : BaseOnlineController
         string searchOriginalTitle = SearchNameTo.Convert(originalTitle) ?? string.Empty;
 
         return await InvokeCache<List<Video>>(
-            ipkey($"vkseries:v4:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
+            ipkey($"vkseries:v5:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
             10,
             async () =>
             {
                 var videos = new List<Video>();
-                var queries = new List<string>(8);
+                var queries = new List<string>(2);
 
                 void AddQuery(string value)
                 {
@@ -259,24 +260,23 @@ public class VkSeriesController : BaseOnlineController
 
                 if (season > 0)
                 {
-                    AddQuery($"{title} {season} сезон");
-                    AddQuery($"{title} {season} сезон серия");
-                    AddQuery($"{originalTitle} season {season}");
-                    AddQuery($"{originalTitle} S{season:00}");
+                    AddQuery(!string.IsNullOrWhiteSpace(title) ? $"{title} {season} сезон" : null);
+
+                    if (!string.IsNullOrWhiteSpace(originalTitle) &&
+                        !string.Equals(searchTitle, searchOriginalTitle, StringComparison.OrdinalIgnoreCase))
+                    {
+                        AddQuery($"{originalTitle} S{season:00}");
+                    }
                 }
                 else
                 {
                     AddQuery(title);
-                    AddQuery(originalTitle);
 
-                    if (year > 0)
+                    if (!string.IsNullOrWhiteSpace(originalTitle) &&
+                        !string.Equals(searchTitle, searchOriginalTitle, StringComparison.OrdinalIgnoreCase))
                     {
-                        AddQuery($"{title} {year}");
-                        AddQuery($"{originalTitle} {year}");
+                        AddQuery(originalTitle);
                     }
-
-                    AddQuery($"{title} сезон");
-                    AddQuery($"{originalTitle} season");
                 }
 
                 foreach (string query in queries)
@@ -286,8 +286,8 @@ public class VkSeriesController : BaseOnlineController
 
                     Root root = await PostVkRoot("catalog.getVideoSearchWeb2", data, search_api_version);
 
-                    // Старый Web2 5.264 остаётся рабочим в VkMovie. Если текущая версия
-                    // неожиданно не дала видео, пробуем тот же запрос на 5.264.
+                    // 5.264 остаётся запасным вариантом только если текущая версия вообще
+                    // не вернула поисковые видео.
                     if (!HasSearchVideos(root?.response))
                         root = await PostVkRoot("catalog.getVideoSearchWeb2", data, video_api_version);
 
@@ -295,53 +295,53 @@ public class VkSeriesController : BaseOnlineController
                     if (response == null)
                         continue;
 
-                    AppendSearchVideos(response, videos);
+                    AppendRelevantSearchVideos(
+                        response,
+                        videos,
+                        searchTitle,
+                        searchOriginalTitle,
+                        year,
+                        season
+                    );
 
-                    string sectionId = response.catalog?.default_section;
-                    var section = response.catalog?.sections?
-                        .FirstOrDefault(i => i?.id == sectionId)
-                        ?? response.catalog?.sections?.FirstOrDefault();
-
-                    sectionId ??= section?.id;
-                    string nextFrom = section?.next_from;
-
-                    for (int page = 0; page < 5 &&
-                         !string.IsNullOrEmpty(sectionId) &&
-                         !string.IsNullOrEmpty(nextFrom); page++)
+                    if (!HasEnoughSearchEpisodes(videos, season))
                     {
-                        string sectionData =
-                            $"section_id={HttpUtility.UrlEncode(sectionId)}" +
-                            $"&start_from={HttpUtility.UrlEncode(nextFrom)}" +
-                            "&enabled_features=%5B%7B%22name%22%3A%22safe_mode%22%2C%22enabled%22%3Afalse%7D%5D";
+                        string sectionId = response.catalog?.default_section;
+                        var section = response.catalog?.sections?
+                            .FirstOrDefault(i => i?.id == sectionId)
+                            ?? response.catalog?.sections?.FirstOrDefault();
 
-                        Root sectionRoot = await PostVkRoot("catalog.getSection", sectionData, search_api_version);
-                        var sectionResponse = sectionRoot?.response;
+                        sectionId ??= section?.id;
+                        string nextFrom = section?.next_from;
 
-                        if (sectionResponse == null)
-                            break;
-
-                        AppendSearchVideos(sectionResponse, videos);
-
-                        string newNextFrom = sectionResponse.section?.next_from;
-                        if (string.IsNullOrEmpty(newNextFrom) ||
-                            string.Equals(newNextFrom, nextFrom, StringComparison.Ordinal))
+                        // Не больше одной дополнительной страницы на запрос.
+                        if (!string.IsNullOrEmpty(sectionId) && !string.IsNullOrEmpty(nextFrom))
                         {
-                            break;
-                        }
+                            string sectionData =
+                                $"section_id={HttpUtility.UrlEncode(sectionId)}" +
+                                $"&start_from={HttpUtility.UrlEncode(nextFrom)}" +
+                                "&enabled_features=%5B%7B%22name%22%3A%22safe_mode%22%2C%22enabled%22%3Afalse%7D%5D";
 
-                        nextFrom = newNextFrom;
+                            Root sectionRoot = await PostVkRoot("catalog.getSection", sectionData, search_api_version);
+
+                            AppendRelevantSearchVideos(
+                                sectionRoot?.response,
+                                videos,
+                                searchTitle,
+                                searchOriginalTitle,
+                                year,
+                                season
+                            );
+                        }
                     }
+
+                    // Обычно русский или оригинальный title уже даёт рабочую выдачу.
+                    // Второй alias нужен только если первый почти ничего не нашёл.
+                    if (HasEnoughSearchEpisodes(videos, season))
+                        break;
                 }
 
-                return videos
-                    .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                    .Where(i => !IsNoise(i.title))
-                    .GroupBy(i => $"{i.owner_id}:{i.id}")
-                    .Select(g => g
-                        .OrderByDescending(i => QualityScore(i.files))
-                        .ThenByDescending(i => i.views ?? 0)
-                        .First())
-                    .ToList();
+                return videos;
             },
             textJson: true
         );
@@ -351,28 +351,106 @@ public class VkSeriesController : BaseOnlineController
         => (response?.catalog_videos?.Count ?? 0) > 0 ||
            (response?.videos?.Count ?? 0) > 0;
 
-    static void AppendSearchVideos(Response response, List<Video> videos)
+    static bool HasEnoughSearchEpisodes(List<Video> videos, short season)
+    {
+        if (videos == null || videos.Count == 0)
+            return false;
+
+        var parsed = ParseVideos(videos, season);
+
+        if (season > 0)
+        {
+            int episodes = parsed
+                .Where(i => i.season == season)
+                .Select(i => i.episode)
+                .Distinct()
+                .Count();
+
+            return episodes >= 4;
+        }
+
+        int episodeCount = parsed
+            .Select(i => $"{i.season}:{i.episode}")
+            .Distinct()
+            .Count();
+
+        int seasonCount = parsed
+            .Select(i => i.season)
+            .Where(i => i > 0)
+            .Distinct()
+            .Count();
+
+        return episodeCount >= 6 || seasonCount >= 2;
+    }
+
+    static void AppendRelevantSearchVideos(
+        Response response,
+        List<Video> videos,
+        string searchTitle,
+        string searchOriginalTitle,
+        short year,
+        short requestedSeason)
     {
         if (response == null || videos == null)
             return;
 
+        void Append(Video video)
+        {
+            if (!IsRelevantSearchVideo(video, searchTitle, searchOriginalTitle, year, requestedSeason))
+                return;
+
+            if (!videos.Any(i => i.owner_id == video.owner_id && i.id == video.id))
+                videos.Add(video);
+        }
+
         if (response.catalog_videos != null)
         {
             foreach (var item in response.catalog_videos)
-            {
-                if (item?.video != null)
-                    videos.Add(item.video);
-            }
+                Append(item?.video);
         }
 
         if (response.videos != null)
         {
             foreach (var video in response.videos)
-            {
-                if (video != null)
-                    videos.Add(video);
-            }
+                Append(video);
         }
+    }
+
+    static bool IsRelevantSearchVideo(
+        Video video,
+        string searchTitle,
+        string searchOriginalTitle,
+        short year,
+        short requestedSeason)
+    {
+        if (video == null ||
+            video.id <= 0 ||
+            video.owner_id == 0 ||
+            IsNoise(video.title) ||
+            IsCompilationVideo(video) ||
+            QualityScore(video.files) == 0)
+        {
+            return false;
+        }
+
+        int titleScore = SeriesTextScore(video.title, searchTitle, searchOriginalTitle);
+        int descriptionScore = SeriesTextScore(video.description, searchTitle, searchOriginalTitle);
+
+        // Название ролика должно реально указывать на сериал. Description допускаем
+        // только при очень сильном совпадении, чтобы не собирать чужие сериалы по упоминанию.
+        if (titleScore < 70 && descriptionScore < 110)
+            return false;
+
+        if (year > 0 && YearScore(video.title, year) == int.MinValue)
+            return false;
+
+        if (!TryParseEpisode(video, requestedSeason, out short parsedSeason, out _))
+            return false;
+
+        if (requestedSeason > 0 && parsedSeason != requestedSeason)
+            return false;
+
+        return true;
     }
 
     async Task<Root> PostVkRoot(string method, string data, string version)
@@ -958,6 +1036,59 @@ public class VkSeriesController : BaseOnlineController
     {
         return MatchSeriesText(video?.title, searchTitle, searchOriginalTitle) ||
                MatchSeriesText(video?.description, searchTitle, searchOriginalTitle);
+    }
+
+    static int EpisodeCandidateScore(Video video, string title, string originalTitle, short season)
+    {
+        if (video == null)
+            return int.MinValue;
+
+        string searchTitle = SearchNameTo.Convert(title) ?? string.Empty;
+        string searchOriginalTitle = SearchNameTo.Convert(originalTitle) ?? string.Empty;
+
+        int score =
+            SeriesTextScore(video.title, searchTitle, searchOriginalTitle) * 2 +
+            SeriesTextScore(video.description, searchTitle, searchOriginalTitle);
+
+        if (TrySeasonEpisode(video.title, out short titleSeason, out _) && titleSeason == season)
+            score += 120;
+        else if (ParseSeason(video.title) == season)
+            score += 60;
+
+        if (video.duration >= 15 * 60 && video.duration <= 2 * 60 * 60)
+            score += 20;
+        else if (video.duration < 10 * 60)
+            score -= 80;
+
+        return score;
+    }
+
+    static int SeriesTextScore(string text, string searchTitle, string searchOriginalTitle)
+    {
+        string value = SearchNameTo.Convert(text);
+        if (value == null)
+            return 0;
+
+        int score = 0;
+
+        void Match(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return;
+
+            if (value == query)
+                score = Math.Max(score, 120);
+            else if (value.StartsWith(query))
+                score = Math.Max(score, 110);
+            else if (value.Contains(query))
+                score = Math.Max(score, 70);
+            else if (ContainsAllSignificantWords(value, query))
+                score = Math.Max(score, 50);
+        }
+
+        Match(searchTitle);
+        Match(searchOriginalTitle);
+        return score;
     }
 
     static bool MatchSeriesText(string text, string searchTitle, string searchOriginalTitle)
