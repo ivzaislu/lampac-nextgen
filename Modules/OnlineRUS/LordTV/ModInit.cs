@@ -51,19 +51,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
             embed_token = EmbedToken,
             player_origin = PartnerOrigin,
             referer = PartnerOrigin + "/",
-            rch_access = "apk,cors",
-            stream_access = "apk,cors,web",
-            httptimeout = 10,
-            headers = HeadersModel.Init(Http.defaultFullHeaders,
-                ("accept", "application/json"),
-                ("origin", PartnerOrigin),
-                ("referer", PartnerOrigin + "/")
-            ).ToDictionary(),
-            headers_stream = HeadersModel.Init(Http.defaultFullHeaders,
-                ("accept", "*/*"),
-                ("origin", PartnerOrigin),
-                ("referer", PartnerOrigin + "/")
-            ).ToDictionary()
+            httptimeout = 10
         });
     }
 
