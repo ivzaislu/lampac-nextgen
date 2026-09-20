@@ -67,36 +67,35 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v3:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v4:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
+            // Основной путь: тот же typed catalog.getVideoSearchWeb2, что уже используется в VkMovie.
+            // Живой HAR показывает, что отдельные серии лежат прямо в catalog_videos,
+            // тогда как albums для сериалов часто пуст.
+            var searchVideos = await SearchEpisodeVideos(title, original_title, year);
+            var parsedSearch = ParseVideos(searchVideos, 0);
+
+            if (parsedSearch.Count > 0)
+            {
+                return e.Success(new SeriesPlaylist
+                {
+                    search = true,
+                    videos = searchVideos
+                });
+            }
+
+            // Плейлисты оставляем резервным путём для выдач, где поиск не вернул отдельных серий.
             var albums = await SearchAlbums(title, original_title, year);
             var best = await SelectBestPlaylist(albums, searchTitle, searchOriginalTitle, year);
 
             if (best == null)
             {
-                // VK serial showcase exposes curated playlist marks which may be absent
-                // from the ordinary search response.
                 var showcaseAlbums = await SearchShowcaseAlbums(searchTitle, searchOriginalTitle, year);
                 best = await SelectBestPlaylist(showcaseAlbums, searchTitle, searchOriginalTitle, year);
             }
 
             if (best == null)
-            {
-                var searchVideos = await SearchEpisodeVideos(title, original_title, year);
-                var parsedSearch = ParseVideos(searchVideos, 0);
-
-                if (parsedSearch.Count > 0)
-                {
-                    best = new SeriesPlaylist
-                    {
-                        search = true,
-                        videos = searchVideos
-                    };
-                }
-            }
-
-            if (best == null)
-                return e.Fail("episodes not found");
+                return e.Fail($"episodes not found: search={searchVideos?.Count ?? 0}, parsed={parsedSearch.Count}");
 
             return e.Success(best);
         });
@@ -242,7 +241,7 @@ public class VkSeriesController : BaseOnlineController
         string searchOriginalTitle = SearchNameTo.Convert(originalTitle) ?? string.Empty;
 
         return await InvokeCache<List<Video>>(
-            ipkey($"vkseries:v3:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
+            ipkey($"vkseries:v4:search-videos:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
             10,
             async () =>
             {
@@ -285,26 +284,27 @@ public class VkSeriesController : BaseOnlineController
                     string data =
                         $"screen_ref=search_video_service&q={HttpUtility.UrlEncode(query)}&input_method=keyboard_search_button";
 
-                    var root = await PostVkMethod("catalog.getVideoSearchWeb2", data, search_api_version);
-                    if (root?["error"] != null)
-                        continue;
+                    Root root = await PostVkRoot("catalog.getVideoSearchWeb2", data, search_api_version);
 
-                    var response = root?["response"];
+                    // Старый Web2 5.264 остаётся рабочим в VkMovie. Если текущая версия
+                    // неожиданно не дала видео, пробуем тот же запрос на 5.264.
+                    if (!HasSearchVideos(root?.response))
+                        root = await PostVkRoot("catalog.getVideoSearchWeb2", data, video_api_version);
+
+                    var response = root?.response;
                     if (response == null)
                         continue;
 
                     AppendSearchVideos(response, videos);
 
-                    string sectionId = response["catalog"]?["default_section"]?.ToString();
-                    var sections = response["catalog"]?["sections"] as JArray;
-                    var section = sections?.OfType<JObject>()
-                        .FirstOrDefault(i => i["id"]?.ToString() == sectionId)
-                        ?? sections?.OfType<JObject>().FirstOrDefault();
+                    string sectionId = response.catalog?.default_section;
+                    var section = response.catalog?.sections?
+                        .FirstOrDefault(i => i?.id == sectionId)
+                        ?? response.catalog?.sections?.FirstOrDefault();
 
-                    sectionId ??= section?["id"]?.ToString();
-                    string nextFrom = section?["next_from"]?.ToString();
+                    sectionId ??= section?.id;
+                    string nextFrom = section?.next_from;
 
-                    // vkvideo.ru loads the rest of search results through catalog.getSection.
                     for (int page = 0; page < 5 &&
                          !string.IsNullOrEmpty(sectionId) &&
                          !string.IsNullOrEmpty(nextFrom); page++)
@@ -314,19 +314,15 @@ public class VkSeriesController : BaseOnlineController
                             $"&start_from={HttpUtility.UrlEncode(nextFrom)}" +
                             "&enabled_features=%5B%7B%22name%22%3A%22safe_mode%22%2C%22enabled%22%3Afalse%7D%5D";
 
-                        var sectionRoot = await PostVkMethod("catalog.getSection", sectionData, search_api_version);
-                        if (sectionRoot?["error"] != null)
-                            break;
+                        Root sectionRoot = await PostVkRoot("catalog.getSection", sectionData, search_api_version);
+                        var sectionResponse = sectionRoot?.response;
 
-                        var sectionResponse = sectionRoot?["response"];
                         if (sectionResponse == null)
                             break;
 
                         AppendSearchVideos(sectionResponse, videos);
 
-                        var nextSection = sectionResponse["section"];
-                        string newNextFrom = nextSection?["next_from"]?.ToString();
-
+                        string newNextFrom = sectionResponse.section?.next_from;
                         if (string.IsNullOrEmpty(newNextFrom) ||
                             string.Equals(newNextFrom, nextFrom, StringComparison.Ordinal))
                         {
@@ -351,26 +347,56 @@ public class VkSeriesController : BaseOnlineController
         );
     }
 
-    static void AppendSearchVideos(JToken response, List<Video> videos)
+    static bool HasSearchVideos(Response response)
+        => (response?.catalog_videos?.Count ?? 0) > 0 ||
+           (response?.videos?.Count ?? 0) > 0;
+
+    static void AppendSearchVideos(Response response, List<Video> videos)
     {
         if (response == null || videos == null)
             return;
 
-        void Append(JArray items)
+        if (response.catalog_videos != null)
         {
-            if (items == null)
-                return;
-
-            foreach (var item in items)
+            foreach (var item in response.catalog_videos)
             {
-                var video = (item?["video"] ?? item)?.ToObject<Video>();
+                if (item?.video != null)
+                    videos.Add(item.video);
+            }
+        }
+
+        if (response.videos != null)
+        {
+            foreach (var video in response.videos)
+            {
                 if (video != null)
                     videos.Add(video);
             }
         }
+    }
 
-        Append(response["catalog_videos"] as JArray);
-        Append(response["videos"] as JArray);
+    async Task<Root> PostVkRoot(string method, string data, string version)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            string url = $"{init.host}/method/{method}?v={version}&client_id={client_id}";
+            string payload = string.IsNullOrEmpty(data)
+                ? $"access_token={access_token}"
+                : $"{data}&access_token={access_token}";
+
+            var root = await httpHydra.Post<Root>(url, payload, textJson: true);
+
+            if (root?.error?.error_code != 5)
+                return root;
+
+            access_token = null;
+            token_expires = default;
+
+            if (!await EnsureAnonymToken(init, proxy))
+                return root;
+        }
+
+        return null;
     }
 
     async Task<SeriesPlaylist> SelectBestPlaylist(List<VideoAlbum> albums, string searchTitle, string searchOriginalTitle, short year)
@@ -743,7 +769,7 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (var video in videos)
         {
-            if (video == null || IsNoise(video.title))
+            if (video == null || IsNoise(video.title) || IsCompilationVideo(video))
                 continue;
 
             if (!TryParseEpisode(video, albumSeasonHint, out short season, out short episode))

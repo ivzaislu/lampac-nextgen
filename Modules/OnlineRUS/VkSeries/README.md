@@ -20,14 +20,15 @@
 
 ## Поиск и структура
 
-1. **`catalog.getVideoSearchWeb2`** ищет сериал по названию/оригинальному названию и читает **`response.albums`**.
-2. Если обычный поиск не дал рабочего плейлиста, используется curated-каталог сериалов **`catalog.getVideoShowcase`** / **`catalog.getSection`** и его **`video_showcase_meta_info.linked_to_playlist_marks`**.
-3. Перед чтением кандидата **`video.getAlbumById`** уточняет штатные метаданные плейлиста: title, count, owner/id и первый ролик.
-4. Содержимое читается через **`video.getFromAlbum`** с fallback на **`video.get`**.
-5. Сезоны и серии в первую очередь извлекаются из title/description. Для season-specific плейлиста **`playlist_position`** используется как fallback номера серии.
-6. При открытии сезона используется тот же **`owner_id + album_id`**, а серии фильтруются по распознанному номеру сезона.
-7. Если подходящего плейлиста всё равно нет, модуль использует **`catalog_videos`** самого поиска как виртуальный источник. Поисковая выдача догружается через **`catalog.getSection`** по **`section_id + next_from`** (до 5 страниц на запрос), затем сезоны строятся по найденным роликам. При открытии сезона выполняется отдельный season-specific поиск с такой же пагинацией.
-8. Потоки и субтитры берутся из **`files`** и **`subtitles`**. MP4 используется в приоритете, HLS — как fallback.
+1. Основной путь — **`catalog.getVideoSearchWeb2`**: модуль читает **`response.catalog_videos`** тем же typed-моделем, что и VkMovie, и сразу строит сезоны из отдельных серий.
+2. Поисковая секция догружается через **`catalog.getSection`** по **`default_section/section_id + next_from`**.
+3. Если поиск не дал отдельных серий, используются **`response.albums`** и curated-каталог сериалов **`catalog.getVideoShowcase`** / **`catalog.getSection`** и его **`video_showcase_meta_info.linked_to_playlist_marks`**.
+4. Перед чтением кандидата **`video.getAlbumById`** уточняет штатные метаданные плейлиста: title, count, owner/id и первый ролик.
+5. Содержимое читается через **`video.getFromAlbum`** с fallback на **`video.get`**.
+6. Сезоны и серии в первую очередь извлекаются из title/description. Для season-specific плейлиста **`playlist_position`** используется как fallback номера серии.
+7. При открытии сезона используется тот же **`owner_id + album_id`**, а серии фильтруются по распознанному номеру сезона.
+8. При открытии виртуального сезона выполняется отдельный season-specific поиск с той же пагинацией.
+9. Потоки и субтитры берутся из **`files`** и **`subtitles`**. MP4 используется в приоритете, HLS — как fallback.
 
 Актуальный web-клиент VK использует **`v=5.289`** для **`catalog.getVideoSearchWeb2`**, **`catalog.getSection`**, **`catalog.getVideoShowcase`**, **`video.getAlbumById`** и **`video.getFromAlbum`**. Fallback **`video.get`** оставлен на отдельно подтверждённой версии **`5.264`**.
 

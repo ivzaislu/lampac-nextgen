@@ -13,6 +13,20 @@ public class Response
     public List<CatalogVideo> catalog_videos { get; set; }
     public List<VideoAlbum> albums { get; set; }
     public List<Video> videos { get; set; }
+    public Catalog catalog { get; set; }
+    public CatalogSection section { get; set; }
+}
+
+public class Catalog
+{
+    public string default_section { get; set; }
+    public List<CatalogSection> sections { get; set; }
+}
+
+public class CatalogSection
+{
+    public string id { get; set; }
+    public string next_from { get; set; }
 }
 
 public class VideoAlbum
