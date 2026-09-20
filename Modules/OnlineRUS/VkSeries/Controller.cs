@@ -159,58 +159,46 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
-    rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var videos = await GetAlbumVideos(ownerId, albumId);
+        if (videos == null || videos.Count == 0)
+            return OnError("video.get");
+
+        var parsed = ParseVideos(videos, albumSeasonHint)
+            .Where(i => i.season == season)
+            .GroupBy(i => i.episode)
+            .Select(g => g
+                .OrderByDescending(i => QualityScore(i.video.files))
+                .ThenByDescending(i => i.video.duration)
+                .ThenByDescending(i => i.video.views ?? 0)
+                .First())
+            .OrderBy(i => i.episode)
+            .ToList();
+
+        var etpl = new EpisodeTpl(parsed.Count);
+        string seriesTitle = title ?? original_title;
+
+        foreach (var item in parsed)
         {
-            var videos = await GetAlbumVideos(ownerId, albumId);
-            if (videos == null || videos.Count == 0)
-                return e.Fail("video.get");
+            var streams = BuildStreams(item.video.files);
+            if (streams.IsEmpty)
+                continue;
 
-            return e.Success(videos);
-        });
+            var subtitles = BuildSubtitles(item.video.subtitles);
 
-        if (IsRhubFallback(cache))
-            goto rhubFallback;
+            etpl.Append(
+                $"Серия {item.episode}",
+                seriesTitle,
+                season,
+                item.episode,
+                streams.Firts().link,
+                streamquality: streams,
+                subtitles: subtitles,
+                headers: HeadersModel.Init(init.headers),
+                vast: init.vast
+            );
+        }
 
-        return ContentTpl(cache, () =>
-        {
-            var parsed = ParseVideos(cache.Value, albumSeasonHint)
-                .Where(i => i.season == season)
-                .GroupBy(i => i.episode)
-                .Select(g => g
-                    .OrderByDescending(i => QualityScore(i.video.files))
-                    .ThenByDescending(i => i.video.duration)
-                    .ThenByDescending(i => i.video.views ?? 0)
-                    .First())
-                .OrderBy(i => i.episode)
-                .ToList();
-
-            var etpl = new EpisodeTpl(parsed.Count);
-            string seriesTitle = title ?? original_title;
-
-            foreach (var item in parsed)
-            {
-                var streams = BuildStreams(item.video.files);
-                if (streams.IsEmpty)
-                    continue;
-
-                var subtitles = BuildSubtitles(item.video.subtitles);
-
-                etpl.Append(
-                    $"Серия {item.episode}",
-                    seriesTitle,
-                    season,
-                    item.episode,
-                    streams.Firts().link,
-                    streamquality: streams,
-                    subtitles: subtitles,
-                    headers: HeadersModel.Init(init.headers),
-                    vast: init.vast
-                );
-            }
-
-            return etpl;
-        });
+        return ContentTpl(etpl);
     }
 
     async Task<List<VideoAlbum>> SearchAlbums(string title, string originalTitle, short year)
