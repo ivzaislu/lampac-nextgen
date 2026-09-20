@@ -229,7 +229,24 @@ public class VkSeriesController : BaseOnlineController
             string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
             string data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1&access_token={access_token}";
 
-            var root = await httpHydra.Post<Root>(url, data, textJson: true);
+            Root root = null;
+
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                root = await httpHydra.Post<Root>(url, data, textJson: true);
+
+                if (root?.error?.error_code != 5)
+                    break;
+
+                access_token = null;
+                token_expires = default;
+
+                if (!await EnsureAnonymToken(init, proxy))
+                    break;
+
+                data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1&access_token={access_token}";
+            }
+
             if (root?.error != null)
                 continue;
 
@@ -252,7 +269,7 @@ public class VkSeriesController : BaseOnlineController
         return await InvokeCache<List<Video>>(ipkey($"vkseries:album:{ownerId}:{albumId}"), 20, async () =>
         {
             var videos = await FetchAlbumVideos("video.getFromAlbum", ownerId, albumId);
-            if (videos == null || videos.Count == 0)
+            if (videos == null || videos.Count == 0 || !videos.Any(i => QualityScore(i?.files) > 0))
                 videos = await FetchAlbumVideos("video.get", ownerId, albumId);
 
             return videos?
