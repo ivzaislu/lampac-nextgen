@@ -18,7 +18,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
-        if (args.isanime)
+        if (args.isanime || args.serial <= 0)
             return null;
 
         return new List<ModuleOnlineItem>()
