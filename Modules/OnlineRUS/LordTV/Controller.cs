@@ -137,13 +137,13 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             return ShowError("Укажите LordTV.embed_token или LordTV.apitoken в init.conf");
 
     rhubFallback:
-        var cache = await InvokeCacheResult<string>(ipkey($"lordtv:video:{cid}:{eid}:{s}:{e}:{t}"), 15, async err =>
+        var cache = await InvokeCacheResult<List<StreamQualityDto>>(ipkey($"lordtv:video:{cid}:{eid}:{s}:{e}:{t}"), 15, async err =>
         {
-            string hls = await ResolveStream(cid, eid, s, e, t);
-            if (string.IsNullOrEmpty(hls))
+            var streams = await ResolveStreams(cid, eid, s, e, t);
+            if (streams == null || streams.Count == 0)
                 return err.Fail("stream", refresh_proxy: true);
 
-            return err.Success(hls);
+            return err.Success(streams);
         });
 
         if (IsRhubFallback(cache))
@@ -152,15 +152,23 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (!cache.IsSuccess)
             return ShowError("LORD.TV не отдал поток. Проверь embed_token / origin");
 
-        string link = HostStreamProxy(cache.Value, StreamHeaders(), force_streamproxy: true);
+        var streamquality = new StreamQualityTpl(
+            cache.Value,
+            link => HostStreamProxy(link, StreamHeaders(), force_streamproxy: true)
+        );
+
+        var first = streamquality.Firts();
+        if (first == null)
+            return ShowError("LORD.TV не отдал доступные качества");
 
         if (play)
-            return RedirectToPlay(link);
+            return RedirectToPlay(first.link);
 
         return ContentTo(VideoTpl.ToJson(
             "play",
-            link,
+            first.link,
             title,
+            streamquality: streamquality,
             vast: init.vast,
             httpContext: HttpContext,
             headers: init.streamproxy ? null : httpHeaders(init.host, init.headers_stream)
@@ -326,28 +334,36 @@ public class LordTVController : BaseOnlineController<ModuleConf>
             .ToList();
     }
 
-    async Task<string> ResolveStream(string cid, string eid, short season, short episode, string voice)
+    async Task<List<StreamQualityDto>> ResolveStreams(string cid, string eid, short season, short episode, string voice)
     {
-        string fromPlayer = await StreamFromPlayer(cid, eid, season, episode, voice);
-        if (!string.IsNullOrEmpty(fromPlayer))
+        var fromPlayer = await StreamsFromPlayer(cid, eid, season, episode, voice);
+        if (fromPlayer.Count > 0)
             return fromPlayer;
 
-        return await StreamFromPartner(eid, cid);
+        string fromPartner = await StreamFromPartner(eid, cid);
+        if (!string.IsNullOrEmpty(fromPartner))
+            return new List<StreamQualityDto> { new(fromPartner, "auto") };
+
+        return new List<StreamQualityDto>();
     }
 
-    async Task<string> StreamFromPlayer(string cid, string eid, short season, short episode, string voice)
+    async Task<List<StreamQualityDto>> StreamsFromPlayer(string cid, string eid, short season, short episode, string voice)
     {
+        var result = new List<StreamQualityDto>(QualityOrder.Length);
         string token = EmbedToken();
         if (string.IsNullOrEmpty(token))
-            return null;
+            return result;
 
-        foreach (string quality in QualityOrder.Concat(new[] { (string)null }))
+        var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var qualities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string requestedQuality in QualityOrder)
         {
             var paths = new List<string>();
             if (!string.IsNullOrEmpty(eid))
-                paths.Add(PlayerPath("episode", eid, token, season, episode, voice, quality));
+                paths.Add(PlayerPath("episode", eid, token, season, episode, voice, requestedQuality));
             if (!string.IsNullOrEmpty(cid))
-                paths.Add(PlayerPath("series", cid, token, season, episode, voice, quality));
+                paths.Add(PlayerPath("series", cid, token, season, episode, voice, requestedQuality));
 
             foreach (string path in paths)
             {
@@ -358,12 +374,55 @@ public class LordTVController : BaseOnlineController<ModuleConf>
                     data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
                 );
 
-                if (!string.IsNullOrEmpty(url))
-                    return url;
+                if (string.IsNullOrEmpty(url))
+                    continue;
+
+                string quality = QualityLabel(data?.quality) ?? requestedQuality;
+                if (urls.Add(url) && qualities.Add(quality))
+                    result.Add(new StreamQualityDto(url, quality));
+
+                break;
             }
         }
 
-        return null;
+        if (result.Count > 0)
+            return result;
+
+        var fallbackPaths = new List<string>();
+        if (!string.IsNullOrEmpty(eid))
+            fallbackPaths.Add(PlayerPath("episode", eid, token, season, episode, voice, null));
+        if (!string.IsNullOrEmpty(cid))
+            fallbackPaths.Add(PlayerPath("series", cid, token, season, episode, voice, null));
+
+        foreach (string path in fallbackPaths)
+        {
+            var data = await GetJson<PlayerData>(path, useBearer: false);
+            string url = FirstUrl(
+                data?.current_video_url,
+                data?.voiceovers?.FirstOrDefault(v => string.IsNullOrEmpty(voice) || v.slug == voice)?.video_url,
+                data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
+            );
+
+            if (!string.IsNullOrEmpty(url))
+            {
+                result.Add(new StreamQualityDto(url, QualityLabel(data?.quality) ?? "auto"));
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    static string QualityLabel(string quality)
+    {
+        if (string.IsNullOrWhiteSpace(quality))
+            return null;
+
+        var match = Regex.Match(quality, @"\d{3,4}");
+        if (match.Success)
+            return match.Value + "p";
+
+        return quality.Trim();
     }
 
     async Task<string> StreamFromPartner(string eid, string cid)
