@@ -284,6 +284,7 @@ public class VkSeriesController : BaseOnlineController
     {
         const int pageSize = 200;
         var videos = new List<Video>();
+        var seen = new HashSet<string>();
         int offset = 0;
         int total = int.MaxValue;
         bool tokenRefreshed = false;
@@ -315,20 +316,31 @@ public class VkSeriesController : BaseOnlineController
             if (response == null)
                 return null;
 
-            total = response["count"]?.ToObject<int>() ?? 0;
+            total = response["count"]?.ToObject<int>() ?? int.MaxValue;
             var items = response["items"] as JArray;
 
             if (items == null || items.Count == 0)
                 break;
+
+            int added = 0;
 
             foreach (var item in items)
             {
                 var videoToken = item?["video"] ?? item;
                 var video = videoToken?.ToObject<Video>();
 
-                if (video != null)
+                if (video == null || video.id <= 0 || video.owner_id == 0)
+                    continue;
+
+                if (seen.Add($"{video.owner_id}:{video.id}"))
+                {
                     videos.Add(video);
+                    added++;
+                }
             }
+
+            if (added == 0)
+                break;
 
             int nextOffset = offset + items.Count;
             if (nextOffset <= offset)
