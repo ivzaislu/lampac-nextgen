@@ -193,11 +193,7 @@ public class VkSeriesController : BaseOnlineController
                 .Select(v => new
                 {
                     video = v,
-                    episode = TryEpisode(v?.title, season, out short ep)
-                        ? ep
-                        : TryEpisode(v?.description, season, out ep)
-                            ? ep
-                            : (short)0
+                    episode = ParseEpisode(v, season)
                 })
                 .Where(i => i.episode > 0 && i.video?.files != null)
                 .GroupBy(i => i.episode)
@@ -306,6 +302,17 @@ public class VkSeriesController : BaseOnlineController
             if (match.Success && int.TryParse(match.Groups["s"].Value, out int season) && season > 0)
                 return season;
         }
+
+        return 0;
+    }
+
+    static short ParseEpisode(Video video, short expectedSeason)
+    {
+        if (TryEpisode(video?.title, expectedSeason, out short episode))
+            return episode;
+
+        if (TryEpisode(video?.description, expectedSeason, out episode))
+            return episode;
 
         return 0;
     }
