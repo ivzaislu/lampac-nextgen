@@ -1,62 +1,66 @@
 # LORD.TV
 
-Онлайн-балансер **LORD.TV** (панель `lordsilver.biz`) для Lampac NextGen.
+Онлайн-источник **LORD.TV** (`https://lordsilver.biz`) для сериалов. Каталог и структура сезонов/серий читаются через API LORD.TV, воспроизведение использует embed-player и по умолчанию работает через **`streamproxy = true`**.
 
-Каталог сериалов читается из публичного API. Потоки требуют **embed-token** и **Origin домена, на который токен выдан**. Рабочий embed-token уже задан в модуле по умолчанию и при необходимости может быть переопределён через `init.conf`.
+## Интерфейс
 
-## Почему был 403
+**`IModuleLoaded`**, **`IModuleOnline`**.
 
-`embed_token` привязан к origin партнёра. Запрос с `Origin: https://lordsilver.biz` даёт:
+## Условие появления в выдаче (`Invoke`)
 
-`Domain lordsilver.biz is not allowed for this token`
+Источник добавляется только для обычных сериалов:
 
-По умолчанию модуль уже настроен на partner-origin doramaru и не требует добавлять `embed_token` в `init.conf`.
+- **`args.serial > 0`**;
+- **`args.isanime == false`**.
 
-Если токен сменится или будет выписан на другой сайт, значения можно переопределить:
+Для фильмов, неопределённого типа и anime возвращается **`null`**.
 
-```json
-"LordTV": {
-  "embed_token": "<новый query-token из iframe>",
-  "player_origin": "https://partner.example",
-  "referer": "https://partner.example/"
-}
-```
+## Глобальный поиск
 
-## Настройки
+**`with_search.Add("lordtv")`**.
 
-Настройки модуля задаются как дефолты через `ModuleInvoke.Init` и могут быть переопределены в `init.conf`, как у остальных online-модулей.
+Поиск контента выполняется по каталогу LORD.TV; при наличии **Kinopoisk ID** используется точное совпадение по нему.
 
-По умолчанию `streamproxy=true`, потому что прокси Lampac передаёт нужные `Origin/Referer` в HLS-запросы и сегменты. Теперь это не принудительный режим: при необходимости его можно отключить.
+## Конфигурация
+
+Секция в `init.conf`: **`LordTV`** (`ModuleConf`).
+
+По умолчанию: **`displayindex = 545`**, **`streamproxy = true`**, **`httptimeout = 10`**.
+
+Специфичные параметры модуля:
+
+- **`embed_token`** — token embed-player; рабочее значение задано в модуле как дефолт и может быть переопределено;
+- **`player_origin`** — Origin партнёрского player-домена;
+- **`referer`** — Referer для запросов player/API.
+
+Все значения, заданные через **`ModuleInvoke.Init`**, остаются переопределяемыми через `init.conf`, включая стандартные transport-настройки `BaseSettings` (`streamproxy`, `useproxy`, `useproxystream`, `proxy`, `geostreamproxy`, `rchstreamproxy`, `headers`, `headers_stream` и другие).
+
+Пример:
 
 ```json
 "LordTV": {
   "streamproxy": false,
   "httptimeout": 10,
-  "httpversion": 1
+  "player_origin": "https://partner.example",
+  "referer": "https://partner.example/"
 }
 ```
 
-При `streamproxy=false` модуль отдаёт прямые ссылки и передаёт stream headers плееру. Для web-клиента прямой HLS может зависеть от CORS/hotlink-защиты CDN.
+Если **`headers_stream`** не задан, модуль формирует stream headers из текущих **`player_origin`** и **`referer`**.
 
-Также доступны стандартные транспортные настройки `BaseSettings`, например `useproxy`, `useproxystream`, `proxy`, `geostreamproxy`, `rchstreamproxy`, `headers` и `headers_stream`.
+## Подпись качества
 
-Если нужно полностью задать собственные заголовки потока:
+**`OnlineApiQuality`**: при **`e.balanser == "lordtv"`** → **` ~ 1080p`**.
 
-```json
-"LordTV": {
-  "headers_stream": {
-    "User-Agent": "Mozilla/5.0",
-    "Origin": "https://partner.example",
-    "Referer": "https://partner.example/"
-  }
-}
-```
+Player API может возвращать несколько доступных качеств; модуль формирует список потоков по заявленным качествам и сохраняет fallback-поиск по стандартному набору.
 
-Если `headers_stream` не задан, модуль формирует стандартные stream headers из текущих `player_origin` и `referer`. Поэтому смена partner-origin больше не требует одновременно править жёстко заданный словарь заголовков.
-
-## Маршруты
+## HTTP
 
 | Маршрут | Назначение |
-|---|---|
-| `/lite/lordtv` | сезоны / серии / checksearch |
-| `/lite/lordtv/video` | резолв потока |
+|---------|------------|
+| **`lite/lordtv`** | Основная выдача: поиск, сезоны, серии и озвучки. |
+| **`lite/lordtv/video`** | Резолв и выдача видеопотока. |
+
+## Файлы
+
+**`ModInit.cs`**, **`Controller.cs`**, **`ModuleConf.cs`**, **`Model.cs`**, **`manifest.json`**.
