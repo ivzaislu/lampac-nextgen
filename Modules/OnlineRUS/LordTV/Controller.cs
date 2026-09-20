@@ -382,63 +382,123 @@ public class LordTVController : BaseOnlineController<ModuleConf>
         if (string.IsNullOrEmpty(token))
             return result;
 
-        var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var qualities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var targets = new List<(string type, string id)>();
+        if (!string.IsNullOrEmpty(eid))
+            targets.Add(("episode", eid));
+        if (!string.IsNullOrEmpty(cid))
+            targets.Add(("series", cid));
 
-        foreach (string requestedQuality in QualityOrder)
+        foreach (var target in targets)
         {
-            var paths = new List<string>();
-            if (!string.IsNullOrEmpty(eid))
-                paths.Add(PlayerPath("episode", eid, token, season, episode, voice, requestedQuality));
-            if (!string.IsNullOrEmpty(cid))
-                paths.Add(PlayerPath("series", cid, token, season, episode, voice, requestedQuality));
+            var baseData = await GetJson<PlayerData>(
+                PlayerPath(target.type, target.id, token, season, episode, voice, null),
+                useBearer: false
+            );
 
-            foreach (string path in paths)
+            string baseUrl = PlayerVideoUrl(baseData, voice, episode);
+            var available = AvailableQualities(baseData);
+            bool usableTarget = available.Count > 0 || !string.IsNullOrEmpty(baseUrl);
+
+            if (!usableTarget)
+                continue;
+
+            var requestedQualities = available.Count > 0
+                ? available
+                : QualityOrder.ToList();
+
+            var urls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var qualities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string baseQuality = QualityLabel(baseData?.quality);
+
+            foreach (string requestedQuality in requestedQualities)
             {
-                var data = await GetJson<PlayerData>(path, useBearer: false);
-                string url = FirstUrl(
-                    data?.current_video_url,
-                    data?.voiceovers?.FirstOrDefault(v => string.IsNullOrEmpty(voice) || v.slug == voice)?.video_url,
-                    data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
-                );
+                string requestedLabel = QualityLabel(requestedQuality) ?? requestedQuality;
+                PlayerData data = null;
+                string url = null;
+
+                if (!string.IsNullOrEmpty(baseUrl) &&
+                    !string.IsNullOrEmpty(baseQuality) &&
+                    string.Equals(baseQuality, requestedLabel, StringComparison.OrdinalIgnoreCase))
+                {
+                    data = baseData;
+                    url = baseUrl;
+                }
+                else
+                {
+                    data = await GetJson<PlayerData>(
+                        PlayerPath(target.type, target.id, token, season, episode, voice, requestedQuality),
+                        useBearer: false
+                    );
+                    url = PlayerVideoUrl(data, voice, episode);
+                }
 
                 if (string.IsNullOrEmpty(url))
                     continue;
 
-                string quality = QualityLabel(data?.quality) ?? requestedQuality;
-                if (urls.Add(url) && qualities.Add(quality))
-                    result.Add(new StreamQualityDto(url, quality));
-
-                break;
+                string quality = QualityLabel(data?.quality) ?? requestedLabel;
+                AddStream(result, urls, qualities, url, quality);
             }
-        }
 
-        if (result.Count > 0)
-            return result;
+            if (result.Count > 0)
+                return result;
 
-        var fallbackPaths = new List<string>();
-        if (!string.IsNullOrEmpty(eid))
-            fallbackPaths.Add(PlayerPath("episode", eid, token, season, episode, voice, null));
-        if (!string.IsNullOrEmpty(cid))
-            fallbackPaths.Add(PlayerPath("series", cid, token, season, episode, voice, null));
-
-        foreach (string path in fallbackPaths)
-        {
-            var data = await GetJson<PlayerData>(path, useBearer: false);
-            string url = FirstUrl(
-                data?.current_video_url,
-                data?.voiceovers?.FirstOrDefault(v => string.IsNullOrEmpty(voice) || v.slug == voice)?.video_url,
-                data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
-            );
-
-            if (!string.IsNullOrEmpty(url))
+            if (!string.IsNullOrEmpty(baseUrl))
             {
-                result.Add(new StreamQualityDto(url, QualityLabel(data?.quality) ?? "auto"));
-                break;
+                AddStream(result, urls, qualities, baseUrl, baseQuality ?? "auto");
+                return result;
             }
         }
 
         return result;
+    }
+
+    string PlayerVideoUrl(PlayerData data, string voice, short episode)
+    {
+        return FirstUrl(
+            data?.current_video_url,
+            data?.voiceovers?.FirstOrDefault(v =>
+                string.IsNullOrEmpty(voice) ||
+                string.Equals(v.slug, voice, StringComparison.OrdinalIgnoreCase)
+            )?.video_url,
+            data?.episodes?.FirstOrDefault(ep => ep.episode_number == episode)?.video_url
+        );
+    }
+
+    static List<string> AvailableQualities(PlayerData data)
+    {
+        if (data?.available_qualities == null || data.available_qualities.Length == 0)
+            return new List<string>();
+
+        return data.available_qualities
+            .Where(q => !string.IsNullOrWhiteSpace(q))
+            .Select(q => q.Trim())
+            .GroupBy(q => QualityLabel(q) ?? q, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderByDescending(QualityValue)
+            .ToList();
+    }
+
+    static int QualityValue(string quality)
+    {
+        if (string.IsNullOrWhiteSpace(quality))
+            return 0;
+
+        var match = Regex.Match(quality, @"\d{3,4}");
+        return match.Success && int.TryParse(match.Value, out int value) ? value : 0;
+    }
+
+    static bool AddStream(List<StreamQualityDto> result, HashSet<string> urls, HashSet<string> qualities, string url, string quality)
+    {
+        if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(quality))
+            return false;
+
+        if (urls.Contains(url) || qualities.Contains(quality))
+            return false;
+
+        urls.Add(url);
+        qualities.Add(quality);
+        result.Add(new StreamQualityDto(url, quality));
+        return true;
     }
 
     static string QualityLabel(string quality)
