@@ -14,6 +14,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
     public static ModuleConf conf;
 
     const string PartnerOrigin = "https://sled-chikatilo-episode.doramaru-hd.biz";
+    const string EmbedToken = "ByaynHMmP3lFrW6d9NMF4KsdNMrrgTMlZ_xSR_3y7S-meVI7kCWeK9eCoUp4uiDn";
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
@@ -47,6 +48,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
         conf = ModuleInvoke.Init("LordTV", new ModuleConf("LordTV", "https://lordsilver.biz", streamproxy: true)
         {
             displayindex = 545,
+            embed_token = EmbedToken,
             player_origin = PartnerOrigin,
             referer = PartnerOrigin + "/",
             rch_access = "apk,cors",
