@@ -22,7 +22,7 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262894L };
+    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262896L };
 
     private static string access_token;
     private static DateTime token_expires;
@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v8:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v9:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchTrustedAlbums();
             if (albums == null || albums.Count == 0)
@@ -71,17 +71,25 @@ public class VkSeriesController : BaseOnlineController
 
             var candidates = albums
                 .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                .Select(i => new
-                {
-                    album = i,
-                    score = AlbumScore(i, searchTitle, searchOriginalTitle, year)
-                })
+                .Select(i => (album: i, score: AlbumScore(i, searchTitle, searchOriginalTitle, year)))
                 .Where(i => i.score > 0)
                 .OrderByDescending(i => i.score)
                 .ThenByDescending(i => i.album.count)
                 .ThenByDescending(i => i.album.updated_time ?? 0)
                 .Take(20)
                 .ToList();
+
+            bool contentFallback = candidates.Count == 0;
+            if (contentFallback)
+            {
+                candidates = albums
+                    .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                    .OrderByDescending(i => i.updated_time ?? 0)
+                    .ThenByDescending(i => i.count)
+                    .Take(40)
+                    .Select(i => (album: i, score: 1))
+                    .ToList();
+            }
 
             var seasonAlbums = new List<(VideoAlbum album, int score)>();
 
@@ -92,7 +100,14 @@ public class VkSeriesController : BaseOnlineController
                 if (videos == null || videos.Count == 0)
                     continue;
 
-                var seasons = ParseVideos(videos, seasonHint)
+                var scopedVideos = contentFallback
+                    ? videos.Where(i => IsSeriesVideo(i, searchTitle, searchOriginalTitle)).ToList()
+                    : videos;
+
+                if (scopedVideos.Count == 0)
+                    continue;
+
+                var seasons = ParseVideos(scopedVideos, seasonHint)
                     .Select(i => i.season)
                     .Where(i => i > 0)
                     .Distinct()
@@ -159,7 +174,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v8:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v9:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -173,7 +188,14 @@ public class VkSeriesController : BaseOnlineController
 
         return ContentTpl(cache, () =>
         {
-            var parsed = ParseVideos(cache.Value, albumSeasonHint)
+            string searchTitle = SearchNameTo.Convert(title);
+            string searchOriginalTitle = SearchNameTo.Convert(original_title);
+
+            var scopedVideos = cache.Value
+                .Where(i => IsSeriesVideo(i, searchTitle, searchOriginalTitle))
+                .ToList();
+
+            var parsed = ParseVideos(scopedVideos.Count > 0 ? scopedVideos : cache.Value, albumSeasonHint)
                 .Where(i => i.season == season)
                 .GroupBy(i => i.episode)
                 .Select(g => g
@@ -234,7 +256,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v8:channel:{ownerId}:albums"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v9:channel:{ownerId}:albums"), 20, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -278,7 +300,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v8:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v9:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
             var videos = new List<Video>();
@@ -396,6 +418,28 @@ public class VkSeriesController : BaseOnlineController
         }
 
         return tpl.IsEmpty ? null : tpl;
+    }
+
+    static bool IsSeriesVideo(Video video, string searchTitle, string searchOriginalTitle)
+    {
+        if (video == null)
+            return false;
+
+        bool Match(string value, string query)
+        {
+            if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(query))
+                return false;
+
+            return value.Contains(query);
+        }
+
+        string title = SearchNameTo.Convert(video.title);
+        string description = SearchNameTo.Convert(video.description);
+
+        return Match(title, searchTitle) ||
+               Match(title, searchOriginalTitle) ||
+               Match(description, searchTitle) ||
+               Match(description, searchOriginalTitle);
     }
 
     static int AlbumScore(VideoAlbum album, string searchTitle, string searchOriginalTitle, short year)
