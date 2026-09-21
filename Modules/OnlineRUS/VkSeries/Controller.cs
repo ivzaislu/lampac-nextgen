@@ -61,7 +61,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v2:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchAlbums(title, original_title, year);
             if (albums == null || albums.Count == 0)
@@ -160,7 +160,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v2:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -261,7 +261,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v2:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
             var videos = new List<Video>();
@@ -306,7 +306,7 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (var video in videos)
         {
-            if (video == null || IsNoise(video.title))
+            if (video == null || IsNoise(video.title) || IsMomentVideo(video))
                 continue;
 
             if (!TryParseEpisode(video, albumSeasonHint, out short season, out short episode))
@@ -532,6 +532,34 @@ public class VkSeriesController : BaseOnlineController
         }
 
         episode = 0;
+        return false;
+    }
+
+    static bool IsMomentVideo(Video video)
+    {
+        if (video == null)
+            return true;
+
+        if (video.short_video_info != null)
+            return true;
+
+        string name = SearchNameTo.Convert(video.title);
+        if (name != null &&
+            (name.Contains("момент") ||
+             name.Contains("фрагмент") ||
+             name.Contains("отрывок") ||
+             name.Contains("сцена") ||
+             name.Contains("moment") ||
+             name.Contains("clip")))
+        {
+            return true;
+        }
+
+        // Полноценные серии сериалов обычно заметно длиннее нарезок/моментов.
+        // Нулевую duration не режем: у части ответов VK она может отсутствовать.
+        if (video.duration > 0 && video.duration < 10 * 60)
+            return true;
+
         return false;
     }
 

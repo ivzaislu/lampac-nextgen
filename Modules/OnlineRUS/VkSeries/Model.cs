@@ -64,8 +64,13 @@ public class Video
     public long duration { get; set; }
     public long? views { get; set; }
     public string owner_name { get; set; }
+    public ShortVideoInfo short_video_info { get; set; }
     public VideoFiles files { get; set; }
     public VideoSubtitle[] subtitles { get; set; }
+}
+
+public class ShortVideoInfo
+{
 }
 
 public class VideoFiles
