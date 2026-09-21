@@ -5,6 +5,7 @@ namespace VkSeries;
 public class Root
 {
     public Response response { get; set; }
+    public VkError error { get; set; }
 }
 
 public class Response
@@ -25,15 +26,28 @@ public class VideoAlbum
     public int season { get; set; }
 }
 
+public class SeriesPlaylist
+{
+    public VideoAlbum album { get; set; }
+    public List<Video> videos { get; set; }
+}
+
 public class VideoGetRoot
 {
     public VideoGetResponse response { get; set; }
+    public VkError error { get; set; }
 }
 
 public class VideoGetResponse
 {
     public int count { get; set; }
     public List<Video> items { get; set; }
+}
+
+public class VkError
+{
+    public int error_code { get; set; }
+    public string error_msg { get; set; }
 }
 
 public class CatalogVideo
