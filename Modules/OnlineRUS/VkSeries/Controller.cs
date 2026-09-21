@@ -22,7 +22,7 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private static readonly string[] trustedChannels = ["mirserialov"];
+    private static readonly string[] trustedChannels = new[] { "mirserialov" };
 
     private static string access_token;
     private static DateTime token_expires;
@@ -207,19 +207,16 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<long> ResolveChannelOwnerId(string screenName)
     {
-        return await InvokeCache<long>($"vkseries:v5:channel:{screenName}:owner", 60, async () =>
-        {
-            string url = $"{init.host}/method/utils.resolveScreenName?v=5.264&client_id={client_id}";
-            string data = $"screen_name={HttpUtility.UrlEncode(screenName)}&access_token={access_token}";
+        string url = $"{init.host}/method/utils.resolveScreenName?v=5.264&client_id={client_id}";
+        string data = $"screen_name={HttpUtility.UrlEncode(screenName)}&access_token={access_token}";
 
-            var root = await httpHydra.Post<ResolveScreenNameRoot>(url, data, textJson: true);
-            if (root?.error != null || root?.response == null || root.response.object_id <= 0)
-                return 0;
+        var root = await httpHydra.Post<ResolveScreenNameRoot>(url, data, textJson: true);
+        if (root?.error != null || root?.response == null || root.response.object_id <= 0)
+            return 0;
 
-            return string.Equals(root.response.type, "user", StringComparison.OrdinalIgnoreCase)
-                ? root.response.object_id
-                : -root.response.object_id;
-        });
+        return string.Equals(root.response.type, "user", StringComparison.OrdinalIgnoreCase)
+            ? root.response.object_id
+            : -root.response.object_id;
     }
 
     async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
