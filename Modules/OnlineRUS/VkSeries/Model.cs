@@ -32,6 +32,30 @@ public class SeriesPlaylist
     public List<Video> videos { get; set; }
 }
 
+public class ResolveScreenNameRoot
+{
+    public ResolveScreenNameResponse response { get; set; }
+    public VkError error { get; set; }
+}
+
+public class ResolveScreenNameResponse
+{
+    public string type { get; set; }
+    public long object_id { get; set; }
+}
+
+public class VideoAlbumsRoot
+{
+    public VideoAlbumsResponse response { get; set; }
+    public VkError error { get; set; }
+}
+
+public class VideoAlbumsResponse
+{
+    public int count { get; set; }
+    public List<VideoAlbum> items { get; set; }
+}
+
 public class VideoGetRoot
 {
     public VideoGetResponse response { get; set; }

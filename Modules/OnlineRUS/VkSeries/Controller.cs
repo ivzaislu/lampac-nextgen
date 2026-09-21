@@ -22,6 +22,8 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
+    private static readonly string[] trustedChannels = ["mirserialov"];
+
     private static string access_token;
     private static DateTime token_expires;
 
@@ -61,67 +63,39 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v4:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v5:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
-            var albums = await SearchAlbums(title, original_title, year);
+            var albums = await SearchTrustedAlbums();
             if (albums == null || albums.Count == 0)
-                return e.Fail("albums");
+                return e.Fail("trusted albums");
 
-            var ranked = albums
+            var result = albums
                 .Where(i => i != null && i.id > 0 && i.owner_id != 0)
                 .Select(i => new
                 {
                     album = i,
+                    season = ParseSeason(i.title),
                     score = AlbumScore(i, searchTitle, searchOriginalTitle, year)
                 })
-                .Where(i => i.score > 0)
-                .OrderByDescending(i => i.score)
-                .ThenByDescending(i => i.album.count)
-                .ThenByDescending(i => i.album.updated_time ?? 0)
-                .Take(5)
+                .Where(i => i.season > 0 && i.score > 0)
+                .GroupBy(i => i.season)
+                .Select(g => g
+                    .OrderByDescending(i => i.score)
+                    .ThenByDescending(i => i.album.count)
+                    .ThenByDescending(i => i.album.updated_time ?? 0)
+                    .First())
+                .OrderBy(i => i.season)
+                .Select(i =>
+                {
+                    i.album.season = i.season;
+                    return i.album;
+                })
                 .ToList();
 
-            if (ranked.Count == 0)
-                return e.Fail("album match");
+            if (result.Count == 0)
+                return e.Fail("trusted season playlists");
 
-            SeriesPlaylist best = null;
-            int bestEpisodes = 0;
-            int bestScore = int.MinValue;
-
-            foreach (var candidate in ranked)
-            {
-                var videos = await GetAlbumVideos(candidate.album.owner_id, candidate.album.id);
-                if (videos == null || videos.Count == 0)
-                    continue;
-
-                short seasonHint = (short)ParseSeason(candidate.album.title);
-                var parsed = ParseVideos(videos, seasonHint);
-                int episodeCount = parsed
-                    .Select(i => $"{i.season}:{i.episode}")
-                    .Distinct()
-                    .Count();
-
-                if (episodeCount == 0)
-                    continue;
-
-                int score = candidate.score + Math.Min(episodeCount, 100) * 3;
-                if (score <= bestScore)
-                    continue;
-
-                candidate.album.season = seasonHint;
-                best = new SeriesPlaylist
-                {
-                    album = candidate.album,
-                    videos = videos
-                };
-                bestEpisodes = episodeCount;
-                bestScore = score;
-            }
-
-            if (best == null || bestEpisodes == 0)
-                return e.Fail("playlist episodes");
-
-            return e.Success(best);
+            return e.Success(result);
         });
 
         if (IsRhubFallback(cache))
@@ -129,26 +103,20 @@ public class VkSeriesController : BaseOnlineController
 
         return ContentTpl(cache, () =>
         {
-            var playlist = cache.Value;
-            var parsed = ParseVideos(playlist.videos, (short)playlist.album.season);
-
-            var seasons = parsed
-                .Select(i => i.season)
-                .Where(i => i > 0)
-                .Distinct()
-                .OrderBy(i => i)
-                .ToList();
-
-            var stpl = new SeasonTpl(MaxQuality(parsed), seasons.Count);
+            var stpl = new SeasonTpl("2160p", cache.Value.Count);
             string encTitle = HttpUtility.UrlEncode(title);
             string encOriginalTitle = HttpUtility.UrlEncode(original_title);
             string encRjson = rjson.ToString().ToLowerInvariant();
 
-            foreach (short season in seasons)
+            foreach (var album in cache.Value)
             {
+                short season = (short)album.season;
+                if (season <= 0)
+                    continue;
+
                 stpl.Append(
                     $"{season} сезон",
-                    $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}&owner_id={playlist.album.owner_id}&album_id={playlist.album.id}&album_s={playlist.album.season}&rjson={encRjson}",
+                    $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}&owner_id={album.owner_id}&album_id={album.id}&album_s={season}&rjson={encRjson}",
                     season
                 );
             }
@@ -160,7 +128,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v2:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v5:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -213,55 +181,94 @@ public class VkSeriesController : BaseOnlineController
         });
     }
 
-    async Task<List<VideoAlbum>> SearchAlbums(string title, string originalTitle, short year)
+    async Task<List<VideoAlbum>> SearchTrustedAlbums()
     {
-        var albums = new List<VideoAlbum>();
-        var queries = new List<string>(4);
+        var result = new List<VideoAlbum>();
 
-        void AddQuery(string value)
+        foreach (string screenName in trustedChannels)
         {
-            if (string.IsNullOrWhiteSpace(value))
-                return;
-
-            if (!queries.Any(i => string.Equals(i, value, StringComparison.OrdinalIgnoreCase)))
-                queries.Add(value);
-        }
-
-        AddQuery(title);
-        AddQuery(originalTitle);
-
-        if (year > 0)
-        {
-            AddQuery($"{title} {year}");
-            AddQuery($"{originalTitle} {year}");
-        }
-
-        foreach (string query in queries)
-        {
-            string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
-            string data = $"screen_ref=search_video_service&input_method=keyboard_search_button&q={HttpUtility.UrlEncode(query)}&extended=1&access_token={access_token}";
-
-            var root = await httpHydra.Post<Root>(url, data, textJson: true);
-            if (root?.error != null)
+            long ownerId = await ResolveChannelOwnerId(screenName);
+            if (ownerId == 0)
                 continue;
 
-            if (root?.response?.albums != null)
-                albums.AddRange(root.response.albums);
+            var albums = await GetOwnerAlbums(ownerId);
+            if (albums != null && albums.Count > 0)
+                result.AddRange(albums);
         }
 
-        return albums
+        return result
             .Where(i => i != null && i.id > 0 && i.owner_id != 0)
             .GroupBy(i => $"{i.owner_id}:{i.id}")
             .Select(g => g
-                .OrderByDescending(i => i.count)
-                .ThenByDescending(i => i.updated_time ?? 0)
+                .OrderByDescending(i => i.updated_time ?? 0)
                 .First())
             .ToList();
     }
 
+    async Task<long> ResolveChannelOwnerId(string screenName)
+    {
+        return await InvokeCache<long>($"vkseries:v5:channel:{screenName}:owner", 60, async () =>
+        {
+            string url = $"{init.host}/method/utils.resolveScreenName?v=5.264&client_id={client_id}";
+            string data = $"screen_name={HttpUtility.UrlEncode(screenName)}&access_token={access_token}";
+
+            var root = await httpHydra.Post<ResolveScreenNameRoot>(url, data, textJson: true);
+            if (root?.error != null || root?.response == null || root.response.object_id <= 0)
+                return 0;
+
+            return string.Equals(root.response.type, "user", StringComparison.OrdinalIgnoreCase)
+                ? root.response.object_id
+                : -root.response.object_id;
+        });
+    }
+
+    async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
+    {
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v5:channel:{ownerId}:albums"), 20, async () =>
+        {
+            const int pageSize = 100;
+            var albums = new List<VideoAlbum>();
+            int offset = 0;
+            int total = int.MaxValue;
+
+            while (offset < total && offset < 5000)
+            {
+                string url = $"{init.host}/method/video.getAlbums?v=5.264&client_id={client_id}";
+                string data = $"owner_id={ownerId}&count={pageSize}&offset={offset}&extended=1&need_system=0&access_token={access_token}";
+
+                var root = await httpHydra.Post<VideoAlbumsRoot>(url, data, textJson: true);
+                if (root?.error != null || root?.response == null)
+                    return null;
+
+                var items = root.response.items;
+                total = root.response.count;
+
+                if (items == null || items.Count == 0)
+                    break;
+
+                albums.AddRange(items);
+
+                int nextOffset = offset + items.Count;
+                if (nextOffset <= offset)
+                    break;
+
+                offset = nextOffset;
+
+                if (items.Count < pageSize)
+                    break;
+            }
+
+            return albums
+                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                .GroupBy(i => $"{i.owner_id}:{i.id}")
+                .Select(g => g.First())
+                .ToList();
+        });
+    }
+
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v2:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v5:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
             var videos = new List<Video>();
