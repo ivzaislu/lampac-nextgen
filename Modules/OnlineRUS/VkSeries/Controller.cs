@@ -22,7 +22,7 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262896L };
+    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262894L };
 
     private static string access_token;
     private static DateTime token_expires;
@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v9:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v10:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchTrustedAlbums();
             if (albums == null || albums.Count == 0)
@@ -95,6 +95,36 @@ public class VkSeriesController : BaseOnlineController
 
             foreach (var candidate in candidates)
             {
+                // @club234262894 exposes native VK serial playlists:
+                // parent album -> series_object.seasons -> video.getFromAlbum(season album).
+                if (candidate.album.owner_id == -234262894)
+                {
+                    var albumInfo = await GetAlbumById(candidate.album.owner_id, candidate.album.id);
+                    var nativeSeasons = albumInfo?.series_object?.seasons;
+
+                    if (nativeSeasons != null && nativeSeasons.Count > 0)
+                    {
+                        foreach (var nativeSeason in nativeSeasons)
+                        {
+                            short season = (short)ParseSeason(nativeSeason.title);
+                            if (season <= 0 || nativeSeason.id <= 0)
+                                continue;
+
+                            seasonAlbums.Add((new VideoAlbum
+                            {
+                                id = nativeSeason.id,
+                                owner_id = nativeSeason.owner_id != 0 ? nativeSeason.owner_id : candidate.album.owner_id,
+                                title = $"{candidate.album.title} {nativeSeason.title}",
+                                count = nativeSeason.count,
+                                updated_time = candidate.album.updated_time,
+                                season = season
+                            }, candidate.score + 100));
+                        }
+
+                        continue;
+                    }
+                }
+
                 short seasonHint = (short)ParseSeason(candidate.album.title);
                 var videos = await GetAlbumVideos(candidate.album.owner_id, candidate.album.id);
                 if (videos == null || videos.Count == 0)
@@ -174,7 +204,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v9:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v10:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -256,7 +286,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v9:channel:{ownerId}:albums"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v10:channel:{ownerId}:albums"), 20, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -298,37 +328,98 @@ public class VkSeriesController : BaseOnlineController
         });
     }
 
+    async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
+    {
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v10:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        {
+            string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
+            string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
+
+            var root = await httpHydra.Post<VideoAlbumRoot>(url, data, textJson: true);
+            if (root?.error != null)
+                return null;
+
+            return root?.response;
+        });
+    }
+
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v9:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v10:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
-            var videos = new List<Video>();
-            int offset = 0;
-            int total = int.MaxValue;
 
-            while (offset < total)
+            if (ownerId == -234262894)
+            {
+                var fromAlbum = new List<Video>();
+                int offset = 0;
+                int total = int.MaxValue;
+
+                while (offset < total)
+                {
+                    string url = $"{init.host}/method/video.getFromAlbum?v=5.264&client_id={client_id}";
+                    string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&extended=1&access_token={access_token}";
+
+                    var root = await httpHydra.Post<VideoFromAlbumRoot>(url, data, textJson: true);
+                    if (root?.error != null || root?.response == null)
+                    {
+                        fromAlbum.Clear();
+                        break;
+                    }
+
+                    var items = root.response.items;
+                    total = root.response.count;
+
+                    if (items == null || items.Count == 0)
+                        break;
+
+                    fromAlbum.AddRange(items
+                        .Where(i => i?.video != null)
+                        .Select(i => i.video));
+
+                    int nextOffset = offset + items.Count;
+                    if (nextOffset <= offset)
+                        break;
+
+                    offset = nextOffset;
+                }
+
+                if (fromAlbum.Count > 0)
+                {
+                    return fromAlbum
+                        .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                        .GroupBy(i => $"{i.owner_id}:{i.id}")
+                        .Select(g => g.First())
+                        .ToList();
+                }
+            }
+
+            var videos = new List<Video>();
+            int legacyOffset = 0;
+            int legacyTotal = int.MaxValue;
+
+            while (legacyOffset < legacyTotal)
             {
                 string url = $"{init.host}/method/video.get?v=5.264&client_id={client_id}";
-                string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&sort_album=1&extended=1&access_token={access_token}";
+                string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={legacyOffset}&sort_album=1&extended=1&access_token={access_token}";
 
                 var root = await httpHydra.Post<VideoGetRoot>(url, data, textJson: true);
                 if (root?.error != null || root?.response == null)
                     return null;
 
                 var items = root.response.items;
-                total = root.response.count;
+                legacyTotal = root.response.count;
 
                 if (items == null || items.Count == 0)
                     break;
 
                 videos.AddRange(items);
 
-                int nextOffset = offset + items.Count;
-                if (nextOffset <= offset)
+                int nextOffset = legacyOffset + items.Count;
+                if (nextOffset <= legacyOffset)
                     break;
 
-                offset = nextOffset;
+                legacyOffset = nextOffset;
             }
 
             return videos

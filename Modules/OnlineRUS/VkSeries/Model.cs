@@ -21,9 +21,25 @@ public class VideoAlbum
     public long owner_id { get; set; }
     public string title { get; set; }
     public int count { get; set; }
+    public int type { get; set; }
     public long? updated_time { get; set; }
+    public SeriesObject series_object { get; set; }
 
     public int season { get; set; }
+}
+
+public class SeriesObject
+{
+    public List<SeriesSeason> seasons { get; set; }
+}
+
+public class SeriesSeason
+{
+    public long id { get; set; }
+    public long owner_id { get; set; }
+    public long series_id { get; set; }
+    public string title { get; set; }
+    public int count { get; set; }
 }
 
 public class SeriesPlaylist
@@ -42,6 +58,30 @@ public class VideoAlbumsResponse
 {
     public int count { get; set; }
     public List<VideoAlbum> items { get; set; }
+}
+
+public class VideoAlbumRoot
+{
+    public VideoAlbum response { get; set; }
+    public VkError error { get; set; }
+}
+
+public class VideoFromAlbumRoot
+{
+    public VideoFromAlbumResponse response { get; set; }
+    public VkError error { get; set; }
+}
+
+public class VideoFromAlbumResponse
+{
+    public int count { get; set; }
+    public List<VideoFromAlbumItem> items { get; set; }
+}
+
+public class VideoFromAlbumItem
+{
+    public int playlist_position { get; set; }
+    public Video video { get; set; }
 }
 
 public class VideoGetRoot
