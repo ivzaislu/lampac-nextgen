@@ -61,7 +61,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v2:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v3:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchAlbums(title, original_title, year);
             if (albums == null || albums.Count == 0)
@@ -227,14 +227,14 @@ public class VkSeriesController : BaseOnlineController
                 queries.Add(value);
         }
 
+        AddQuery(title);
+        AddQuery(originalTitle);
+
         if (year > 0)
         {
             AddQuery($"{title} {year}");
             AddQuery($"{originalTitle} {year}");
         }
-
-        AddQuery(title);
-        AddQuery(originalTitle);
 
         foreach (string query in queries)
         {
