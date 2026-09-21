@@ -22,8 +22,8 @@
 
 VkSeries больше не использует глобальный поиск плейлистов по всему VK Video.
 
-1. Используется whitelist проверенных каналов. Сейчас подключён **`@mirserialov`** (`https://vkvideo.ru/@mirserialov/playlists`).
-2. Имя канала разрешается через **`utils.resolveScreenName`** в VK `owner_id`.
+1. Используется whitelist проверенных каналов. Сейчас подключён **`@mirserialov`** (`https://vkvideo.ru/@mirserialov/playlists`), owner `-220020068`.
+2. Для доверенного канала используется фиксированный VK owner **`-220020068`** (`МИР СЕРИАЛОВ`), без `utils.resolveScreenName`.
 3. Плейлисты канала загружаются напрямую через **`video.getAlbums`** с пагинацией.
 4. Нужный сериал ищется только среди названий плейлистов доверенного канала по `title`, `original_title` и году.
 5. Каждый playlist с номером сезона становится отдельным **`SeasonTpl`**. Поэтому разные сезоны могут иметь разные `album_id`.

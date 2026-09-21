@@ -22,7 +22,7 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private static readonly string[] trustedChannels = new[] { "mirserialov" };
+    private static readonly long[] trustedChannelOwners = new[] { -220020068L };
 
     private static string access_token;
     private static DateTime token_expires;
@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v5:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v6:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchTrustedAlbums();
             if (albums == null || albums.Count == 0)
@@ -128,7 +128,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v5:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v6:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -185,12 +185,8 @@ public class VkSeriesController : BaseOnlineController
     {
         var result = new List<VideoAlbum>();
 
-        foreach (string screenName in trustedChannels)
+        foreach (long ownerId in trustedChannelOwners)
         {
-            long ownerId = await ResolveChannelOwnerId(screenName);
-            if (ownerId == 0)
-                continue;
-
             var albums = await GetOwnerAlbums(ownerId);
             if (albums != null && albums.Count > 0)
                 result.AddRange(albums);
@@ -205,23 +201,9 @@ public class VkSeriesController : BaseOnlineController
             .ToList();
     }
 
-    async Task<long> ResolveChannelOwnerId(string screenName)
-    {
-        string url = $"{init.host}/method/utils.resolveScreenName?v=5.264&client_id={client_id}";
-        string data = $"screen_name={HttpUtility.UrlEncode(screenName)}&access_token={access_token}";
-
-        var root = await httpHydra.Post<ResolveScreenNameRoot>(url, data, textJson: true);
-        if (root?.error != null || root?.response == null || root.response.object_id <= 0)
-            return 0;
-
-        return string.Equals(root.response.type, "user", StringComparison.OrdinalIgnoreCase)
-            ? root.response.object_id
-            : -root.response.object_id;
-    }
-
     async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v5:channel:{ownerId}:albums"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v6:channel:{ownerId}:albums"), 20, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -265,7 +247,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v5:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v6:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
             var videos = new List<Video>();
