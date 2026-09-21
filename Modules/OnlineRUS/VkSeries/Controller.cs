@@ -71,7 +71,7 @@ public class VkSeriesController : BaseOnlineController
 
     rhubFallback:
         var cache = await InvokeCacheResult<List<Video>>(
-            ipkey($"vkseries:v6:seasons:{searchTitle}:{searchOriginalTitle}:{year}"),
+            ipkey($"vkseries:v7:seasons:{searchTitle}:{searchOriginalTitle}:{year}"),
             15,
             textJson: true,
             onget: async e =>
@@ -186,7 +186,7 @@ public class VkSeriesController : BaseOnlineController
         string searchOriginalTitle = SearchNameTo.Convert(originalTitle) ?? string.Empty;
 
         return await InvokeCache<List<Video>>(
-            ipkey($"vkseries:v6:search:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
+            ipkey($"vkseries:v7:search:{searchTitle}:{searchOriginalTitle}:{year}:{season}"),
             10,
             async () =>
             {
@@ -395,31 +395,20 @@ public class VkSeriesController : BaseOnlineController
             if (string.IsNullOrWhiteSpace(query))
                 return;
 
-            if (name.StartsWith(query))
+            // SearchNameTo.Convert удаляет пробелы/пунктуацию:
+            // "Джек Ричер. Сезон 1" -> "джекричерсезон1".
+            // Поэтому границы слов на normalized-строке проверять нельзя.
+            if (name == query)
+                score = Math.Max(score, 140);
+            else if (name.StartsWith(query))
                 score = Math.Max(score, 120);
-            else if (ContainsAlias(name, query))
-                score = Math.Max(score, 80);
+            else if (name.Contains(query, StringComparison.Ordinal))
+                score = Math.Max(score, query.Length >= 5 ? 100 : 70);
         }
 
         Match(searchTitle);
         Match(searchOriginalTitle);
         return score;
-    }
-
-    static bool ContainsAlias(string value, string query)
-    {
-        if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(query))
-            return false;
-
-        int index = value.IndexOf(query, StringComparison.OrdinalIgnoreCase);
-        if (index < 0)
-            return false;
-
-        bool leftOk = index == 0 || !char.IsLetterOrDigit(value[index - 1]);
-        int end = index + query.Length;
-        bool rightOk = end >= value.Length || !char.IsLetterOrDigit(value[end]);
-
-        return leftOk && rightOk;
     }
 
     static bool HasConflictingYear(string value, short year)
