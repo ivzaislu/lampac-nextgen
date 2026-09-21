@@ -297,9 +297,9 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string pattern in new[]
         {
-            @"(?i)(?:сезон|season)s*(?<s>d{1,2})",
-            @"(?i)(?<s>d{1,2})s*(?:сезон|season)",
-            @"(?i)S(?<s>d{1,2})"
+            @"(?i)\b(?:сезон|season)\s*(?<s>\d{1,2})\b",
+            @"(?i)\b(?<s>\d{1,2})\s*(?:сезон|season)\b",
+            @"(?i)\bS(?<s>\d{1,2})\b"
         })
         {
             var match = Regex.Match(value, pattern);
@@ -318,9 +318,9 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string pattern in new[]
         {
-            @"(?i)S(?<s>d{1,2})s*E(?<e>d{1,3})",
-            @"(?i)(?<s>d{1,2})s*(?:сезон|season)D{0,24}(?<e>d{1,3})s*(?:серия|серии|episode|ep|эпизод)",
-            @"(?i)(?:сезон|season)s*(?<s>d{1,2})D{0,24}(?:серия|серии|episode|ep|эпизод)s*(?<e>d{1,3})"
+            @"(?i)\bS(?<s>\d{1,2})\s*E(?<e>\d{1,3})\b",
+            @"(?i)\b(?<s>\d{1,2})\s*(?:сезон|season)\D{0,24}(?<e>\d{1,3})\s*(?:серия|серии|episode|ep|эпизод)\b",
+            @"(?i)\b(?:сезон|season)\s*(?<s>\d{1,2})\D{0,24}(?:серия|серии|episode|ep|эпизод)\s*(?<e>\d{1,3})\b"
         })
         {
             var match = Regex.Match(value, pattern);
@@ -343,8 +343,8 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string pattern in new[]
         {
-            @"(?i)(?<e>d{1,3})s*(?:серия|серии|episode|эпизод)",
-            @"(?i)(?:серия|серии|episode|ep|эпизод)s*(?<e>d{1,3})"
+            @"(?i)\b(?<e>\d{1,3})\s*(?:серия|серии|episode|эпизод)\b",
+            @"(?i)\b(?:серия|серии|episode|ep|эпизод)\s*(?<e>\d{1,3})\b"
         })
         {
             var match = Regex.Match(value, pattern);
