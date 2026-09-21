@@ -61,7 +61,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v3:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<SeriesPlaylist>(ipkey($"vkseries:v4:playlist:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchAlbums(title, original_title, year);
             if (albums == null || albums.Count == 0)
@@ -306,8 +306,13 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (var video in videos)
         {
-            if (video == null || IsNoise(video.title) || IsMomentVideo(video))
+            if (video == null ||
+                IsNoise(video.title) ||
+                IsMomentVideo(video) ||
+                IsCompilationVideo(video))
+            {
                 continue;
+            }
 
             if (!TryParseEpisode(video, albumSeasonHint, out short season, out short episode))
                 continue;
@@ -532,6 +537,51 @@ public class VkSeriesController : BaseOnlineController
         }
 
         episode = 0;
+        return false;
+    }
+
+    static bool IsCompilationVideo(Video video)
+    {
+        if (video == null)
+            return true;
+
+        string title = SearchNameTo.Convert(video.title);
+        string description = SearchNameTo.Convert(video.description);
+
+        bool HasMarker(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return false;
+
+            return value.Contains("всесерии") ||
+                   value.Contains("всесериисезона") ||
+                   value.Contains("полныйсезон") ||
+                   value.Contains("сезонполностью") ||
+                   value.Contains("allepisodes") ||
+                   value.Contains("fullseason");
+        }
+
+        if (HasMarker(title) || HasMarker(description))
+            return true;
+
+        string rawTitle = video.title ?? string.Empty;
+
+        // "1-7 серия", "1–10 серии", "episodes 1-8".
+        if (Regex.IsMatch(
+            rawTitle,
+            @"(?i)(?:\b\d{1,3}\s*[-–—]\s*\d{1,3}\s*(?:серия|серии|серий|episodes?|ep)\b|\b(?:episodes?|ep)\s*\d{1,3}\s*[-–—]\s*\d{1,3}\b)"))
+        {
+            return true;
+        }
+
+        // "1, 2, 3 серии" / "1 и 2 серия".
+        if (Regex.IsMatch(
+            rawTitle,
+            @"(?i)\b\d{1,3}(?:\s*[,/&]\s*\d{1,3}|\s+и\s+\d{1,3})+\s*(?:серия|серии|серий|episodes?)\b"))
+        {
+            return true;
+        }
+
         return false;
     }
 
