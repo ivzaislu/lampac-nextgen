@@ -22,7 +22,7 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L };
+    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262894L };
 
     private static string access_token;
     private static DateTime token_expires;
@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v7:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v8:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchTrustedAlbums();
             if (albums == null || albums.Count == 0)
@@ -159,7 +159,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v7:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v8:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -234,7 +234,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v7:channel:{ownerId}:albums"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v8:channel:{ownerId}:albums"), 20, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -278,7 +278,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v7:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v8:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
             var videos = new List<Video>();
