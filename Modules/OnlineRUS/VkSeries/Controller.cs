@@ -22,7 +22,7 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    private static readonly long[] trustedChannelOwners = new[] { -220020068L };
+    private static readonly long[] trustedChannelOwners = new[] { -220020068L, -221125211L, -221125343L };
 
     private static string access_token;
     private static DateTime token_expires;
@@ -63,33 +63,64 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v6:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v7:trusted:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchTrustedAlbums();
             if (albums == null || albums.Count == 0)
                 return e.Fail("trusted albums");
 
-            var result = albums
+            var candidates = albums
                 .Where(i => i != null && i.id > 0 && i.owner_id != 0)
                 .Select(i => new
                 {
                     album = i,
-                    season = ParseSeason(i.title),
                     score = AlbumScore(i, searchTitle, searchOriginalTitle, year)
                 })
-                .Where(i => i.season > 0 && i.score > 0)
-                .GroupBy(i => i.season)
+                .Where(i => i.score > 0)
+                .OrderByDescending(i => i.score)
+                .ThenByDescending(i => i.album.count)
+                .ThenByDescending(i => i.album.updated_time ?? 0)
+                .Take(20)
+                .ToList();
+
+            var seasonAlbums = new List<(VideoAlbum album, int score)>();
+
+            foreach (var candidate in candidates)
+            {
+                short seasonHint = (short)ParseSeason(candidate.album.title);
+                var videos = await GetAlbumVideos(candidate.album.owner_id, candidate.album.id);
+                if (videos == null || videos.Count == 0)
+                    continue;
+
+                var seasons = ParseVideos(videos, seasonHint)
+                    .Select(i => i.season)
+                    .Where(i => i > 0)
+                    .Distinct()
+                    .ToList();
+
+                foreach (short season in seasons)
+                {
+                    seasonAlbums.Add((new VideoAlbum
+                    {
+                        id = candidate.album.id,
+                        owner_id = candidate.album.owner_id,
+                        title = candidate.album.title,
+                        count = candidate.album.count,
+                        updated_time = candidate.album.updated_time,
+                        season = season
+                    }, candidate.score));
+                }
+            }
+
+            var result = seasonAlbums
+                .GroupBy(i => i.album.season)
                 .Select(g => g
                     .OrderByDescending(i => i.score)
                     .ThenByDescending(i => i.album.count)
                     .ThenByDescending(i => i.album.updated_time ?? 0)
-                    .First())
+                    .First()
+                    .album)
                 .OrderBy(i => i.season)
-                .Select(i =>
-                {
-                    i.album.season = i.season;
-                    return i.album;
-                })
                 .ToList();
 
             if (result.Count == 0)
@@ -128,7 +159,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v6:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v7:album:{ownerId}:{albumId}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -203,7 +234,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v6:channel:{ownerId}:albums"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v7:channel:{ownerId}:albums"), 20, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -247,7 +278,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v6:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v7:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
             var videos = new List<Video>();
