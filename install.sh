@@ -780,6 +780,10 @@ build_rsync_excludes() {
     "plugins/override/"
     "notifications_date.txt"
 
+    # Пользовательские переопределения сайтов NextHUB и Catalog ({site}.yaml, _.yaml)
+    "module/NextHUB/override/"
+    "module/Catalog/override/"
+
     # Файл с пользовательскими дополнительными исключениями
     "excludes.conf"
 
