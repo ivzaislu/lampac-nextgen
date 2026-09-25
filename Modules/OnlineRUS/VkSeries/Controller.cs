@@ -22,6 +22,8 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
+    // Compatibility fallback only. Discovery is global; these channels are no longer the search boundary.
+    private static readonly long[] fallbackChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262894L };
     private static string access_token;
     private static DateTime token_expires;
 
@@ -61,10 +63,27 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v11:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v12:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
-            var albums = await SearchGlobalAlbums(title, original_title, year);
-            if (albums == null || albums.Count == 0)
+            var albums = new List<VideoAlbum>();
+
+            var globalAlbums = await SearchGlobalAlbums(title, original_title, year);
+            if (globalAlbums != null && globalAlbums.Count > 0)
+                albums.AddRange(globalAlbums);
+
+            // Keep the old curated sources only as a compatibility fallback/source
+            // of native series_object hierarchies. They no longer restrict discovery.
+            var fallbackAlbums = await SearchFallbackAlbums();
+            if (fallbackAlbums != null && fallbackAlbums.Count > 0)
+                albums.AddRange(fallbackAlbums);
+
+            albums = albums
+                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                .GroupBy(i => $"{i.owner_id}:{i.id}")
+                .Select(g => g.OrderByDescending(i => i.updated_time ?? 0).First())
+                .ToList();
+
+            if (albums.Count == 0)
                 return e.Fail("search albums");
 
             var candidates = albums
@@ -74,7 +93,7 @@ public class VkSeriesController : BaseOnlineController
                 .OrderByDescending(i => i.score)
                 .ThenByDescending(i => i.album.count)
                 .ThenByDescending(i => i.album.updated_time ?? 0)
-                .Take(30)
+                .Take(50)
                 .ToList();
 
             if (candidates.Count == 0)
@@ -226,7 +245,7 @@ public class VkSeriesController : BaseOnlineController
     rhubFallback:
         // Keep the rendered episode cache separate from the raw album cache. Using
         // the same key recursively causes the per-key semaphore to wait on itself.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v11:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v12:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -288,6 +307,70 @@ public class VkSeriesController : BaseOnlineController
         });
     }
 
+    async Task<List<VideoAlbum>> SearchFallbackAlbums()
+    {
+        var result = new List<VideoAlbum>();
+
+        foreach (long ownerId in fallbackChannelOwners)
+        {
+            var albums = await GetOwnerAlbums(ownerId);
+            if (albums != null && albums.Count > 0)
+                result.AddRange(albums);
+        }
+
+        return result
+            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+            .GroupBy(i => $"{i.owner_id}:{i.id}")
+            .Select(g => g
+                .OrderByDescending(i => i.updated_time ?? 0)
+                .First())
+            .ToList();
+    }
+
+    async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
+    {
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v12:fallback:{ownerId}:albums"), 20, async () =>
+        {
+            const int pageSize = 100;
+            var albums = new List<VideoAlbum>();
+            int offset = 0;
+            int total = int.MaxValue;
+
+            while (offset < total && offset < 5000)
+            {
+                string url = $"{init.host}/method/video.getAlbums?v=5.264&client_id={client_id}";
+                string data = $"owner_id={ownerId}&count={pageSize}&offset={offset}&extended=1&need_system=0&access_token={access_token}";
+
+                var root = await httpHydra.Post<VideoAlbumsRoot>(url, data, textJson: true);
+                if (root?.error != null || root?.response == null)
+                    return null;
+
+                var items = root.response.items;
+                total = root.response.count;
+
+                if (items == null || items.Count == 0)
+                    break;
+
+                albums.AddRange(items);
+
+                int nextOffset = offset + items.Count;
+                if (nextOffset <= offset)
+                    break;
+
+                offset = nextOffset;
+
+                if (items.Count < pageSize)
+                    break;
+            }
+
+            return albums
+                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                .GroupBy(i => $"{i.owner_id}:{i.id}")
+                .Select(g => g.First())
+                .ToList();
+        });
+    }
+
     async Task<List<VideoAlbum>> SearchGlobalAlbums(string title, string originalTitle, short year)
     {
         var queries = new List<string>();
@@ -341,7 +424,7 @@ public class VkSeriesController : BaseOnlineController
         if (normalized == null)
             return null;
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v11:search:{normalized}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v12:search:{normalized}"), 20, async () =>
         {
             string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
             string data =
@@ -376,7 +459,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v11:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v12:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
@@ -576,37 +659,57 @@ public class VkSeriesController : BaseOnlineController
         if (value == null)
             return 0;
 
-        int score = 0;
-
-        void Match(string query)
-        {
-            if (string.IsNullOrWhiteSpace(query))
-                return;
-
-            if (value == query)
-                score = Math.Max(score, 220);
-            else if (value.StartsWith(query))
-                score = Math.Max(score, 180);
-            else if (value.Contains(query))
-                score = Math.Max(score, 120);
-        }
-
-        Match(searchTitle);
-        Match(searchOriginalTitle);
+        int score = Math.Max(
+            SeriesIdentityScore(value, searchTitle),
+            SeriesIdentityScore(value, searchOriginalTitle)
+        );
 
         if (score == 0)
             return 0;
 
-        if (year > 0)
+        string rawTitle = album?.title ?? string.Empty;
+        var years = Regex.Matches(rawTitle, @"\b(?:19|20)\d{2}\b")
+            .Cast<Match>()
+            .Select(i => i.Value)
+            .Distinct()
+            .ToList();
+
+        if (year > 0 && years.Count > 0)
         {
-            if (value.Contains(year.ToString()))
-                score += 30;
-            else if (Regex.IsMatch(value, @"\b(?:19|20)\d{2}\b"))
-                score -= 20;
+            if (!years.Contains(year.ToString()))
+                return 0;
+
+            score += 50;
         }
 
-        score += Math.Min(album.count, 50);
+        // Count is only a weak tie-breaker. Large unrelated playlists must never
+        // outrank an exact series identity merely because they contain more videos.
+        score += Math.Min(album.count, 30);
         return score;
+    }
+
+    static int SeriesIdentityScore(string value, string query)
+    {
+        if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(query))
+            return 0;
+
+        if (value == query)
+            return 1000;
+
+        if (!value.StartsWith(query))
+            return 0;
+
+        string suffix = value.Substring(query.Length);
+        if (string.IsNullOrEmpty(suffix))
+            return 1000;
+
+        // Accept only structural suffixes. This keeps "Кухня 6 сезон" while
+        // rejecting lookalikes such as "Пекельна кухня", "Кухня Вайта" and
+        // "Триггер дорама".
+        if (Regex.IsMatch(suffix, @"^(?:(?:19|20)\d{2}|\d{1,2}(?:сезон|season)|(?:сезон|season)\d{1,2}|сериал|serial|series)"))
+            return 900;
+
+        return 0;
     }
 
     static int ParseSeason(string value)
