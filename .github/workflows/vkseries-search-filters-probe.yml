@@ -1,0 +1,40 @@
+name: VkSeries search filters probe
+
+on:
+  push:
+    branches: [vkseries-api-probe-20260925]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  filters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Probe VK search filters
+        shell: bash
+        run: |
+          set -euo pipefail
+          CID=52461373
+          API=https://api.vkvideo.ru/method
+          TOKEN="$(curl -fsS -X POST 'https://login.vk.com/?act=get_anonym_token' --data-urlencode "client_id=$CID" | jq -r '.data.access_token // empty')"
+          test -n "$TOKEN"
+
+          call() {
+            local method="$1"; shift
+            curl -fsS -X POST "$API/$method?v=5.264&client_id=$CID" --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          for q in "Укрытие" "Кухня" "Триггер"; do
+            echo "===== FILTERS $q ====="
+            j="$(call catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'extended=1'               --data-urlencode 'count=50')"
+            jq '{search_filters:.response.search_filters, albums:[(.response.albums//[])[:20][]?|{owner_id,id,title,count}], catalog_titles:[(.response.catalog.sections//[])[]?.blocks[]?|select(.title!=null)|{title,albums_ids,videos_ids}]}' <<<"$j"
+
+            for ct in series serial playlist album video movie tv_show; do
+              f="$(call catalog.getVideoSearchWeb2                 --data-urlencode 'screen_ref=search_video_service'                 --data-urlencode 'input_method=keyboard_search_button'                 --data-urlencode "q=$q"                 --data-urlencode "content_type=$ct"                 --data-urlencode 'extended=1'                 --data-urlencode 'count=50')"
+              echo "--- content_type=$ct ---"
+              jq '{error:.error, albums:[(.response.albums//[])[:12][]?|{owner_id,id,title,count}], videos:[(.response.catalog_videos//[])[:8][]?.video|{owner_id,id,title,duration}]}' <<<"$f"
+            done
+          done
