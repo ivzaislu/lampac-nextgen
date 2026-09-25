@@ -72,6 +72,20 @@ jobs:
           int VideoScore(Video x,string st,string so,short year) =>
               (int)(videoScoreM.Invoke(null,new object?[]{x,st,so,year}) ?? 0);
           int ParseSeason(string? x) => (int)(parseSeasonM.Invoke(null,new object?[]{x}) ?? 0);
+          var parseVideosM = t.GetMethod("ParseVideos", BindingFlags.Static|BindingFlags.NonPublic)!;
+
+          List<(short season, short episode)> ParseVideos(List<Video> videos, short hint)
+          {
+              var enumerable=(System.Collections.IEnumerable?)parseVideosM.Invoke(null,new object?[]{videos,hint}) ?? Array.Empty<object>();
+              var result=new List<(short,short)>();
+              foreach(var item in enumerable)
+              {
+                  if(item==null) continue;
+                  var tt=item.GetType();
+                  result.Add(((short)(tt.GetProperty("season")!.GetValue(item)??(short)0),(short)(tt.GetProperty("episode")!.GetValue(item)??(short)0)));
+              }
+              return result;
+          }
 
           foreach (var show in shows)
           {
@@ -129,6 +143,31 @@ jobs:
               {
                   Console.WriteLine(JsonSerializer.Serialize(new{kind="video",x.score,x.season,x.v.owner_id,x.v.id,x.v.title,x.v.duration,has_files=x.v.files!=null}));
               }
+          }
+
+          Console.WriteLine("===== PARENT_VALIDATION =====");
+          var parents = new (string show, long owner, long album)[]
+          {
+              ("Симпсоны",-234262896,110),
+              ("Симпсоны",-126678864,174),
+              ("Южный парк",-238771812,274),
+              ("Южный парк",-235797860,414),
+              ("Кухня",-194453580,29),
+              ("Кухня",-180344905,12),
+              ("Триггер",-229684990,5),
+              ("Триггер",-31894620,53583149),
+              ("Слово пацана",-83831083,107),
+              ("Слово пацана",500872572,32)
+          };
+
+          foreach(var p in parents)
+          {
+              var videos=await AlbumVideos(p.owner,p.album);
+              var parsed=ParseVideos(videos,0);
+              var groups=parsed.GroupBy(x=>x.season).Where(g=>g.Key>0).OrderBy(g=>g.Key)
+                  .Select(g=>new{season=g.Key,episodes=g.Select(x=>x.episode).Distinct().Count(),first=g.Select(x=>x.episode).Min(),last=g.Select(x=>x.episode).Max()})
+                  .ToList();
+              Console.WriteLine(JsonSerializer.Serialize(new{kind="parent",p.show,p.owner,p.album,raw=videos.Count,seasons=groups}));
           }
 
           Console.WriteLine("===== TARGETED_GAPS =====");
@@ -206,6 +245,22 @@ jobs:
                   if(root?.response?.items==null||root.response.items.Count==0)break;
                   result.AddRange(root.response.items);
                   if(result.Count>=root.response.count||root.response.items.Count<100)break;
+              }
+              return result;
+          }
+
+          async Task<List<Video>> AlbumVideos(long owner,long album)
+          {
+              var result=new List<Video>();
+              for(int offset=0;offset<5000;offset+=200)
+              {
+                  var json=await Post($"{api}/video.getFromAlbum?v={v}&client_id={clientId}",new(){
+                      ["access_token"]=token,["owner_id"]=owner.ToString(),["album_id"]=album.ToString(),["count"]="200",["offset"]=offset.ToString(),["extended"]="1"
+                  });
+                  var root=JsonSerializer.Deserialize<VideoFromAlbumRoot>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+                  if(root?.response?.items==null||root.response.items.Count==0)break;
+                  foreach(var item in root.response.items){if(item?.video==null)continue;item.video.playlist_position=item.playlist_position;result.Add(item.video);}
+                  if(result.Count>=root.response.count||root.response.items.Count<200)break;
               }
               return result;
           }
