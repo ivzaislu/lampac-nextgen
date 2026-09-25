@@ -931,6 +931,13 @@ public class VkSeriesController : BaseOnlineController
             return true;
         }
 
+        if (video != null && video.playlist_position > 0)
+        {
+            season = albumSeasonHint;
+            episode = (short)Math.Min(video.playlist_position, short.MaxValue);
+            return true;
+        }
+
         return false;
     }
 
