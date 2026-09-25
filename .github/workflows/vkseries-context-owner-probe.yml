@@ -38,4 +38,12 @@ jobs:
               total="$(jq -r '.response.count // 0' <<<"$j")"
               (( offset + 100 >= total )) && break
             done
+
+          echo '===== Verify generic Simpsons albums ====='
+          for pair in '-268980 55063157' '-268980 55063164' '-268980 55063168' '-268980 55063172'; do
+            read -r owner album <<<"$pair"
+            echo "===== GENERIC_ALBUM $owner $album ====="
+            j="$(call_api video.getFromAlbum               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album"               --data-urlencode 'extended=1'               --data-urlencode 'count=8')"
+            jq -c '{count:.response.count,items:[(.response.items // [])[:8][]? | {playlist_position,title:.video.title,duration:.video.duration,has_files:(.video.files!=null)}]}' <<<"$j"
+          done
           done
