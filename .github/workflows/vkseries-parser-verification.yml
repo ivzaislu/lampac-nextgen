@@ -1,0 +1,160 @@
+name: VkSeries parser verification
+
+on:
+  push:
+    branches:
+      - vkseries-global-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  parser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+      - name: Run parser cases against actual VkSeries assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/vkseries-parser-probe
+          cat >/tmp/vkseries-parser-probe/Probe.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <OutputType>Exe</OutputType>
+              <ImplicitUsings>enable</ImplicitUsings>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="${GITHUB_WORKSPACE}/Modules/OnlineRUS/VkSeries/VkSeries.csproj" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+          cat >/tmp/vkseries-parser-probe/Program.cs <<'EOF'
+          using System.Collections;
+          using System.Reflection;
+          using VkSeries;
+
+          static Video V(string title, long duration, int position = 0) => new()
+          {
+              owner_id = -1,
+              id = Random.Shared.Next(1, int.MaxValue),
+              title = title,
+              duration = duration,
+              playlist_position = position,
+              files = new VideoFiles { mp4_720 = "https://example.invalid/video.mp4" }
+          };
+
+          static List<(short season, short episode)> Parse(short hint, params Video[] videos)
+          {
+              var method = typeof(VkSeriesController).GetMethod(
+                  "ParseVideos",
+                  BindingFlags.Static | BindingFlags.NonPublic
+              ) ?? throw new Exception("ParseVideos not found");
+
+              var value = method.Invoke(null, new object[] { videos, hint }) as IEnumerable
+                  ?? throw new Exception("ParseVideos result is null");
+
+              var result = new List<(short, short)>();
+              foreach (var item in value)
+              {
+                  if (item is null) continue;
+                  var t = item.GetType();
+                  short season = (short)(t.GetProperty("season")?.GetValue(item) ?? (short)0);
+                  short episode = (short)(t.GetProperty("episode")?.GetValue(item) ?? (short)0);
+                  result.Add((season, episode));
+              }
+              return result;
+          }
+
+          static void Expect(string name, List<(short season, short episode)> actual, params (short season, short episode)[] expected)
+          {
+              if (!actual.SequenceEqual(expected))
+              {
+                  throw new Exception(
+                      $"{name}: expected [{string.Join(",", expected)}], got [{string.Join(",", actual)}]"
+                  );
+              }
+
+              Console.WriteLine($"PASS {name}: [{string.Join(",", actual)}]");
+          }
+
+          Expect(
+              "single whole-season file is rejected",
+              Parse(1, V("Кухня сериал 1 сезон", 6075, 1))
+          );
+
+          Expect(
+              "single long whole-season file is rejected",
+              Parse(5, V("Симпсоны 5 сезон", 29045, 1))
+          );
+
+          Expect(
+              "episode range compilation is rejected",
+              Parse(1, V("Кухня | Сезон 1 | Серии 1 - 20", 3233, 1))
+          );
+
+          Expect(
+              "multi-season compilation is rejected",
+              Parse(1, V("Южный парк 1-13 сезон", 261786, 1))
+          );
+
+          Expect(
+              "normal explicit episode",
+              Parse(1, V("Кухня | 1 сезон 1 серия", 1524, 1)),
+              (1, 1)
+          );
+
+          Expect(
+              "short explicit episode survives",
+              Parse(1, V("Шоу 1 сезон 2 серия", 420, 2)),
+              (1, 2)
+          );
+
+          Expect(
+              "numbered filenames beat playlist position",
+              Parse(
+                  1,
+                  V("07 Pinkeye.mkv", 1327, 1),
+                  V("08 Damien.mkv", 1327, 2)
+              ),
+              (1, 7),
+              (1, 8)
+          );
+
+          Expect(
+              "generic multi-item playlist can use positions",
+              Parse(
+                  1,
+                  V("Видео от автора", 1327, 1),
+                  V("Видео от автора", 1327, 2)
+              ),
+              (1, 1),
+              (1, 2)
+          );
+
+          Expect(
+              "single generic playlist item cannot become episode one",
+              Parse(1, V("Видео от автора", 1327, 1))
+          );
+
+          Expect(
+              "moment stays rejected even inside ordered playlist",
+              Parse(
+                  1,
+                  V("Лучшие моменты сериала", 513, 1),
+                  V("02 Normal episode.mkv", 1327, 2)
+              ),
+              (1, 2)
+          );
+          EOF
+
+          dotnet run --project /tmp/vkseries-parser-probe/Probe.csproj --configuration Release
