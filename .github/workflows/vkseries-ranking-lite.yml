@@ -42,6 +42,7 @@ jobs:
           using System.Reflection;
           using System.Text.Json;
           using VkSeries;
+          using Shared.Services.Utilities;
 
           var shows = new (string title, string original, short year, int expectedMax)[]
           {
@@ -65,9 +66,7 @@ jobs:
           var albumScoreM = t.GetMethod("AlbumScore", BindingFlags.Static|BindingFlags.NonPublic)!;
           var videoScoreM = t.GetMethod("SeriesVideoScore", BindingFlags.Static|BindingFlags.NonPublic)!;
           var parseSeasonM = t.GetMethod("ParseSeason", BindingFlags.Static|BindingFlags.NonPublic)!;
-          var normM = typeof(Shared.Services.Utilities.SearchNameTo).GetMethod("Convert", new[]{typeof(string)})!;
-
-          string Norm(string? x) => (string?)normM.Invoke(null,new object?[]{x}) ?? "";
+          string Norm(string? x) => SearchNameTo.Convert(x) ?? "";
           int AlbumScore(VideoAlbum a,string st,string so,short year) =>
               (int)(albumScoreM.Invoke(null,new object?[]{a,st,so,year}) ?? 0);
           int VideoScore(Video x,string st,string so,short year) =>
