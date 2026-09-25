@@ -812,7 +812,7 @@ public class VkSeriesController : BaseOnlineController
             else if (value.StartsWith(query))
                 score = Math.Max(score, 180);
             else if (value.Contains(query))
-                score = Math.Max(score, 120);
+                score = Math.Max(score, 60);
         }
 
         Match(searchTitle);
