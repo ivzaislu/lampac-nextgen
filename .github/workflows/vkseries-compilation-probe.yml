@@ -47,7 +47,7 @@ jobs:
           done
 
           echo '===== Probe discovered owner albums ====='
-          for owner in -209745116 -199103112 -102553865 -240197792; do
+          for owner in -209745116 -199103112 -222948973 -228778077 -102553865 -240197792; do
             echo "===== OWNER $owner ====="
             j="$(call_api video.getAlbums               --data-urlencode "owner_id=$owner"               --data-urlencode 'extended=1'               --data-urlencode 'need_system=0'               --data-urlencode 'count=100'               --data-urlencode 'offset=0')"
             jq '{
