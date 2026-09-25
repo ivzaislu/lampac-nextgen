@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v26:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v27:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchGlobalAlbums(title, original_title, year);
             var directVideos = await SearchGlobalVideos(title, original_title, year, 0);
@@ -484,7 +484,7 @@ public class VkSeriesController : BaseOnlineController
     {
     rhubFallback:
         // Keep the rendered cache separate from the raw album cache.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v26:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v27:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -555,7 +555,7 @@ public class VkSeriesController : BaseOnlineController
         string searchTitle = SearchNameTo.Convert(title);
         string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v26:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v27:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await SearchGlobalVideos(title, original_title, year, season);
             if (videos == null || videos.Count == 0)
@@ -623,7 +623,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v26:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v27:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<VideoAlbum>();
 
@@ -978,7 +978,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v26:owner:{ownerId}:albums"), 60, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v27:owner:{ownerId}:albums"), 60, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -1026,7 +1026,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v26:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v27:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<Video>();
 
@@ -1057,7 +1057,7 @@ public class VkSeriesController : BaseOnlineController
         if (string.IsNullOrWhiteSpace(normalized))
             normalized = query.Trim().ToLowerInvariant();
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v26:catalogvideos:{normalized}"), 10, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v27:catalogvideos:{normalized}"), 10, async () =>
         {
             const string apiVersion = "5.282";
             const int maxPages = 4;
@@ -1130,7 +1130,7 @@ public class VkSeriesController : BaseOnlineController
         // One catalog response contains both response.albums and video results.
         // Cache it at the query level so album discovery and direct fallback do not
         // send the same VK search request twice.
-        return await InvokeCache<Root>(ipkey($"vkseries:v26:catalog:{normalized}"), 5, async () =>
+        return await InvokeCache<Root>(ipkey($"vkseries:v27:catalog:{normalized}"), 5, async () =>
         {
             string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
             string data =
@@ -1193,9 +1193,14 @@ public class VkSeriesController : BaseOnlineController
                         Add($"{name} сезон {season}");
 
                         // Direct video search often exposes playable reuploads only
-                        // when the query explicitly asks for episodes.
+                        // when the query explicitly asks for concrete episodes.
                         if (!albums)
+                        {
                             Add($"{name} {season} сезон серия");
+                            Add($"{name} {season} сезон 1 серия");
+                            Add($"{name} {season} сезон 2 серия");
+                            Add($"{name} {season} сезон 3 серия");
+                        }
                     }
                     else
                     {
@@ -1203,7 +1208,12 @@ public class VkSeriesController : BaseOnlineController
                         Add($"{name} S{season:00}");
 
                         if (!albums)
+                        {
                             Add($"{name} season {season} episode");
+                            Add($"{name} S{season:00}E01");
+                            Add($"{name} S{season:00}E02");
+                            Add($"{name} S{season:00}E03");
+                        }
                     }
 
                     if (year > 0)
@@ -1225,12 +1235,12 @@ public class VkSeriesController : BaseOnlineController
             }
         }
 
-        return queries.Take(10).ToList();
+        return queries.Take(season > 0 && !albums ? 14 : 10).ToList();
     }
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v26:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v27:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -1245,7 +1255,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v26:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v27:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
@@ -1406,6 +1416,7 @@ public class VkSeriesController : BaseOnlineController
         {
             Append(files?.hls_fmp4, "auto");
             Append(files?.hls, "auto");
+            Append(files?.hls_ondemand, "auto");
         }
 
         return streams;
@@ -1573,8 +1584,12 @@ public class VkSeriesController : BaseOnlineController
         // Accept only structural suffixes. This keeps "Кухня 6 сезон" while
         // rejecting lookalikes such as "Пекельна кухня", "Кухня Вайта" and
         // "Триггер дорама".
-        if (Regex.IsMatch(suffix, @"^(?:(?:19|20)\d{2}|\d{1,2}(?:сезон|season)|(?:сезон|season)\d{1,2}|сериал|serial|series)"))
+        if (Regex.IsMatch(
+            suffix,
+            @"^(?:(?:19|20)\d{2}|\d{1,2}(?:сезон|season)|(?:сезон|season)\d{1,2}|s\d{1,2}e\d{1,3}|сериал|serial|series)"))
+        {
             return 900;
+        }
 
         return 0;
     }
@@ -1978,6 +1993,9 @@ public class VkSeriesController : BaseOnlineController
                name.Contains("подборк") ||
                name.Contains("лучшиемомент") ||
                name.Contains("bestmoment") ||
+               name.Contains("закулис") ||
+               name.Contains("съемк") ||
+               name.Contains("съёмк") ||
                name.Contains("премьера") ||
                name.Contains("обзор");
     }
@@ -2075,7 +2093,9 @@ public class VkSeriesController : BaseOnlineController
         if (!string.IsNullOrEmpty(files?.mp4_360)) return 4;
         if (!string.IsNullOrEmpty(files?.mp4_240)) return 3;
         if (!string.IsNullOrEmpty(files?.mp4_144)) return 2;
-        if (!string.IsNullOrEmpty(files?.hls_fmp4) || !string.IsNullOrEmpty(files?.hls)) return 1;
+        if (!string.IsNullOrEmpty(files?.hls_fmp4) ||
+            !string.IsNullOrEmpty(files?.hls) ||
+            !string.IsNullOrEmpty(files?.hls_ondemand)) return 1;
         return 0;
     }
 
