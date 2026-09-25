@@ -202,11 +202,18 @@ public class VkSeriesController : BaseOnlineController
 
         var scoredCandidates = albums
             .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-            .Select(i => (
-                album: i,
-                score: AlbumScore(i, searchTitle, searchOriginalTitle, year),
-                season: (short)ParseSeason(i.title)
-            ))
+            .Select(i =>
+            {
+                int score = AlbumScore(i, searchTitle, searchOriginalTitle, year);
+                if (score == 0 && i.context_verified && IsGenericSeasonAlbum(i))
+                    score = 850 + Math.Min(i.count, 30);
+
+                return (
+                    album: i,
+                    score,
+                    season: (short)ParseSeason(i.title)
+                );
+            })
             .Where(i => i.score > 0)
             .Where(i => requiredSeason <= 0 || i.season == 0 || i.season == requiredSeason)
             .ToList();
@@ -524,42 +531,127 @@ public class VkSeriesController : BaseOnlineController
             return seedAlbums ?? new List<VideoAlbum>();
 
         var result = new List<VideoAlbum>(seedAlbums);
+        var ownerScores = new Dictionary<long, int>();
+        var contextualOwners = new HashSet<long>();
 
-        var owners = seedAlbums
-            .Where(i => i != null && i.owner_id != 0)
-            .Select(i => new
+        foreach (var seed in seedAlbums.Where(i => i != null && i.owner_id != 0))
+        {
+            int score = AlbumScore(seed, searchTitle, searchOriginalTitle, year);
+            if (score > 0)
             {
-                album = i,
-                score = AlbumScore(i, searchTitle, searchOriginalTitle, year)
-            })
-            .Where(i => i.score > 0)
-            .GroupBy(i => i.album.owner_id)
-            .Select(g => new
-            {
-                ownerId = g.Key,
-                score = g.Max(i => i.score) + Math.Min(g.Count(), 5) * 100
-            })
-            .OrderByDescending(i => i.score)
-            .Take(6)
+                int ownerScore = score + Math.Min(seed.count, 30);
+                if (!ownerScores.TryGetValue(seed.owner_id, out int current) || ownerScore > current)
+                    ownerScores[seed.owner_id] = ownerScore;
+            }
+        }
+
+        // VK search sometimes returns a correct album named only "9 Сезон".
+        // Such a title has no series identity, so verify the content before trusting
+        // its owner. This is generic: no owner id or show name is hard-coded.
+        var genericSeeds = seedAlbums
+            .Where(i => i != null &&
+                        i.owner_id != 0 &&
+                        AlbumScore(i, searchTitle, searchOriginalTitle, year) == 0 &&
+                        IsGenericSeasonAlbum(i))
+            .OrderByDescending(i => i.count)
+            .ThenByDescending(i => i.updated_time ?? 0)
+            .Take(8)
             .ToList();
 
-        foreach (var owner in owners)
+        foreach (var seed in genericSeeds)
         {
-            var ownerAlbums = await GetDiscoveredOwnerAlbums(owner.ownerId);
+            if (!await ValidateGenericSeasonAlbum(seed, searchTitle, searchOriginalTitle, year))
+                continue;
+
+            seed.context_verified = true;
+            contextualOwners.Add(seed.owner_id);
+
+            if (!ownerScores.TryGetValue(seed.owner_id, out int current) || current < 850)
+                ownerScores[seed.owner_id] = 850;
+        }
+
+        var owners = ownerScores
+            .OrderByDescending(i => i.Value)
+            .Take(8)
+            .Select(i => i.Key)
+            .ToList();
+
+        foreach (long ownerId in owners)
+        {
+            var ownerAlbums = await GetDiscoveredOwnerAlbums(ownerId);
             if (ownerAlbums == null || ownerAlbums.Count == 0)
                 continue;
 
-            result.AddRange(ownerAlbums
-                .Where(i => AlbumScore(i, searchTitle, searchOriginalTitle, year) > 0));
+            bool contextual = contextualOwners.Contains(ownerId);
+            int genericCount = contextual
+                ? ownerAlbums.Count(IsGenericSeasonAlbum)
+                : 0;
+
+            // Only expand nameless sibling seasons when the owner really looks like
+            // a season collection, not a random profile that happened to contain one.
+            bool allowGenericSiblings =
+                contextual &&
+                genericCount >= 3 &&
+                genericCount * 2 >= ownerAlbums.Count;
+
+            foreach (var album in ownerAlbums)
+            {
+                if (AlbumScore(album, searchTitle, searchOriginalTitle, year) > 0)
+                {
+                    result.Add(album);
+                    continue;
+                }
+
+                if (allowGenericSiblings && IsGenericSeasonAlbum(album))
+                {
+                    album.context_verified = true;
+                    result.Add(album);
+                }
+            }
         }
 
         return result
             .Where(i => i != null && i.id > 0 && i.owner_id != 0)
             .GroupBy(i => $"{i.owner_id}:{i.id}")
             .Select(g => g
-                .OrderByDescending(i => i.updated_time ?? 0)
+                .OrderByDescending(i => i.context_verified)
+                .ThenByDescending(i => i.updated_time ?? 0)
                 .First())
             .ToList();
+    }
+
+    async Task<bool> ValidateGenericSeasonAlbum(
+        VideoAlbum album,
+        string searchTitle,
+        string searchOriginalTitle,
+        short year)
+    {
+        if (!IsGenericSeasonAlbum(album))
+            return false;
+
+        var videos = await GetAlbumVideos(album.owner_id, album.id);
+        if (videos == null || videos.Count == 0)
+            return false;
+
+        int checkedCount = 0;
+        int identityHits = 0;
+
+        foreach (var video in videos.Take(12))
+        {
+            if (video == null)
+                continue;
+
+            checkedCount++;
+
+            if (SeriesVideoScore(video, searchTitle, searchOriginalTitle, year) >= 900)
+                identityHits++;
+
+            if (identityHits >= 2)
+                return true;
+        }
+
+        // Small playlists can still establish identity with one strong matching video.
+        return identityHits == 1 && checkedCount <= 2;
     }
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
@@ -1064,6 +1156,18 @@ public class VkSeriesController : BaseOnlineController
         return 0;
     }
 
+    static bool IsGenericSeasonAlbum(VideoAlbum album)
+    {
+        if (album == null || string.IsNullOrWhiteSpace(album.title))
+            return false;
+
+        string value = album.title.Trim();
+
+        return Regex.IsMatch(
+            value,
+            @"(?i)^(?:\d{1,2}\s*(?:сезон|cезон|season)|(?:сезон|cезон|season)\s*\d{1,2})\s*[.!_-]*$");
+    }
+
     static int ParseSeason(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -1071,8 +1175,8 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string pattern in new[]
         {
-            @"(?i)\b(?<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\b",
-            @"(?i)\b(?:сезон|season)\s*[№#]?\s*(?<s>\d{1,2})\b",
+            @"(?i)\b(?<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|cезон|season)\b",
+            @"(?i)\b(?:сезон|cезон|season)\s*[№#]?\s*(?<s>\d{1,2})\b",
             @"(?i)\bS(?<s>\d{1,2})\b"
         })
         {
