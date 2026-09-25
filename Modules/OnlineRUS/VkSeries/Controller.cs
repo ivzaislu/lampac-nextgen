@@ -1544,35 +1544,31 @@ public class VkSeriesController : BaseOnlineController
             if (!string.IsNullOrEmpty(access_token) && token_expires > DateTime.UtcNow)
                 return true;
 
-            string url = "https://login.vk.com/?act=get_anonym_token";
-            string postData = $"client_secret=o557NLIkAErNhakXrQ7A&client_id={client_id}&scopes=audio_anonymous%2Cvideo_anonymous%2Cphotos_anonymous%2Cprofile_anonymous&isApiOauthAnonymEnabled=false&version=1&app_id=6287487";
+            // VK Video exposes its own anonymous-token method. This removes the
+            // legacy login.vk.com flow and the embedded client_secret entirely.
+            string url = $"{init.host}/method/auth.getAnonymToken?v=5.264&client_id={client_id}";
 
             JObject root = null;
 
             try
             {
-                root = await httpHydra.Post<JObject>(url, postData);
+                root = await httpHydra.Post<JObject>(url, string.Empty);
             }
             catch { }
 
-            if (root == null || !root.ContainsKey("data"))
-                return false;
+            var response = root?["response"];
+            string token = response?["token"]?.ToString();
 
-            var data = root["data"];
-
-            string token = data?["access_token"]?.ToString();
             if (string.IsNullOrEmpty(token))
                 return false;
 
             access_token = token;
 
-            long? expires = data?["expires"]?.ToObject<long?>()
-                ?? data?["expired_at"]?.ToObject<long?>()
-                ?? -1;
+            long? expiredAt = response?["expired_at"]?.ToObject<long?>();
 
-            token_expires = expires == -1
-                ? DateTime.UtcNow.AddHours(10)
-                : DateTimeOffset.FromUnixTimeSeconds(expires.Value).UtcDateTime.AddHours(-4);
+            token_expires = expiredAt > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(expiredAt.Value).UtcDateTime.AddMinutes(-10)
+                : DateTime.UtcNow.AddHours(6);
 
             return true;
         }
