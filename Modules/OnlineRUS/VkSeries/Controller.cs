@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v19:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v20:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchGlobalAlbums(title, original_title, year);
             albums = await ExpandDiscoveredOwnerAlbums(
@@ -92,7 +92,9 @@ public class VkSeriesController : BaseOnlineController
                     .DefaultIfEmpty(0)
                     .Max();
 
-                int scanMax = Math.Min(Math.Max(maxSeason + 2, 3), 50);
+                int scanMax = maxSeason > 0
+                    ? Math.Min(Math.Max(maxSeason + 2, 3), 50)
+                    : 12;
 
                 short targetSeason = Enumerable.Range(1, scanMax)
                     .Select(i => (short)i)
@@ -329,6 +331,15 @@ public class VkSeriesController : BaseOnlineController
                 if (episodeCount == 0)
                     continue;
 
+                // A parent album can contain promos, clips and unrelated numbered
+                // videos. Without an explicit season in the album title, require
+                // a real cluster of full episodes before inferring a season.
+                if (candidate.season <= 0 &&
+                    !IsConfidentEpisodeSet(group, minEpisodes: 3, minMedianSeconds: 8 * 60))
+                {
+                    continue;
+                }
+
                 int quality = group
                     .Select(i => QualityScore(i.video?.files))
                     .DefaultIfEmpty(0)
@@ -360,10 +371,13 @@ public class VkSeriesController : BaseOnlineController
         if (videos == null || videos.Count == 0)
             return;
 
-        var parsed = ParseVideos(
-                videos.Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
-                seasonHint)
-            .ToList();
+        var parsed = ParseTrustedDirectVideos(
+            videos,
+            searchTitle,
+            searchOriginalTitle,
+            year,
+            seasonHint
+        );
 
         foreach (var group in parsed.GroupBy(i => i.season))
         {
@@ -371,7 +385,7 @@ public class VkSeriesController : BaseOnlineController
                 continue;
 
             int count = group.Select(i => i.episode).Distinct().Count();
-            if (count < 2)
+            if (count < 3)
                 continue;
 
             int quality = group
@@ -394,7 +408,7 @@ public class VkSeriesController : BaseOnlineController
     {
     rhubFallback:
         // Keep the rendered cache separate from the raw album cache.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v19:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v20:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -419,9 +433,11 @@ public class VkSeriesController : BaseOnlineController
             var albumParsed = ParseVideos(scopedVideos.Count > 0 ? scopedVideos : cache.Value, albumSeasonHint)
                 .Where(i => i.season == season);
 
-            var directParsed = ParseVideos(
-                    (directVideos ?? new List<Video>())
-                        .Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
+            var directParsed = ParseTrustedDirectVideos(
+                    directVideos ?? new List<Video>(),
+                    searchTitle,
+                    searchOriginalTitle,
+                    year,
                     season)
                 .Where(i => i.season == season);
 
@@ -447,7 +463,7 @@ public class VkSeriesController : BaseOnlineController
         string searchTitle = SearchNameTo.Convert(title);
         string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v19:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v20:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await SearchGlobalVideos(title, original_title, year, season);
             if (videos == null || videos.Count == 0)
@@ -461,8 +477,11 @@ public class VkSeriesController : BaseOnlineController
 
         return ContentTpl(cache, () =>
         {
-            var parsed = ParseVideos(
-                    cache.Value.Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
+            var parsed = ParseTrustedDirectVideos(
+                    cache.Value,
+                    searchTitle,
+                    searchOriginalTitle,
+                    year,
                     season)
                 .Where(i => i.season == season)
                 .GroupBy(i => i.episode)
@@ -512,7 +531,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v19:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v20:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<VideoAlbum>();
 
@@ -693,7 +712,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v19:owner:{ownerId}:albums"), 60, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v20:owner:{ownerId}:albums"), 60, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -741,7 +760,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v19:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v20:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<Video>();
 
@@ -784,7 +803,7 @@ public class VkSeriesController : BaseOnlineController
         // One catalog response contains both response.albums and video results.
         // Cache it at the query level so album discovery and direct fallback do not
         // send the same VK search request twice.
-        return await InvokeCache<Root>(ipkey($"vkseries:v19:catalog:{normalized}"), 5, async () =>
+        return await InvokeCache<Root>(ipkey($"vkseries:v20:catalog:{normalized}"), 5, async () =>
         {
             string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
             string data =
@@ -808,50 +827,75 @@ public class VkSeriesController : BaseOnlineController
             }
         }
 
-        foreach (string name in new[] { title, originalTitle })
+        IEnumerable<string> NameVariants(string value)
         {
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
+            if (string.IsNullOrWhiteSpace(value))
+                yield break;
 
-            bool cyrillic = Regex.IsMatch(name, @"[А-Яа-яЁё]");
+            string original = Regex.Replace(value.Trim(), @"\s+", " ");
+            yield return original;
 
-            if (season > 0)
+            string noYo = original
+                .Replace('ё', 'е')
+                .Replace('Ё', 'Е');
+
+            if (!string.Equals(noYo, original, StringComparison.Ordinal))
+                yield return noYo;
+
+            string noDash = Regex.Replace(noYo, @"[-–—]+", " ");
+            noDash = Regex.Replace(noDash, @"\s+", " ").Trim();
+
+            if (!string.Equals(noDash, original, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(noDash, noYo, StringComparison.OrdinalIgnoreCase))
             {
-                if (cyrillic)
+                yield return noDash;
+            }
+        }
+
+        foreach (string rawName in new[] { title, originalTitle })
+        {
+            foreach (string name in NameVariants(rawName))
+            {
+                bool cyrillic = Regex.IsMatch(name, @"[А-Яа-яЁё]");
+
+                if (season > 0)
                 {
-                    Add($"{name} {season} сезон");
-                    Add($"{name} сезон {season}");
+                    if (cyrillic)
+                    {
+                        Add($"{name} {season} сезон");
+                        Add($"{name} сезон {season}");
+                    }
+                    else
+                    {
+                        Add($"{name} season {season}");
+                        Add($"{name} S{season:00}");
+                    }
+
+                    if (year > 0)
+                        Add($"{name} {year} {(cyrillic ? $"{season} сезон" : $"season {season}")}");
                 }
                 else
                 {
-                    Add($"{name} season {season}");
-                    Add($"{name} S{season:00}");
-                }
+                    Add(name);
 
-                if (year > 0)
-                    Add($"{name} {year} {(cyrillic ? $"{season} сезон" : $"season {season}")}");
-            }
-            else
-            {
-                Add(name);
+                    if (year > 0)
+                        Add($"{name} {year}");
 
-                if (year > 0)
-                    Add($"{name} {year}");
-
-                if (albums)
-                {
-                    Add(cyrillic ? $"{name} сезон" : $"{name} season");
-                    Add(cyrillic ? $"{name} сериал" : $"{name} series");
+                    if (albums)
+                    {
+                        Add(cyrillic ? $"{name} сезон" : $"{name} season");
+                        Add(cyrillic ? $"{name} сериал" : $"{name} series");
+                    }
                 }
             }
         }
 
-        return queries.Take(6).ToList();
+        return queries.Take(10).ToList();
     }
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v19:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v20:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -866,7 +910,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v19:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v20:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
@@ -970,6 +1014,7 @@ public class VkSeriesController : BaseOnlineController
             .Where(video =>
                 video != null &&
                 !IsNoise(video.title) &&
+                !IsNoise(video.description) &&
                 !IsMomentVideo(video) &&
                 !IsCompilationVideo(video, albumSeasonHint) &&
                 QualityScore(video.files) > 0)
@@ -1486,10 +1531,22 @@ public class VkSeriesController : BaseOnlineController
             Regex.IsMatch(raw, @"(?i)\b(?:сезон|сезоны|сезонов|season|seasons)\b") ||
             Regex.IsMatch(raw, @"(?i)\bS\d{1,2}\b");
 
+        // Phrases like "1 season 8 episodes" are counts, not episode #8.
+        if (video.duration >= 60 * 60 &&
+            Regex.IsMatch(
+                raw,
+                @"(?i)\b\d{1,2}\s*(?:сезон|season)\D{0,24}\d{1,3}\s*(?:серии|серий|episodes?)\b"))
+        {
+            return true;
+        }
+
+        // Even if the title syntactically resembles one episode, a three-hour serial
+        // video is overwhelmingly a concatenation on VK and must not become E08/E20.
+        if (hasExplicitEpisode && video.duration >= 3 * 60 * 60)
+            return true;
+
         // VK frequently exposes an entire season as one playable file without saying
-        // "all episodes" in the title: e.g. just "Show - 5 season". Treat a very long
-        // season-labelled file as a compilation, but do not reject a normal episode
-        // that explicitly carries an episode number.
+        // "all episodes" in the title: e.g. just "Show - 5 season".
         if (!hasExplicitEpisode && hasSeasonMarker && video.duration >= 150 * 60)
             return true;
 
@@ -1555,8 +1612,72 @@ public class VkSeriesController : BaseOnlineController
                name.Contains("trailer") ||
                name.Contains("тизер") ||
                name.Contains("teaser") ||
+               name.Contains("анонс") ||
+               name.Contains("promo") ||
+               name.Contains("промо") ||
+               name.Contains("preview") ||
+               name.Contains("превью") ||
                name.Contains("премьера") ||
                name.Contains("обзор");
+    }
+
+    static List<ParsedEpisode> ParseTrustedDirectVideos(
+        IEnumerable<Video> videos,
+        string searchTitle,
+        string searchOriginalTitle,
+        short year,
+        short seasonHint)
+    {
+        var parsed = ParseVideos(
+                (videos ?? Enumerable.Empty<Video>())
+                    .Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
+                seasonHint)
+            .ToList();
+
+        return parsed
+            .GroupBy(i => i.season)
+            .Where(g => g.Key > 0 &&
+                        IsConfidentEpisodeSet(g, minEpisodes: 3, minMedianSeconds: 8 * 60))
+            .SelectMany(g => g)
+            .ToList();
+    }
+
+    static bool IsConfidentEpisodeSet(
+        IEnumerable<ParsedEpisode> episodes,
+        int minEpisodes,
+        int minMedianSeconds)
+    {
+        var unique = (episodes ?? Enumerable.Empty<ParsedEpisode>())
+            .Where(i => i != null && i.episode > 0 && i.video != null)
+            .GroupBy(i => i.episode)
+            .Select(g => g
+                .OrderByDescending(i => i.video.duration)
+                .First())
+            .OrderBy(i => i.episode)
+            .ToList();
+
+        if (unique.Count < minEpisodes)
+            return false;
+
+        int first = unique.First().episode;
+        int last = unique.Last().episode;
+        int span = last - first + 1;
+
+        // Reject sparse search noise such as E2/E4/E5/E13 from an unrelated show.
+        if (span > unique.Count * 2)
+            return false;
+
+        var durations = unique
+            .Where(i => i.video.duration > 0)
+            .Select(i => i.video.duration)
+            .OrderBy(i => i)
+            .ToList();
+
+        if (durations.Count < minEpisodes)
+            return false;
+
+        long median = durations[durations.Count / 2];
+        return median >= minMedianSeconds;
     }
 
     static int EpisodeDurationScore(IEnumerable<ParsedEpisode> episodes)
