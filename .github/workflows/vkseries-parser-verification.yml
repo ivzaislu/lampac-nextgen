@@ -147,6 +147,15 @@ jobs:
           );
 
           Expect(
+              "parent album of season files cannot become fake episodes",
+              Parse(
+                  0,
+                  V("Шоу 1 сезон", 5400, 1),
+                  V("Шоу 2 сезон", 5400, 2)
+              )
+          );
+
+          Expect(
               "moment stays rejected even inside ordered playlist",
               Parse(
                   1,
