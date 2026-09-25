@@ -63,10 +63,22 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v22:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v23:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchGlobalAlbums(title, original_title, year);
             var directVideos = await SearchGlobalVideos(title, original_title, year, 0);
+
+            var groupAlbums = await DiscoverAlbumsFromSearchGroups(
+                title,
+                original_title,
+                year,
+                0,
+                searchTitle,
+                searchOriginalTitle
+            );
+
+            if (groupAlbums.Count > 0)
+                albums.AddRange(groupAlbums);
 
             var videoOwnerAlbums = await DiscoverAlbumsFromStrongVideoOwners(
                 directVideos,
@@ -119,6 +131,19 @@ public class VkSeriesController : BaseOnlineController
                 attemptedSeasons.Add(targetSeason);
 
                 var extraAlbums = await SearchGlobalAlbums(title, original_title, year, targetSeason);
+
+                var targetedGroupAlbums = await DiscoverAlbumsFromSearchGroups(
+                    title,
+                    original_title,
+                    year,
+                    targetSeason,
+                    searchTitle,
+                    searchOriginalTitle
+                );
+
+                if (targetedGroupAlbums.Count > 0)
+                    extraAlbums.AddRange(targetedGroupAlbums);
+
                 extraAlbums = await ExpandDiscoveredOwnerAlbums(
                     extraAlbums,
                     searchTitle,
@@ -459,7 +484,7 @@ public class VkSeriesController : BaseOnlineController
     {
     rhubFallback:
         // Keep the rendered cache separate from the raw album cache.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v22:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v23:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -514,7 +539,7 @@ public class VkSeriesController : BaseOnlineController
         string searchTitle = SearchNameTo.Convert(title);
         string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v22:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v23:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await SearchGlobalVideos(title, original_title, year, season);
             if (videos == null || videos.Count == 0)
@@ -582,7 +607,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v22:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v23:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<VideoAlbum>();
 
@@ -601,6 +626,125 @@ public class VkSeriesController : BaseOnlineController
                 .Select(g => g.OrderByDescending(i => i.updated_time ?? 0).First())
                 .ToList();
         });
+    }
+
+    async Task<List<VideoAlbum>> DiscoverAlbumsFromSearchGroups(
+        string title,
+        string originalTitle,
+        short year,
+        short season,
+        string searchTitle,
+        string searchOriginalTitle)
+    {
+        var groups = new Dictionary<long, (VkGroup group, int score)>();
+
+        foreach (string query in BuildSearchQueries(title, originalTitle, year, season, albums: true))
+        {
+            var root = await SearchCatalog(query);
+            if (root?.response?.groups == null)
+                continue;
+
+            foreach (var group in root.response.groups)
+            {
+                if (group == null || group.id <= 0 || string.IsNullOrWhiteSpace(group.name))
+                    continue;
+
+                int score = GroupIdentityScore(group.name, title, originalTitle);
+                if (score <= 0)
+                    continue;
+
+                if (!groups.TryGetValue(group.id, out var current) || score > current.score)
+                    groups[group.id] = (group, score);
+            }
+        }
+
+        var result = new List<VideoAlbum>();
+
+        foreach (var candidate in groups.Values
+            .OrderByDescending(i => i.score)
+            .Take(6))
+        {
+            long ownerId = -Math.Abs(candidate.group.id);
+            var ownerAlbums = await GetDiscoveredOwnerAlbums(ownerId);
+            if (ownerAlbums == null || ownerAlbums.Count == 0)
+                continue;
+
+            foreach (var album in ownerAlbums)
+            {
+                int score = AlbumScore(album, searchTitle, searchOriginalTitle, year);
+                if (score > 0)
+                {
+                    result.Add(album);
+                    continue;
+                }
+
+                if (IsGenericSeasonAlbum(album) &&
+                    await ValidateGenericSeasonAlbum(
+                        album,
+                        searchTitle,
+                        searchOriginalTitle,
+                        year))
+                {
+                    album.context_verified = true;
+                    result.Add(album);
+                }
+            }
+        }
+
+        return result
+            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+            .GroupBy(i => $"{i.owner_id}:{i.id}")
+            .Select(g => g
+                .OrderByDescending(i => i.context_verified)
+                .ThenByDescending(i => i.updated_time ?? 0)
+                .First())
+            .ToList();
+    }
+
+    static int GroupIdentityScore(string groupName, string title, string originalTitle)
+    {
+        if (string.IsNullOrWhiteSpace(groupName))
+            return 0;
+
+        string NormalizeWords(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            string normalized = value
+                .ToLowerInvariant()
+                .Replace('ё', 'е');
+
+            normalized = Regex.Replace(normalized, @"[^p{L}p{N}]+", " ");
+            return Regex.Replace(normalized, @"s+", " ").Trim();
+        }
+
+        string group = NormalizeWords(groupName);
+        if (group.Length == 0)
+            return 0;
+
+        int Match(string value)
+        {
+            string query = NormalizeWords(value);
+            if (query.Length == 0)
+                return 0;
+
+            if (group == query)
+                return 1000;
+
+            if (group.StartsWith(query + " "))
+                return 900;
+
+            if (group.EndsWith(" " + query))
+                return 800;
+
+            if (group.Contains(" " + query + " "))
+                return 700;
+
+            return 0;
+        }
+
+        return Math.Max(Match(title), Match(originalTitle));
     }
 
     async Task<List<VideoAlbum>> DiscoverAlbumsFromStrongVideoOwners(
@@ -839,7 +983,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v22:owner:{ownerId}:albums"), 60, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v23:owner:{ownerId}:albums"), 60, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -887,7 +1031,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v22:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v23:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<Video>();
 
@@ -930,7 +1074,7 @@ public class VkSeriesController : BaseOnlineController
         // One catalog response contains both response.albums and video results.
         // Cache it at the query level so album discovery and direct fallback do not
         // send the same VK search request twice.
-        return await InvokeCache<Root>(ipkey($"vkseries:v22:catalog:{normalized}"), 5, async () =>
+        return await InvokeCache<Root>(ipkey($"vkseries:v23:catalog:{normalized}"), 5, async () =>
         {
             string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
             string data =
@@ -1022,7 +1166,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v22:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v23:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -1037,7 +1181,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v22:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v23:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
