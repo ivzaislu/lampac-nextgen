@@ -22,8 +22,6 @@ public class VkSeriesController : BaseOnlineController
     private static readonly HttpClient http2Client = FriendlyHttp.CreateHttp2Client();
 
     private static readonly int client_id = 52461373;
-    // Compatibility fallback only. Discovery is global; these channels are no longer the search boundary.
-    private static readonly long[] fallbackChannelOwners = new[] { -220020068L, -221125211L, -221125343L, -234262894L };
     private static string access_token;
     private static DateTime token_expires;
 
@@ -31,7 +29,7 @@ public class VkSeriesController : BaseOnlineController
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/vkseries")]
-    public async Task<ActionResult> Index(string title, string original_title, short year, byte serial, short s = -1, long owner_id = 0, long album_id = 0, short album_s = 0, bool rjson = false)
+    public async Task<ActionResult> Index(string title, string original_title, short year, byte serial, short s = -1, long owner_id = 0, long album_id = 0, short album_s = 0, bool direct = false, bool rjson = false)
     {
         if (serial <= 0)
             return OnError();
@@ -54,10 +52,13 @@ public class VkSeriesController : BaseOnlineController
         if (s == -1)
             return await Seasons(title, original_title, year, serial, searchTitle, searchOriginalTitle, rjson);
 
+        if (direct)
+            return await EpisodesDirect(title, original_title, year, s);
+
         if (owner_id == 0 || album_id <= 0)
             return OnError("album");
 
-        return await Episodes(title, original_title, s, owner_id, album_id, album_s);
+        return await Episodes(title, original_title, year, s, owner_id, album_id, album_s);
     }
 
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
