@@ -822,8 +822,11 @@ public class VkSeriesController : BaseOnlineController
             return 0;
 
         int score = Math.Max(
-            SeriesIdentityScore(value, searchTitle),
-            SeriesIdentityScore(value, searchOriginalTitle)
+            Math.Max(
+                SeriesIdentityScore(value, searchTitle),
+                SeriesIdentityScore(value, searchOriginalTitle)
+            ),
+            SeriesPairIdentityScore(value, searchTitle, searchOriginalTitle)
         );
 
         if (score == 0)
@@ -870,6 +873,36 @@ public class VkSeriesController : BaseOnlineController
         // "Триггер дорама".
         if (Regex.IsMatch(suffix, @"^(?:(?:19|20)\d{2}|\d{1,2}(?:сезон|season)|(?:сезон|season)\d{1,2}|сериал|serial|series)"))
             return 900;
+
+        return 0;
+    }
+
+    static int SeriesPairIdentityScore(string value, string first, string second)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            string.IsNullOrWhiteSpace(first) ||
+            string.IsNullOrWhiteSpace(second) ||
+            first == second)
+        {
+            return 0;
+        }
+
+        foreach (string prefix in new[] { first + second, second + first })
+        {
+            if (!value.StartsWith(prefix))
+                continue;
+
+            string suffix = value.Substring(prefix.Length);
+            if (string.IsNullOrEmpty(suffix))
+                return 950;
+
+            if (Regex.IsMatch(
+                suffix,
+                @"^(?:(?:19|20)\d{2}|\d{1,2}(?:сезон|season)|(?:сезон|season)\d{1,2}|сериал|serial|series)"))
+            {
+                return 950;
+            }
+        }
 
         return 0;
     }
