@@ -2,11 +2,7 @@ name: VkSeries API probe
 
 on:
   push:
-    branches:
-      - vkseries-api-probe-20260925
-  pull_request:
-    branches:
-      - VkSeries
+    branches: [vkseries-api-probe-20260925]
   workflow_dispatch:
 
 permissions:
@@ -17,137 +13,157 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe VK Video album discovery
+      - name: Probe VK Video series paths
         shell: bash
         run: |
           set -euo pipefail
-
           CLIENT_ID=52461373
           API=https://api.vkvideo.ru/method
           V=5.264
 
           token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST 'https://login.vk.com/?act=get_anonym_token'             --data-urlencode "client_id=$CLIENT_ID")"
-
           TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
           test -n "$TOKEN"
-          echo "Anonymous token acquired."
 
           call_api() {
             local method="$1"; shift
-            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN"               "$@"
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN" "$@"
           }
 
-          summarize_search() {
-            local q="$1"
-            local json="$2"
-            echo "SEARCH_SUMMARY q=$q"
+          probe_album() {
+            local q="$1" owner="$2" album="$3"
+            echo "=== ALBUM_PATH q=$q owner=$owner album=$album ==="
+
+            info="$(call_api video.getAlbumById               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album" || true)"
             jq '{
+              method:"video.getAlbumById",
+              error:.error,
+              album:(if .response then {
+                id:.response.id,owner_id:.response.owner_id,title:.response.title,count:.response.count,
+                response_type:.response.response_type,
+                series_object:.response.series_object
+              } else null end)
+            }' <<<"$info"
+
+            from="$(call_api video.getFromAlbum               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album"               --data-urlencode 'count=30'               --data-urlencode 'offset=0'               --data-urlencode 'extended=1' || true)"
+            jq '{
+              method:"video.getFromAlbum",
+              error:.error,
+              count:(.response.count // null),
+              items:[(.response.items // [])[:15][]? | (.video // .) | {
+                owner_id,id,title,duration,
+                files:(if .files then {
+                  p2160:(.files.mp4_2160!=null),p1440:(.files.mp4_1440!=null),
+                  p1080:(.files.mp4_1080!=null),p720:(.files.mp4_720!=null),
+                  hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                } else null end)
+              }]
+            }' <<<"$from"
+
+            legacy="$(call_api video.get               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album"               --data-urlencode 'count=30'               --data-urlencode 'offset=0'               --data-urlencode 'sort_album=1'               --data-urlencode 'extended=1' || true)"
+            jq '{
+              method:"video.get",
+              error:.error,
+              count:(.response.count // null),
+              items:[(.response.items // [])[:15][]? | {
+                owner_id,id,title,duration,
+                files:(if .files then {
+                  p2160:(.files.mp4_2160!=null),p1440:(.files.mp4_1440!=null),
+                  p1080:(.files.mp4_1080!=null),p720:(.files.mp4_720!=null),
+                  hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                } else null end)
+              }]
+            }' <<<"$legacy"
+
+            cat="$(call_api catalog.getVideoAlbum               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album"               --data-urlencode 'offset=0'               --data-urlencode 'count=30' || true)"
+            jq '{
+              method:"catalog.getVideoAlbum",
               error:.error,
               response_keys:(.response // {} | keys),
-              album_count:((.response.albums // [])|length),
+              catalog_keys:(.response.catalog // {} | keys),
+              catalog:{
+                sections:[(.response.catalog.sections // [])[:5][]? | {
+                  id,title,next_from,
+                  blocks:[(.blocks // [])[:8][]? | {
+                    id,title,type,layout_name,
+                    videos_ids:(.videos_ids // [])[:12],
+                    albums_ids:(.albums_ids // [])[:12]
+                  }]
+                }],
+                section:(if .response.catalog.section then {
+                  id:.response.catalog.section.id,
+                  title:.response.catalog.section.title,
+                  next_from:.response.catalog.section.next_from,
+                  blocks:[(.response.catalog.section.blocks // [])[:8][]? | {
+                    id,title,type,layout_name,
+                    videos_ids:(.videos_ids // [])[:12],
+                    albums_ids:(.albums_ids // [])[:12]
+                  }]
+                } else null end)
+              },
+              aux_videos:[(.response.catalog_videos // .response.videos // [])[:15][]? | (.video // .) | {
+                owner_id,id,title,duration
+              }]
+            }' <<<"$cat"
+          }
+
+          for q in "Кухня" "Мажор" "Укрытие"; do
+            echo "=== SEARCH q=$q ==="
+            search="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'extended=1'               --data-urlencode 'count=50')"
+
+            jq '{
               albums:[(.response.albums // [])[:20][]? | {
-                id,owner_id,title,count,type,response_type,updated_time,
-                first_video_id,share_url,
-                keys:keys,
-                series_object
+                id,owner_id,title,count,updated_time,first_video_id,response_type
               }],
-              group_count:((.response.groups // [])|length),
-              groups:[(.response.groups // [])[:20][]? | {id,name,screen_name,type}],
-              catalog_sections:[(.response.catalog.sections // [])[:10][]? | {
+              catalog_sections:[(.response.catalog.sections // [])[:6][]? | {
                 id,title,next_from,
-                blocks:[(.blocks // [])[:10][]? | {
+                blocks:[(.blocks // [])[:8][]? | {
                   id,title,type,layout_name,
                   videos_ids:(.videos_ids // [])[:8],
                   albums_ids:(.albums_ids // [])[:8]
                 }]
               }]
-            }' <<<"$json"
-          }
+            }' <<<"$search"
 
-          for q in "Мажор" "Кухня" "Триггер"; do
-            echo "================ $q ================"
-            web2="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'count=50')"
-            summarize_search "$q" "$web2"
-
-            mapfile -t albums < <(jq -r '
+            pair="$(jq -r --arg q "$q" '
+              def norm: ascii_downcase | gsub("[^0-9a-zа-яё]+";"");
               [(.response.albums // [])[]?
-               | select(.id != null and .owner_id != null)
-               | "\(.owner_id) \(.id)"]
-              | unique | .[:6][]' <<<"$web2")
-
-            for pair in "${albums[@]}"; do
+               | select(.id > 0 and .owner_id != 0)
+               | . + {score:
+                   (if ((.title // "")|norm) == ($q|norm) then 300
+                    elif ((.title // "")|norm|startswith($q|norm)) then 200
+                    elif ((.title // "")|norm|contains($q|norm)) then 100
+                    else 0 end)}
+               | select(.score > 0)]
+              | sort_by([-.score,-.count])
+              | first
+              | if . then "\(.owner_id) \(.id)" else empty end' <<<"$search")"
+            if [[ -n "$pair" ]]; then
               read -r owner album <<<"$pair"
-
-              echo "ALBUM_INFO q=$q owner=$owner album=$album"
-              info="$(call_api video.getAlbumById                 --data-urlencode "owner_id=$owner"                 --data-urlencode "album_id=$album" || true)"
-              if [[ -n "$info" ]]; then
-                jq '{
-                  error:.error,
-                  response:(if .response then {
-                    id:.response.id,
-                    owner_id:.response.owner_id,
-                    title:.response.title,
-                    count:.response.count,
-                    type:.response.type,
-                    response_type:.response.response_type,
-                    keys:(.response|keys),
-                    series_object:.response.series_object
-                  } else null end)
-                }' <<<"$info"
-              fi
-
-              echo "CATALOG_ALBUM q=$q owner=$owner album=$album"
-              cat_album="$(call_api catalog.getVideoAlbum                 --data-urlencode "owner_id=$owner"                 --data-urlencode "album_id=$album"                 --data-urlencode 'offset=0'                 --data-urlencode 'count=30' || true)"
-              if [[ -n "$cat_album" ]]; then
-                jq '{
-                  error:.error,
-                  response_keys:(.response // {} | keys),
-                  album:(.response.album // null),
-                  albums:[(.response.albums // [])[:5][]? | {
-                    id,owner_id,title,count,type,response_type,series_object
-                  }],
-                  videos:[(.response.catalog_videos // [])[:12][]?.video | {
-                    owner_id,id,title,duration,type,response_type,
-                    has_files:(.files != null)
-                  }],
-                  section:(if .response.section then {
-                    id:.response.section.id,
-                    title:.response.section.title,
-                    next_from:.response.section.next_from,
-                    block_count:((.response.section.blocks // [])|length)
-                  } else null end)
-                }' <<<"$cat_album"
-              fi
-            done
-
-            echo "NEW_SEARCH q=$q"
-            newer="$(call_api catalog.getVideoSearch               --data-urlencode "q=$q"               --data-urlencode "query=$q"               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'sort=2'               --data-urlencode 'need_blocks=1'               --data-urlencode 'live=0' || true)"
-            if [[ -n "$newer" ]]; then
-              summarize_search "$q" "$newer"
+              probe_album "$q" "$owner" "$album"
             fi
           done
 
-          echo "SMART_TV_PROBES"
-          for ct in "" "video" "series" "serial" "movie"; do
-            args=(
-              --data-urlencode 'q=Кухня'
-              --data-urlencode 'sort=2'
-              --data-urlencode 'show_suggests=0'
-              --data-urlencode 'input_type=keyboard'
-            )
-            if [[ -n "$ct" ]]; then
-              args+=(--data-urlencode "content_type=$ct")
-            fi
-            smart="$(call_api catalog.getVideoSearchSmartTv "${args[@]}" || true)"
-            echo "SMART_TV content_type=${ct:-<empty>}"
-            if [[ -n "$smart" ]]; then
-              jq '{
-                error:.error,
-                response_type:(.response|type),
-                response_keys:(if (.response|type)=="object" then (.response|keys) else [] end),
-                album_count:((.response.albums // [])|length),
-                albums:[(.response.albums // [])[:10][]? | {id,owner_id,title,count,type,response_type,series_object}],
-                video_count:((.response.catalog_videos // .response.items // [])|length)
-              }' <<<"$smart"
+          echo "=== NATIVE_OWNER -234262894 ==="
+          native="$(call_api video.getAlbums             --data-urlencode 'owner_id=-234262894'             --data-urlencode 'count=100'             --data-urlencode 'offset=0'             --data-urlencode 'extended=1'             --data-urlencode 'need_system=0')"
+          jq '{count:.response.count,albums:[(.response.items // [])[:100][]? | {id,owner_id,title,count,updated_time}]}' <<<"$native"
+
+          mapfile -t native_pairs < <(jq -r '[.response.items[]? | select(.id>0)] | .[:30][] | "\(.owner_id) \(.id)"' <<<"$native")
+          found=0
+          for pair in "${native_pairs[@]}"; do
+            read -r owner album <<<"$pair"
+            info="$(call_api video.getAlbumById               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album")"
+            seasons="$(jq '(.response.series_object.seasons // []) | length' <<<"$info")"
+            if [[ "$seasons" -gt 0 ]]; then
+              echo "=== NATIVE_SERIES_FOUND owner=$owner album=$album ==="
+              jq '{album:{id:.response.id,owner_id:.response.owner_id,title:.response.title,count:.response.count},series_object:.response.series_object}' <<<"$info"
+              title="$(jq -r '.response.title // empty' <<<"$info")"
+              if [[ -n "$title" ]]; then
+                global="$(call_api catalog.getVideoSearchWeb2                   --data-urlencode 'screen_ref=search_video_service'                   --data-urlencode 'input_method=keyboard_search_button'                   --data-urlencode "q=$title"                   --data-urlencode 'extended=1')"
+                echo "=== GLOBAL_FOR_NATIVE title=$title ==="
+                jq '{albums:[(.response.albums // [])[:20][]? | {id,owner_id,title,count,updated_time}]}' <<<"$global"
+              fi
+              found=$((found+1))
+              [[ "$found" -ge 3 ]] && break
             fi
           done
