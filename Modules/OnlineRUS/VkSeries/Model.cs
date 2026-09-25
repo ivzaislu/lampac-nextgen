@@ -115,6 +115,7 @@ public class Video
     public string description { get; set; }
     public long duration { get; set; }
     public long? views { get; set; }
+    public int playlist_position { get; set; }
     public string owner_name { get; set; }
     public ShortVideoInfo short_video_info { get; set; }
     public VideoFiles files { get; set; }
