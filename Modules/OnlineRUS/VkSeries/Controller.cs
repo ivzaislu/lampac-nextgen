@@ -64,137 +64,53 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v12:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v13:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
-            var albums = new List<VideoAlbum>();
+            var albums = await SearchGlobalAlbums(title, original_title, year);
+            var seasonAlbums = await DiscoverSeasonAlbums(albums, searchTitle, searchOriginalTitle, year);
 
-            var globalAlbums = await SearchGlobalAlbums(title, original_title, year);
-            if (globalAlbums != null && globalAlbums.Count > 0)
-                albums.AddRange(globalAlbums);
+            // response.albums is small. Global video results provide an independent
+            // fallback and also reveal seasons whose playlist did not make the album list.
+            var directVideos = await SearchGlobalVideos(title, original_title, year, 0);
+            AddDirectSeasons(seasonAlbums, directVideos, searchTitle, searchOriginalTitle, year, 0);
 
-            // Keep the old curated sources only as a compatibility fallback/source
-            // of native series_object hierarchies. They no longer restrict discovery.
-            var fallbackAlbums = await SearchFallbackAlbums();
-            if (fallbackAlbums != null && fallbackAlbums.Count > 0)
-                albums.AddRange(fallbackAlbums);
+            int maxSeason = seasonAlbums
+                .Select(i => i.album.season)
+                .DefaultIfEmpty(0)
+                .Max();
 
-            albums = albums
-                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                .GroupBy(i => $"{i.owner_id}:{i.id}")
-                .Select(g => g.OrderByDescending(i => i.updated_time ?? 0).First())
-                .ToList();
-
-            if (albums.Count == 0)
-                return e.Fail("search albums");
-
-            var candidates = albums
-                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                .Select(i => (album: i, score: AlbumScore(i, searchTitle, searchOriginalTitle, year)))
-                .Where(i => i.score > 0)
-                .OrderByDescending(i => i.score)
-                .ThenByDescending(i => i.album.count)
-                .ThenByDescending(i => i.album.updated_time ?? 0)
-                .Take(50)
-                .ToList();
-
-            if (candidates.Count == 0)
-                return e.Fail("album candidates");
-
-            var seasonAlbums = new List<(VideoAlbum album, int score, int episodes)>();
-
-            foreach (var candidate in candidates)
+            // Probe only missing seasons near the discovered range. This catches cases
+            // such as "Мажор 4 сезон" without scanning arbitrary VK owners.
+            int probeMax = Math.Min(Math.Max(maxSeason + 2, 3), 12);
+            for (short targetSeason = 1; targetSeason <= probeMax; targetSeason++)
             {
-                // Native VK series are not tied to a particular owner. If VK exposes
-                // series_object.seasons, use that hierarchy for any globally found album.
-                var albumInfo = await GetAlbumById(candidate.album.owner_id, candidate.album.id);
-                var nativeSeasons = albumInfo?.series_object?.seasons;
-
-                if (nativeSeasons != null && nativeSeasons.Count > 0)
-                {
-                    int addedNative = 0;
-
-                    foreach (var nativeSeason in nativeSeasons)
-                    {
-                        short season = (short)ParseSeason(nativeSeason.title);
-                        if (season <= 0 || nativeSeason.id <= 0)
-                            continue;
-
-                        long seasonOwner = nativeSeason.owner_id != 0
-                            ? nativeSeason.owner_id
-                            : candidate.album.owner_id;
-
-                        var seasonVideos = await GetAlbumVideos(seasonOwner, nativeSeason.id);
-                        if (seasonVideos == null || seasonVideos.Count == 0)
-                            continue;
-
-                        var parsedNative = ParseVideos(seasonVideos, season)
-                            .Where(i => i.season == season)
-                            .ToList();
-
-                        int episodeCount = parsedNative
-                            .Select(i => i.episode)
-                            .Distinct()
-                            .Count();
-
-                        if (episodeCount == 0)
-                            continue;
-
-                        int quality = parsedNative
-                            .Select(i => QualityScore(i.video?.files))
-                            .DefaultIfEmpty(0)
-                            .Max();
-
-                        seasonAlbums.Add((new VideoAlbum
-                        {
-                            id = nativeSeason.id,
-                            owner_id = seasonOwner,
-                            title = $"{candidate.album.title} {nativeSeason.title}",
-                            count = nativeSeason.count,
-                            updated_time = candidate.album.updated_time,
-                            season = season
-                        }, candidate.score + 500 + Math.Min(episodeCount, 30) * 10 + quality * 3, episodeCount));
-
-                        addedNative++;
-                    }
-
-                    if (addedNative > 0)
-                        continue;
-                }
-
-                short seasonHint = (short)ParseSeason(candidate.album.title);
-                var videos = await GetAlbumVideos(candidate.album.owner_id, candidate.album.id);
-                if (videos == null || videos.Count == 0)
+                if (seasonAlbums.Any(i => i.album.season == targetSeason))
                     continue;
 
-                var parsed = ParseVideos(videos, seasonHint);
-                if (parsed.Count == 0)
-                    continue;
+                var extraAlbums = await SearchGlobalAlbums(title, original_title, year, targetSeason);
+                var extra = await DiscoverSeasonAlbums(
+                    extraAlbums,
+                    searchTitle,
+                    searchOriginalTitle,
+                    year,
+                    targetSeason
+                );
 
-                foreach (var group in parsed.GroupBy(i => i.season).Where(g => g.Key > 0))
+                if (extra.Count > 0)
                 {
-                    int episodeCount = group
-                        .Select(i => i.episode)
-                        .Distinct()
-                        .Count();
-
-                    if (episodeCount == 0)
-                        continue;
-
-                    int quality = group
-                        .Select(i => QualityScore(i.video?.files))
-                        .DefaultIfEmpty(0)
-                        .Max();
-
-                    seasonAlbums.Add((new VideoAlbum
-                    {
-                        id = candidate.album.id,
-                        owner_id = candidate.album.owner_id,
-                        title = candidate.album.title,
-                        count = candidate.album.count,
-                        updated_time = candidate.album.updated_time,
-                        season = group.Key
-                    }, candidate.score + Math.Min(episodeCount, 30) * 10 + quality * 3, episodeCount));
+                    seasonAlbums.AddRange(extra);
+                    continue;
                 }
+
+                var seasonVideos = await SearchGlobalVideos(title, original_title, year, targetSeason);
+                AddDirectSeasons(
+                    seasonAlbums,
+                    seasonVideos,
+                    searchTitle,
+                    searchOriginalTitle,
+                    year,
+                    targetSeason
+                );
             }
 
             var result = seasonAlbums
@@ -209,7 +125,7 @@ public class VkSeriesController : BaseOnlineController
                 .ToList();
 
             if (result.Count == 0)
-                return e.Fail("global season playlists");
+                return e.Fail("global season discovery");
 
             return e.Success(result);
         });
@@ -230,9 +146,14 @@ public class VkSeriesController : BaseOnlineController
                 if (season <= 0)
                     continue;
 
+                bool direct = album.id <= 0 || album.owner_id == 0;
+                string source = direct
+                    ? "&direct=true"
+                    : $"&owner_id={album.owner_id}&album_id={album.id}&album_s={season}";
+
                 stpl.Append(
                     $"{season} сезон",
-                    $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}&owner_id={album.owner_id}&album_id={album.id}&album_s={season}&rjson={encRjson}",
+                    $"{host}/lite/vkseries?title={encTitle}&original_title={encOriginalTitle}&year={year}&serial={serial}&s={season}{source}&rjson={encRjson}",
                     season
                 );
             }
@@ -241,12 +162,169 @@ public class VkSeriesController : BaseOnlineController
         });
     }
 
-    async Task<ActionResult> Episodes(string title, string original_title, short season, long ownerId, long albumId, short albumSeasonHint)
+    async Task<List<(VideoAlbum album, int score, int episodes)>> DiscoverSeasonAlbums(
+        List<VideoAlbum> albums,
+        string searchTitle,
+        string searchOriginalTitle,
+        short year,
+        short requiredSeason = 0)
+    {
+        var result = new List<(VideoAlbum album, int score, int episodes)>();
+
+        if (albums == null || albums.Count == 0)
+            return result;
+
+        var candidates = albums
+            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+            .Select(i => (album: i, score: AlbumScore(i, searchTitle, searchOriginalTitle, year)))
+            .Where(i => i.score > 0)
+            .OrderByDescending(i => i.score)
+            .ThenByDescending(i => i.album.count)
+            .ThenByDescending(i => i.album.updated_time ?? 0)
+            .Take(30)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            var albumInfo = await GetAlbumById(candidate.album.owner_id, candidate.album.id);
+            var nativeSeasons = albumInfo?.series_object?.seasons;
+
+            if (nativeSeasons != null && nativeSeasons.Count > 0)
+            {
+                int addedNative = 0;
+
+                foreach (var nativeSeason in nativeSeasons)
+                {
+                    short season = (short)ParseSeason(nativeSeason.title);
+                    if (season <= 0 || nativeSeason.id <= 0)
+                        continue;
+
+                    if (requiredSeason > 0 && season != requiredSeason)
+                        continue;
+
+                    long seasonOwner = nativeSeason.owner_id != 0
+                        ? nativeSeason.owner_id
+                        : candidate.album.owner_id;
+
+                    var seasonVideos = await GetAlbumVideos(seasonOwner, nativeSeason.id);
+                    var parsedNative = ParseVideos(seasonVideos ?? new List<Video>(), season)
+                        .Where(i => i.season == season)
+                        .ToList();
+
+                    int episodeCount = parsedNative
+                        .Select(i => i.episode)
+                        .Distinct()
+                        .Count();
+
+                    if (episodeCount == 0)
+                        continue;
+
+                    int quality = parsedNative
+                        .Select(i => QualityScore(i.video?.files))
+                        .DefaultIfEmpty(0)
+                        .Max();
+
+                    result.Add((new VideoAlbum
+                    {
+                        id = nativeSeason.id,
+                        owner_id = seasonOwner,
+                        title = $"{candidate.album.title} {nativeSeason.title}",
+                        count = Math.Max(nativeSeason.count, episodeCount),
+                        updated_time = candidate.album.updated_time,
+                        season = season
+                    }, candidate.score + 500 + Math.Min(episodeCount, 30) * 10 + quality * 3, episodeCount));
+
+                    addedNative++;
+                }
+
+                if (addedNative > 0)
+                    continue;
+            }
+
+            short seasonHint = (short)ParseSeason(candidate.album.title);
+            if (requiredSeason > 0 && seasonHint > 0 && seasonHint != requiredSeason)
+                continue;
+
+            var videos = await GetAlbumVideos(candidate.album.owner_id, candidate.album.id);
+            if (videos == null || videos.Count == 0)
+                continue;
+
+            var parsed = ParseVideos(videos, seasonHint)
+                .Where(i => requiredSeason <= 0 || i.season == requiredSeason)
+                .ToList();
+
+            foreach (var group in parsed.GroupBy(i => i.season).Where(g => g.Key > 0))
+            {
+                int episodeCount = group.Select(i => i.episode).Distinct().Count();
+                if (episodeCount == 0)
+                    continue;
+
+                int quality = group
+                    .Select(i => QualityScore(i.video?.files))
+                    .DefaultIfEmpty(0)
+                    .Max();
+
+                result.Add((new VideoAlbum
+                {
+                    id = candidate.album.id,
+                    owner_id = candidate.album.owner_id,
+                    title = candidate.album.title,
+                    count = Math.Max(candidate.album.count, episodeCount),
+                    updated_time = candidate.album.updated_time,
+                    season = group.Key
+                }, candidate.score + Math.Min(episodeCount, 30) * 10 + quality * 3, episodeCount));
+            }
+        }
+
+        return result;
+    }
+
+    static void AddDirectSeasons(
+        List<(VideoAlbum album, int score, int episodes)> target,
+        List<Video> videos,
+        string searchTitle,
+        string searchOriginalTitle,
+        short year,
+        short seasonHint)
+    {
+        if (videos == null || videos.Count == 0)
+            return;
+
+        var parsed = ParseVideos(
+                videos.Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
+                seasonHint)
+            .ToList();
+
+        foreach (var group in parsed.GroupBy(i => i.season))
+        {
+            if (group.Key <= 0 || target.Any(i => i.album.season == group.Key))
+                continue;
+
+            int count = group.Select(i => i.episode).Distinct().Count();
+            if (count < 2)
+                continue;
+
+            int quality = group
+                .Select(i => QualityScore(i.video?.files))
+                .DefaultIfEmpty(0)
+                .Max();
+
+            target.Add((new VideoAlbum
+            {
+                id = 0,
+                owner_id = 0,
+                title = "VK global search",
+                count = count,
+                season = group.Key
+            }, 300 + Math.Min(count, 30) * 10 + quality * 3, count));
+        }
+    }
+
+    async Task<ActionResult> Episodes(string title, string original_title, short year, short season, long ownerId, long albumId, short albumSeasonHint)
     {
     rhubFallback:
-        // Keep the rendered episode cache separate from the raw album cache. Using
-        // the same key recursively causes the per-key semaphore to wait on itself.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v12:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        // Keep the rendered cache separate from the raw album cache.
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v13:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -258,189 +336,221 @@ public class VkSeriesController : BaseOnlineController
         if (IsRhubFallback(cache))
             goto rhubFallback;
 
+        string searchTitle = SearchNameTo.Convert(title);
+        string searchOriginalTitle = SearchNameTo.Convert(original_title);
+        var directVideos = await SearchGlobalVideos(title, original_title, year, season);
+
         return ContentTpl(cache, () =>
         {
-            string searchTitle = SearchNameTo.Convert(title);
-            string searchOriginalTitle = SearchNameTo.Convert(original_title);
-
             var scopedVideos = cache.Value
                 .Where(i => IsSeriesVideo(i, searchTitle, searchOriginalTitle))
                 .ToList();
 
-            // A season album often contains titles such as "1 серия" without the
-            // series name. Prefer scoped videos, but fall back to the verified album.
-            var parsed = ParseVideos(scopedVideos.Count > 0 ? scopedVideos : cache.Value, albumSeasonHint)
-                .Where(i => i.season == season)
+            var albumParsed = ParseVideos(scopedVideos.Count > 0 ? scopedVideos : cache.Value, albumSeasonHint)
+                .Where(i => i.season == season);
+
+            var directParsed = ParseVideos(
+                    (directVideos ?? new List<Video>())
+                        .Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
+                    season)
+                .Where(i => i.season == season);
+
+            var parsed = albumParsed
+                .Concat(directParsed)
                 .GroupBy(i => i.episode)
                 .Select(g => g
-                    .OrderByDescending(i => QualityScore(i.video.files))
+                    .OrderByDescending(i => SeriesVideoScore(i.video, searchTitle, searchOriginalTitle, year))
+                    .ThenByDescending(i => QualityScore(i.video.files))
                     .ThenByDescending(i => i.video.duration)
                     .ThenByDescending(i => i.video.views ?? 0)
                     .First())
                 .OrderBy(i => i.episode)
                 .ToList();
 
-            var etpl = new EpisodeTpl(parsed.Count);
-            string seriesTitle = title ?? original_title;
-
-            foreach (var item in parsed)
-            {
-                var streams = BuildStreams(item.video.files);
-                if (streams.IsEmpty)
-                    continue;
-
-                var subtitles = BuildSubtitles(item.video.subtitles);
-
-                etpl.Append(
-                    $"Серия {item.episode}",
-                    seriesTitle,
-                    season,
-                    item.episode,
-                    streams.Firts().link,
-                    streamquality: streams,
-                    subtitles: subtitles,
-                    headers: HeadersModel.Init(init.headers),
-                    vast: init.vast
-                );
-            }
-
-            return etpl;
+            return BuildEpisodeTpl(parsed, title ?? original_title, season);
         });
     }
 
-    async Task<List<VideoAlbum>> SearchFallbackAlbums()
+    async Task<ActionResult> EpisodesDirect(string title, string original_title, short year, short season)
     {
-        var result = new List<VideoAlbum>();
+    rhubFallback:
+        string searchTitle = SearchNameTo.Convert(title);
+        string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        foreach (long ownerId in fallbackChannelOwners)
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v13:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
-            var albums = await GetOwnerAlbums(ownerId);
-            if (albums != null && albums.Count > 0)
-                result.AddRange(albums);
-        }
+            var videos = await SearchGlobalVideos(title, original_title, year, season);
+            if (videos == null || videos.Count == 0)
+                return e.Fail("global videos");
 
-        return result
-            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-            .GroupBy(i => $"{i.owner_id}:{i.id}")
-            .Select(g => g
-                .OrderByDescending(i => i.updated_time ?? 0)
-                .First())
-            .ToList();
+            return e.Success(videos);
+        });
+
+        if (IsRhubFallback(cache))
+            goto rhubFallback;
+
+        return ContentTpl(cache, () =>
+        {
+            var parsed = ParseVideos(
+                    cache.Value.Where(i => SeriesVideoScore(i, searchTitle, searchOriginalTitle, year) >= 150),
+                    season)
+                .Where(i => i.season == season)
+                .GroupBy(i => i.episode)
+                .Select(g => g
+                    .OrderByDescending(i => SeriesVideoScore(i.video, searchTitle, searchOriginalTitle, year))
+                    .ThenByDescending(i => QualityScore(i.video.files))
+                    .ThenByDescending(i => i.video.duration)
+                    .ThenByDescending(i => i.video.views ?? 0)
+                    .First())
+                .OrderBy(i => i.episode)
+                .ToList();
+
+            return BuildEpisodeTpl(parsed, title ?? original_title, season);
+        });
     }
 
-    async Task<List<VideoAlbum>> GetOwnerAlbums(long ownerId)
+    EpisodeTpl BuildEpisodeTpl(List<ParsedEpisode> parsed, string seriesTitle, short season)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v12:fallback:{ownerId}:albums"), 20, async () =>
+        var etpl = new EpisodeTpl(parsed.Count);
+
+        foreach (var item in parsed)
         {
-            const int pageSize = 100;
-            var albums = new List<VideoAlbum>();
-            int offset = 0;
-            int total = int.MaxValue;
+            var streams = BuildStreams(item.video.files);
+            if (streams.IsEmpty)
+                continue;
 
-            while (offset < total && offset < 5000)
+            var subtitles = BuildSubtitles(item.video.subtitles);
+
+            etpl.Append(
+                $"Серия {item.episode}",
+                seriesTitle,
+                season,
+                item.episode,
+                streams.Firts().link,
+                streamquality: streams,
+                subtitles: subtitles,
+                headers: HeadersModel.Init(init.headers),
+                vast: init.vast
+            );
+        }
+
+        return etpl;
+    }
+
+    async Task<List<VideoAlbum>> SearchGlobalAlbums(string title, string originalTitle, short year, short season = 0)
+    {
+        string keyTitle = SearchNameTo.Convert(title);
+        string keyOriginal = SearchNameTo.Convert(originalTitle);
+
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v13:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        {
+            var result = new List<VideoAlbum>();
+
+            foreach (string query in BuildSearchQueries(title, originalTitle, year, season, albums: true))
             {
-                string url = $"{init.host}/method/video.getAlbums?v=5.264&client_id={client_id}";
-                string data = $"owner_id={ownerId}&count={pageSize}&offset={offset}&extended=1&need_system=0&access_token={access_token}";
+                var root = await SearchCatalog(query);
+                if (root?.error != null || root?.response?.albums == null)
+                    continue;
 
-                var root = await httpHydra.Post<VideoAlbumsRoot>(url, data, textJson: true);
-                if (root?.error != null || root?.response == null)
-                    return null;
-
-                var items = root.response.items;
-                total = root.response.count;
-
-                if (items == null || items.Count == 0)
-                    break;
-
-                albums.AddRange(items);
-
-                int nextOffset = offset + items.Count;
-                if (nextOffset <= offset)
-                    break;
-
-                offset = nextOffset;
-
-                if (items.Count < pageSize)
-                    break;
+                result.AddRange(root.response.albums);
             }
 
-            return albums
+            return result
                 .Where(i => i != null && i.id > 0 && i.owner_id != 0)
                 .GroupBy(i => $"{i.owner_id}:{i.id}")
-                .Select(g => g.First())
+                .Select(g => g.OrderByDescending(i => i.updated_time ?? 0).First())
                 .ToList();
         });
     }
 
-    async Task<List<VideoAlbum>> SearchGlobalAlbums(string title, string originalTitle, short year)
+    async Task<List<Video>> SearchGlobalVideos(string title, string originalTitle, short year, short season)
+    {
+        string keyTitle = SearchNameTo.Convert(title);
+        string keyOriginal = SearchNameTo.Convert(originalTitle);
+
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v13:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        {
+            var result = new List<Video>();
+
+            foreach (string query in BuildSearchQueries(title, originalTitle, year, season, albums: false))
+            {
+                var root = await SearchCatalog(query);
+                if (root?.error != null || root?.response == null)
+                    continue;
+
+                if (root.response.catalog_videos != null)
+                {
+                    result.AddRange(root.response.catalog_videos
+                        .Where(i => i?.video != null)
+                        .Select(i => i.video));
+                }
+
+                if (root.response.videos != null)
+                    result.AddRange(root.response.videos.Where(i => i != null));
+            }
+
+            return result
+                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                .GroupBy(i => $"{i.owner_id}:{i.id}")
+                .Select(g => g
+                    .OrderByDescending(i => QualityScore(i.files))
+                    .First())
+                .ToList();
+        });
+    }
+
+    async Task<Root> SearchCatalog(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return null;
+
+        string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
+        string data =
+            $"screen_ref=search_video_service&input_method=keyboard_search_button&extended=1&count=50&q={HttpUtility.UrlEncode(query)}&access_token={access_token}";
+
+        return await httpHydra.Post<Root>(url, data, textJson: true);
+    }
+
+    static List<string> BuildSearchQueries(string title, string originalTitle, short year, short season, bool albums)
     {
         var queries = new List<string>();
 
-        void AddQuery(string value)
+        void Add(string value)
         {
-            if (string.IsNullOrWhiteSpace(value))
-                return;
-
-            string normalized = SearchNameTo.Convert(value);
-            if (normalized == null)
-                return;
-
-            if (!queries.Any(i => SearchNameTo.Convert(i) == normalized))
-                queries.Add(value);
+            if (!string.IsNullOrWhiteSpace(value) &&
+                !queries.Any(i => string.Equals(i, value, StringComparison.OrdinalIgnoreCase)))
+            {
+                queries.Add(value.Trim());
+            }
         }
 
-        AddQuery(title);
-        AddQuery(originalTitle);
-
-        if (year > 0)
+        foreach (string name in new[] { title, originalTitle })
         {
-            if (!string.IsNullOrWhiteSpace(title))
-                AddQuery($"{title} {year}");
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
 
-            if (!string.IsNullOrWhiteSpace(originalTitle))
-                AddQuery($"{originalTitle} {year}");
+            if (season > 0)
+            {
+                Add($"{name} {season} сезон");
+                Add($"{name} сезон {season}");
+                if (year > 0)
+                    Add($"{name} {year} {season} сезон");
+            }
+            else
+            {
+                Add(name);
+                if (year > 0)
+                    Add($"{name} {year}");
+
+                if (albums)
+                {
+                    Add($"{name} сезон");
+                    Add($"{name} сериал");
+                }
+            }
         }
 
-        var result = new List<VideoAlbum>();
-
-        foreach (string query in queries)
-        {
-            var albums = await SearchAlbums(query);
-            if (albums != null && albums.Count > 0)
-                result.AddRange(albums);
-        }
-
-        return result
-            .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-            .GroupBy(i => $"{i.owner_id}:{i.id}")
-            .Select(g => g
-                .OrderByDescending(i => i.updated_time ?? 0)
-                .First())
-            .ToList();
-    }
-
-    async Task<List<VideoAlbum>> SearchAlbums(string query)
-    {
-        string normalized = SearchNameTo.Convert(query);
-        if (normalized == null)
-            return null;
-
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v12:search:{normalized}"), 20, async () =>
-        {
-            string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
-            string data =
-                $"screen_ref=search_video_service&input_method=keyboard_search_button&extended=1&count=50&q={HttpUtility.UrlEncode(query)}&access_token={access_token}";
-
-            var root = await httpHydra.Post<Root>(url, data, textJson: true);
-            if (root?.error != null || root?.response == null)
-                return null;
-
-            return root.response.albums?
-                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                .GroupBy(i => $"{i.owner_id}:{i.id}")
-                .Select(g => g.First())
-                .ToList();
-        });
+        return queries.Take(6).ToList();
     }
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
