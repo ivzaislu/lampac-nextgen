@@ -790,7 +790,8 @@ public class VkSeriesController : BaseOnlineController
             string data =
                 $"screen_ref=search_video_service&input_method=keyboard_search_button&extended=1&count=50&q={HttpUtility.UrlEncode(query)}&access_token={access_token}";
 
-            return await httpHydra.Post<Root>(url, data, textJson: true);
+            var root = await httpHydra.Post<Root>(url, data, textJson: true);
+            return root?.error == null ? root : null;
         });
     }
 
