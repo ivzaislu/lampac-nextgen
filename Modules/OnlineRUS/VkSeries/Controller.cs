@@ -1257,6 +1257,16 @@ public class VkSeriesController : BaseOnlineController
             return true;
         }
 
+        // Season playlists often use raw filenames such as
+        // "07 Pinkeye.mkv". Prefer that explicit leading number over
+        // playlist_position, because VK playlists can be reverse-sorted
+        // or contain extra clips that shift positions.
+        if (TryLeadingEpisodeNumber(video?.title, out episode))
+        {
+            season = albumSeasonHint;
+            return true;
+        }
+
         if (video != null && video.playlist_position > 0)
         {
             season = albumSeasonHint;
@@ -1298,6 +1308,30 @@ public class VkSeriesController : BaseOnlineController
         season = 0;
         episode = 0;
         return false;
+    }
+
+    static bool TryLeadingEpisodeNumber(string value, out short episode)
+    {
+        episode = 0;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        // 1-3 digits only: years such as 2019 are intentionally excluded.
+        var match = Regex.Match(
+            value,
+            @"^\s*[\[(]?(?<e>\d{1,3})[\])]?\s*(?:[._-]+|\s+)"
+        );
+
+        if (!match.Success ||
+            !short.TryParse(match.Groups["e"].Value, out episode) ||
+            episode <= 0)
+        {
+            episode = 0;
+            return false;
+        }
+
+        return true;
     }
 
     static bool TryGenericEpisode(string value, out short episode)
@@ -1376,7 +1410,7 @@ public class VkSeriesController : BaseOnlineController
         // "1-7 серия", "1–10 серии", "episodes 1-8".
         if (Regex.IsMatch(
             raw,
-            @"(?i)(?:\b\d{1,3}\s*[-–—]\s*\d{1,3}\s*(?:серия|серии|серий|episodes?|ep)\b|\b(?:episodes?|ep)\s*\d{1,3}\s*[-–—]\s*\d{1,3}\b)"))
+            @"(?i)(?:\b\d{1,3}\s*[-–—]\s*\d{1,3}\s*(?:серия|серии|серий|episodes?|ep)\b|\b(?:серия|серии|серий|episodes?|ep)\s*[№#]?\s*\d{1,3}\s*[-–—]\s*\d{1,3}\b)"))
         {
             return true;
         }
