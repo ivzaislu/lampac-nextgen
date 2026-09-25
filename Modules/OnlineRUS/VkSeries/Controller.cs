@@ -1060,9 +1060,7 @@ public class VkSeriesController : BaseOnlineController
                    value.Contains("полныйсезон") ||
                    value.Contains("сезонполностью") ||
                    value.Contains("целиком") ||
-                   value.Contains("подряд") ||
                    value.Contains("нонстоп") ||
-                   value.Contains("марафон") ||
                    value.Contains("сборниксерий") ||
                    value.Contains("allepisodes") ||
                    value.Contains("fullseason") ||
@@ -1146,10 +1144,20 @@ public class VkSeriesController : BaseOnlineController
             return true;
         }
 
-        // Полноценные серии сериалов обычно заметно длиннее нарезок/моментов.
-        // Нулевую duration не режем: у части ответов VK она может отсутствовать.
+        // Short-format series exist too. Do not reject a short video solely by
+        // duration when VK/title clearly identifies it as an episode or when it comes
+        // from an ordered season playlist.
         if (video.duration > 0 && video.duration < 10 * 60)
-            return true;
+        {
+            bool explicitEpisode =
+                TrySeasonEpisode(video.title, out _, out _) ||
+                TryGenericEpisode(video.title, out _) ||
+                TrySeasonEpisode(video.description, out _, out _) ||
+                TryGenericEpisode(video.description, out _);
+
+            if (!explicitEpisode && video.playlist_position <= 0)
+                return true;
+        }
 
         return false;
     }
