@@ -1683,6 +1683,12 @@ public class VkSeriesController : BaseOnlineController
         int last = unique.Last().episode;
         int span = last - first + 1;
 
+        // Direct search often returns a few isolated late episodes from an unrelated
+        // title. A small set must establish the beginning of the season; larger sets
+        // can stand on their own even if early episodes are missing.
+        if (unique.Count < 8 && first > 3)
+            return false;
+
         // Reject sparse search noise such as E2/E4/E5/E13 from an unrelated show.
         if (span > unique.Count * 2)
             return false;
