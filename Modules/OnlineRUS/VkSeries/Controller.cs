@@ -200,14 +200,39 @@ public class VkSeriesController : BaseOnlineController
         if (albums == null || albums.Count == 0)
             return result;
 
-        var candidates = albums
+        var scoredCandidates = albums
             .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-            .Select(i => (album: i, score: AlbumScore(i, searchTitle, searchOriginalTitle, year)))
+            .Select(i => (
+                album: i,
+                score: AlbumScore(i, searchTitle, searchOriginalTitle, year),
+                season: (short)ParseSeason(i.title)
+            ))
             .Where(i => i.score > 0)
+            .Where(i => requiredSeason <= 0 || i.season == 0 || i.season == requiredSeason)
+            .ToList();
+
+        // Do not let several copies of early seasons consume a global Take(N) budget.
+        // Keep a small number of alternatives per concrete season, plus a few parent
+        // albums without an explicit season because those may expose series_object.
+        var candidates = scoredCandidates
+            .Where(i => i.season > 0)
+            .GroupBy(i => i.season)
+            .SelectMany(g => g
+                .OrderByDescending(i => i.score)
+                .ThenByDescending(i => i.album.count)
+                .ThenByDescending(i => i.album.updated_time ?? 0)
+                .Take(requiredSeason > 0 ? 6 : 2))
+            .Concat(
+                scoredCandidates
+                    .Where(i => i.season <= 0)
+                    .OrderByDescending(i => i.score)
+                    .ThenByDescending(i => i.album.count)
+                    .ThenByDescending(i => i.album.updated_time ?? 0)
+                    .Take(8)
+            )
             .OrderByDescending(i => i.score)
+            .ThenBy(i => i.season <= 0 ? short.MaxValue : i.season)
             .ThenByDescending(i => i.album.count)
-            .ThenByDescending(i => i.album.updated_time ?? 0)
-            .Take(30)
             .ToList();
 
         foreach (var candidate in candidates)
