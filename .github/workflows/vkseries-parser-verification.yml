@@ -33,7 +33,7 @@ jobs:
               <ImplicitUsings>enable</ImplicitUsings>
             </PropertyGroup>
             <ItemGroup>
-              <ProjectReference Include="${GITHUB_WORKSPACE}/Modules/OnlineRUS/VkSeries/VkSeries.csproj" />
+              <ProjectReference Include="$(GITHUB_WORKSPACE)/Modules/OnlineRUS/VkSeries/VkSeries.csproj" />
             </ItemGroup>
           </Project>
           EOF
