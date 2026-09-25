@@ -1,0 +1,50 @@
+name: VkSeries exact episode probe
+
+on:
+  push:
+    branches: [vkseries-api-probe-20260925]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe exact episode fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+          TOKEN="$(curl -fsS -X POST 'https://login.vk.com/?act=get_anonym_token' --data-urlencode "client_id=$CLIENT_ID" | jq -r '.data.access_token // empty')"
+          test -n "$TOKEN"
+
+          for q in             'Кухня 1 сезон 1 серия'             'Кухня 6 сезон 20 серия'             'Мажор 1 сезон 1 серия 2014'             'Мажор 2 сезон 1 серия 2016'             'Триггер 1 сезон 1 серия 2020'             'Триггер 2 сезон 1 серия 2022'             'Слово пацана 1 сезон 1 серия 2023'             'Ландыши 1 сезон 1 серия 2025'; do
+
+            echo "===== $q ====="
+            json="$(curl -fsS -X POST "$API/catalog.getVideoSearchWeb2?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN"               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode 'extended=1'               --data-urlencode 'count=50'               --data-urlencode "q=$q")"
+
+            jq '{
+              candidates:[
+                (.response.catalog_videos // [])[]?.video
+                | select((.duration // 0) >= 600)
+                | {
+                    owner_id,id,title,duration,
+                    description:(.description // "" | .[:180]),
+                    quality:{
+                      p2160:(.files.mp4_2160!=null),
+                      p1440:(.files.mp4_1440!=null),
+                      p1080:(.files.mp4_1080!=null),
+                      p720:(.files.mp4_720!=null),
+                      p480:(.files.mp4_480!=null),
+                      hls:(.files.hls!=null or .files.hls_fmp4!=null),
+                      external:(.files.external!=null)
+                    }
+                  }
+              ][:30]
+            }' <<<"$json"
+          done
