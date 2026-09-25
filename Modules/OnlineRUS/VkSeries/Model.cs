@@ -14,6 +14,19 @@ public class Response
     public List<VideoAlbum> albums { get; set; }
     public List<Video> videos { get; set; }
     public List<VkGroup> groups { get; set; }
+    public CatalogSection section { get; set; }
+    public CatalogContainer catalog { get; set; }
+}
+
+public class CatalogContainer
+{
+    public List<CatalogSection> sections { get; set; }
+}
+
+public class CatalogSection
+{
+    public string id { get; set; }
+    public string next_from { get; set; }
 }
 
 public class VkGroup
