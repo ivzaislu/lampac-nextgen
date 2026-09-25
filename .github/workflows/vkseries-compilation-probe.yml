@@ -46,6 +46,16 @@ jobs:
             }' <<<"$j"
           done
 
+          echo '===== Probe discovered owner albums ====='
+          for owner in -209745116 -199103112 -102553865 -240197792; do
+            echo "===== OWNER $owner ====="
+            j="$(call_api video.getAlbums               --data-urlencode "owner_id=$owner"               --data-urlencode 'extended=1'               --data-urlencode 'need_system=0'               --data-urlencode 'count=100'               --data-urlencode 'offset=0')"
+            jq '{
+              count:(.response.count // null),
+              albums:[(.response.items // [])[:100][]? | {id,owner_id,title,count,updated_time}]
+            }' <<<"$j"
+          done
+
           echo '===== Probe known good episode albums ====='
           for pair in '-209745116 10' '-93951483 1' '-240197792 1' '-199103112 1'; do
             read -r owner album <<<"$pair"
