@@ -1,0 +1,97 @@
+name: VkSeries video fallback probe
+
+on:
+  pull_request:
+    branches:
+      - VkSeries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Probe search videos to parent albums
+        shell: python
+        run: |
+          import json,re,urllib.parse,urllib.request
+
+          CID="52461373"; V="5.264"; BASE="https://api.vkvideo.ru/method/"
+          def post(url,data):
+              req=urllib.request.Request(url,data=urllib.parse.urlencode(data).encode(),method="POST")
+              with urllib.request.urlopen(req,timeout=30) as r:
+                  return json.loads(r.read().decode())
+          tok=post("https://login.vk.com/?act=get_anonym_token",{"client_id":CID}).get("data",{}).get("access_token")
+          assert tok
+          def api(method,**p):
+              p["access_token"]=tok
+              return post(f"{BASE}{method}?v={V}&client_id={CID}",p)
+
+          def norm(s):
+              return " ".join(re.findall(r"[0-9A-Za-zА-Яа-яЁё]+",(s or "").lower().replace("ё","е")))
+
+          pats=[
+              re.compile(r"(?i)\bS(?P<s>\d{1,2})[\s._-]*E(?P<e>\d{1,3})\b"),
+              re.compile(r"(?i)\b(?P<s>\d{1,2})\s*[xх]\s*(?P<e>\d{1,3})\b"),
+              re.compile(r"(?i)\b(?P<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\D{0,32}(?P<e>\d{1,3})(?:\s*[-–—]?\s*(?:я|ая))?\s*(?:серия|серии|episode|ep|эпизод)\b"),
+              re.compile(r"(?i)\b(?:сезон|season)\s*[№#]?\s*(?P<s>\d{1,2})\D{0,32}(?:серия|серии|episode|ep|эпизод)\s*[№#]?\s*(?P<e>\d{1,3})\b"),
+          ]
+          def parse(text):
+              for p in pats:
+                  m=p.search(text or "")
+                  if m:return int(m.group("s")),int(m.group("e"))
+              return None
+          def q(files):
+              files=files or {}
+              for k,r in [("mp4_2160",9),("mp4_1440",8),("mp4_1080",7),("mp4_720",6),("mp4_480",5),("mp4_360",4),("mp4_240",3),("mp4_144",2)]:
+                  if files.get(k): return r
+              if files.get("hls_fmp4") or files.get("hls"): return 1
+              return 0
+          def starts_series(text,title):
+              t=norm(text).split(); z=norm(title).split()
+              return len(t)>=len(z) and t[:len(z)]==z
+
+          for title,year in [("Кухня",2012),("Слово пацана",2023),("Ландыши",2025)]:
+              print(f"===== VIDEO_FALLBACK {title} {year} =====")
+              roots=[]
+              for query in (title,f"{title} {year}"):
+                  roots.append(api("catalog.getVideoSearchWeb2",screen_ref="search_video_service",input_method="keyboard_search_button",q=query,count=100))
+              vids={}
+              for root in roots:
+                  resp=root.get("response",{})
+                  for cv in (resp.get("catalog_videos") or []):
+                      v=cv.get("video") or {}
+                      if v.get("owner_id") and v.get("id"): vids[(v["owner_id"],v["id"])]=v
+                  for v in (resp.get("videos") or []):
+                      if v.get("owner_id") and v.get("id"): vids[(v["owner_id"],v["id"])]=v
+              print("VIDEOS",len(vids))
+              picked=[]
+              for v in vids.values():
+                  se=parse(v.get("title")) or parse(v.get("description"))
+                  qual=q(v.get("files"))
+                  start=starts_series(v.get("title"),title)
+                  row={"owner_id":v.get("owner_id"),"id":v.get("id"),"title":v.get("title"),"duration":v.get("duration"),"q":qual,"se":se,"starts":start}
+                  if se and qual and start and (v.get("duration") or 0)>=600:
+                      picked.append(v)
+                      print("EPISODE_VIDEO",json.dumps(row,ensure_ascii=False,separators=(",",":")))
+                  elif qual and start:
+                      print("START_VIDEO",json.dumps(row,ensure_ascii=False,separators=(",",":")))
+              seen=set()
+              for v in picked[:12]:
+                  owner=v["owner_id"]; vid=v["id"]
+                  try:
+                      root=api("video.getAlbumsByVideo",target_id=owner,owner_id=owner,video_id=vid,extended=1)
+                  except Exception as ex:
+                      print("ALBUMS_BY_VIDEO_HTTP_ERROR",owner,vid,repr(ex)); continue
+                  print("ALBUMS_BY_VIDEO",owner,vid,json.dumps(root,ensure_ascii=False,separators=(",",":"))[:5000])
+                  resp=root.get("response")
+                  items=[]
+                  if isinstance(resp,dict): items=resp.get("items") or []
+                  elif isinstance(resp,list): items=resp
+                  for a in items:
+                      if isinstance(a,dict) and a.get("id") and a.get("owner_id"):
+                          seen.add((a["owner_id"],a["id"],a.get("title","")))
+              print("DISCOVERED_ALBUMS",json.dumps(sorted(seen),ensure_ascii=False))
