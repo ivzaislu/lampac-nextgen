@@ -1,0 +1,47 @@
+name: VkSeries compilation probe
+
+on:
+  push:
+    branches:
+      - vkseries-global-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Probe whole-season videos
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+
+          token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST 'https://login.vk.com/?act=get_anonym_token'             --data-urlencode "client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
+          test -n "$TOKEN"
+
+          call_api() {
+            local method="$1"; shift
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          for q in             'Симпсоны 1 сезон'             'Симпсоны 5 сезон'             'Южный парк 1 сезон'             'Южный парк 10 сезон'             'The Simpsons season 1'             'South Park season 1'; do
+
+            echo "===== $q ====="
+            j="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'extended=1'               --data-urlencode 'count=50')"
+
+            jq '{
+              albums:[(.response.albums // [])[:12][]? | {id,owner_id,title,count}],
+              videos:[(.response.catalog_videos // [])[:35][]?.video | {
+                owner_id,id,title,duration,owner_name,
+                has_files:(.files != null)
+              }]
+            }' <<<"$j"
+          done
