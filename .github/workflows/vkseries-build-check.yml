@@ -1,0 +1,23 @@
+name: VkSeries build check
+
+on:
+  push:
+    branches:
+      - vkseries-global-discovery-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+      - run: dotnet restore --verbosity minimal NextGen.slnx
+      - run: dotnet build NextGen.slnx --configuration Release --no-restore --verbosity minimal
