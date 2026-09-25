@@ -26,6 +26,7 @@ public class VideoAlbum
     public SeriesObject series_object { get; set; }
 
     public int season { get; set; }
+    public bool context_verified { get; set; }
 }
 
 public class SeriesObject
