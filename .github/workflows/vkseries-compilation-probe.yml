@@ -56,6 +56,16 @@ jobs:
             }' <<<"$j"
           done
 
+          echo '===== Probe Simpsons owner pagination ====='
+          for offset in 100 200; do
+            echo "===== SIMPSONS_OWNER_PAGE offset=$offset ====="
+            j="$(call_api video.getAlbums               --data-urlencode 'owner_id=-222948973'               --data-urlencode 'extended=1'               --data-urlencode 'need_system=0'               --data-urlencode 'count=100'               --data-urlencode "offset=$offset")"
+            jq '{
+              count:(.response.count // null),
+              albums:[(.response.items // [])[]? | select((.title // "") | test("Симпсон"; "i")) | {id,owner_id,title,count,updated_time}]
+            }' <<<"$j"
+          done
+
           echo '===== Probe Simpsons native hierarchy ====='
           for pair in '-222948973 194' '-222948973 36'; do
             read -r owner album <<<"$pair"
