@@ -1,0 +1,152 @@
+name: VkSeries quick smoke
+
+on:
+  push:
+    branches:
+      - vkseries-global-clean-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+      - name: Smoke three representative shows
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/VkSeriesQuickSmoke
+
+          cat >.tmp/VkSeriesQuickSmoke/Test.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <OutputType>Exe</OutputType>
+              <ImplicitUsings>enable</ImplicitUsings>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="../../Modules/OnlineRUS/VkSeries/VkSeries.csproj" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+          cat >.tmp/VkSeriesQuickSmoke/Program.cs <<'EOF'
+          using System.Collections;
+          using System.Reflection;
+          using System.Text.Json;
+          using Shared.Services.Utilities;
+          using VkSeries;
+
+          var shows=new (string title,short year)[]{
+              ("Физрук",2014),
+              ("Универ",2008),
+              ("Слово пацана",2023)
+          };
+
+          var t=typeof(VkSeriesController);
+          var queriesM=t.GetMethod("BuildSearchQueries",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var trustedM=t.GetMethod("ParseTrustedDirectVideos",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var groupM=t.GetMethod("GroupIdentityScore",BindingFlags.Static|BindingFlags.NonPublic)!;
+
+          using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(25)};
+          const int clientId=52461373;
+          const string api="https://api.vkvideo.ru/method";
+          const string ver="5.282";
+
+          var auth=JsonDocument.Parse(await Post($"https://api.vkvideo.ru/method/auth.getAnonymToken?v=5.264&client_id={clientId}",new()));
+          string token=auth.RootElement.GetProperty("response").GetProperty("token").GetString()!;
+
+          List<(short season,short episode,Video video)> Read(object? value)
+          {
+              var r=new List<(short,short,Video)>();
+              foreach(var item in (IEnumerable?)value??Array.Empty<object>())
+              {
+                  if(item is null)continue;
+                  var it=item.GetType();
+                  short s=(short)(it.GetProperty("season")?.GetValue(item)??(short)0);
+                  short e=(short)(it.GetProperty("episode")?.GetValue(item)??(short)0);
+                  var v=(Video?)it.GetProperty("video")?.GetValue(item);
+                  if(v!=null)r.Add((s,e,v));
+              }
+              return r;
+          }
+
+          bool Noise(string? x)
+          {
+              var s=(x??"").ToLowerInvariant();
+              return s.Contains("трейлер")||s.Contains("тизер")||s.Contains("анонс")||
+                     s.Contains("trailer")||s.Contains("teaser")||s.Contains("promo")||
+                     s.Contains("preview")||s.Contains("нарезк")||s.Contains("лучшие моменты");
+          }
+
+          if((int)groupM.Invoke(null,new object?[]{"Универ Новая общага","Универ",""})! != 0)
+              throw new Exception("spinoff group accepted");
+
+          foreach(var show in shows)
+          {
+              var all=new List<Video>();
+
+              for(short season=1;season<=2;season++)
+              {
+                  var qs=(IEnumerable<string>?)queriesM.Invoke(null,new object?[]{show.title,"",show.year,season,false})??Array.Empty<string>();
+
+                  foreach(var q in qs.Take(4))
+                  {
+                      var root=await Search(q);
+                      if(root?.response?.catalog_videos!=null)
+                          all.AddRange(root.response.catalog_videos.Where(x=>x?.video!=null).Select(x=>x.video));
+                  }
+              }
+
+              all=all.Where(v=>v!=null&&v.id>0&&v.owner_id!=0)
+                  .GroupBy(v=>$"{v.owner_id}:{v.id}")
+                  .Select(g=>g.First()).ToList();
+
+              string st=SearchNameTo.Convert(show.title)??"";
+              var trusted=Read(trustedM.Invoke(null,new object?[]{all,st,"",show.year,(short)0}));
+
+              if(trusted.Any(x=>Noise(x.video.title)||Noise(x.video.description)))
+                  throw new Exception($"{show.title}: noise survived");
+
+              var groups=trusted.GroupBy(x=>x.season).Where(g=>g.Key>0).OrderBy(g=>g.Key)
+                  .Select(g=>new{
+                      season=g.Key,
+                      count=g.Select(x=>x.episode).Distinct().Count(),
+                      first=g.Min(x=>x.episode),
+                      last=g.Max(x=>x.episode),
+                      samples=g.OrderBy(x=>x.episode).Take(3).Select(x=>x.video.title).ToArray()
+                  }).ToArray();
+
+              Console.WriteLine(JsonSerializer.Serialize(new{show=show.title,seasons=groups}));
+          }
+
+          async Task<Root?> Search(string q)
+          {
+              string json=await Post($"{api}/catalog.getVideoSearchWeb2?v={ver}&client_id={clientId}",new(){
+                  ["access_token"]=token,
+                  ["screen_ref"]="search_video_service",
+                  ["input_method"]="keyboard_search_button",
+                  ["extended"]="1",
+                  ["content_type"]="video",
+                  ["count"]="50",
+                  ["q"]=q
+              });
+              return JsonSerializer.Deserialize<Root>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+          }
+
+          async Task<string> Post(string url,Dictionary<string,string> form)
+          {
+              using var res=await http.PostAsync(url,new FormUrlEncodedContent(form));
+              return await res.Content.ReadAsStringAsync();
+          }
+          EOF
+
+          dotnet run --project .tmp/VkSeriesQuickSmoke/Test.csproj --configuration Release
