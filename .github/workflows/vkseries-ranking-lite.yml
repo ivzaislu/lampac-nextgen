@@ -131,6 +131,61 @@ jobs:
               }
           }
 
+          Console.WriteLine("===== TARGETED_GAPS =====");
+          var targets = new (string title, string original, short year, short season)[]
+          {
+              ("Симпсоны","The Simpsons",1989,3),
+              ("Симпсоны","The Simpsons",1989,9),
+              ("Симпсоны","The Simpsons",1989,24),
+              ("Симпсоны","The Simpsons",1989,28),
+              ("Симпсоны","The Simpsons",1989,36),
+              ("Симпсоны","The Simpsons",1989,37),
+              ("Южный парк","South Park",1997,5),
+              ("Южный парк","South Park",1997,14),
+              ("Южный парк","South Park",1997,20),
+              ("Южный парк","South Park",1997,21),
+              ("Южный парк","South Park",1997,28),
+              ("Триггер","Trigger",2020,2),
+              ("Триггер","Trigger",2020,3),
+              ("Слово пацана","The Boy's Word. Blood on the Asphalt",2023,1)
+          };
+
+          foreach (var tg in targets)
+          {
+              var st=Norm(tg.title); var so=Norm(tg.original);
+              var albums=new List<VideoAlbum>();
+              var videos=new List<Video>();
+              foreach(var q in new[]{
+                  $"{tg.title} {tg.season} сезон",
+                  $"{tg.title} сезон {tg.season}",
+                  $"{tg.title} {tg.year} {tg.season} сезон",
+                  $"{tg.original} {tg.season} season",
+                  $"{tg.original} season {tg.season}"
+              }.Distinct())
+              {
+                  var root=await Search(q);
+                  if(root?.response?.albums!=null) albums.AddRange(root.response.albums);
+                  if(root?.response?.catalog_videos!=null) videos.AddRange(root.response.catalog_videos.Where(x=>x?.video!=null).Select(x=>x.video));
+              }
+
+              var scored=albums.Where(x=>x!=null&&x.id>0&&x.owner_id!=0)
+                  .GroupBy(x=>$"{x.owner_id}:{x.id}").Select(g=>g.First())
+                  .Select(a=>new{a,score=AlbumScore(a,st,so,tg.year),season=ParseSeason(a.title)})
+                  .OrderByDescending(x=>x.score).ThenByDescending(x=>x.a.count).Take(12).ToList();
+
+              var vscored=videos.Where(x=>x!=null)
+                  .GroupBy(x=>$"{x.owner_id}:{x.id}").Select(g=>g.First())
+                  .Select(vv=>new{v=vv,score=VideoScore(vv,st,so,tg.year),season=ParseSeason($"{vv.title} {vv.description}")})
+                  .OrderByDescending(x=>x.score).ThenByDescending(x=>x.v.duration).Take(10).ToList();
+
+              Console.WriteLine(JsonSerializer.Serialize(new{
+                  kind="target",
+                  tg.title,tg.season,
+                  albums=scored.Select(x=>new{x.score,x.season,x.a.owner_id,x.a.id,x.a.title,x.a.count}),
+                  videos=vscored.Select(x=>new{x.score,x.season,x.v.title,x.v.duration,has_files=x.v.files!=null})
+              }));
+          }
+
           async Task<Root?> Search(string q)
           {
               var json=await Post($"{api}/catalog.getVideoSearchWeb2?v={v}&client_id={clientId}",new(){
