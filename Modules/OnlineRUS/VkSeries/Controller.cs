@@ -209,10 +209,14 @@ public class VkSeriesController : BaseOnlineController
                 if (score == 0 && i.context_verified && IsGenericSeasonAlbum(i))
                     score = 850 + Math.Min(i.count, 30);
 
+                bool multiSeason = IsMultiSeasonAlbumTitle(i.title);
+                if (multiSeason)
+                    score = Math.Max(1, score - 200);
+
                 return (
                     album: i,
                     score,
-                    season: (short)ParseSeason(i.title)
+                    season: (short)(multiSeason ? 0 : ParseSeason(i.title))
                 );
             })
             .Where(i => i.score > 0)
@@ -1269,6 +1273,22 @@ public class VkSeriesController : BaseOnlineController
         }
 
         return 0;
+    }
+
+    static bool IsMultiSeasonAlbumTitle(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return Regex.IsMatch(
+                   value,
+                   @"(?i)\b\d{1,2}\s*[-–—]\s*\d{1,2}\s*(?:сезон|сезоны|сезонов|seasons?)\b") ||
+               Regex.IsMatch(
+                   value,
+                   @"(?i)\b(?:сезон|сезоны|сезонов|seasons?)\s*[:№#]?\s*\d{1,2}\s*[-–—]\s*\d{1,2}\b") ||
+               Regex.IsMatch(
+                   value,
+                   @"(?i)\b\d{1,2}(?:\s+\d{1,2}){2,}\s*(?:сезон|сезоны|сезонов|seasons?)\b");
     }
 
     static bool IsGenericSeasonAlbum(VideoAlbum album)
