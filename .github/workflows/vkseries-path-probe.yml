@@ -1,0 +1,116 @@
+name: VkSeries path probe
+
+on:
+  pull_request:
+    branches:
+      - VkSeries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-path:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe VK Video album to episodes paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+
+          token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30 -X POST 'https://login.vk.com/?act=get_anonym_token' --data-urlencode "client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
+          test -n "$TOKEN"
+          echo "TOKEN_OK"
+
+          call_api() {
+            local method="$1"; shift
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30 -X POST "$API/$method?v=$V&client_id=$CLIENT_ID" --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          probe_album() {
+            local label="$1" owner="$2" album="$3"
+            echo "===== ALBUM $label owner=$owner album=$album ====="
+
+            info="$(call_api video.getAlbumById --data-urlencode "owner_id=$owner" --data-urlencode "album_id=$album" || true)"
+            echo "INFO"
+            jq '{error:.error,response:(if .response then {id:.response.id,owner_id:.response.owner_id,title:.response.title,count:.response.count,type:.response.type,response_type:.response.response_type,series_object:.response.series_object} else null end)}' <<<"$info"
+
+            from="$(call_api video.getFromAlbum --data-urlencode "owner_id=$owner" --data-urlencode "album_id=$album" --data-urlencode 'count=50' --data-urlencode 'offset=0' --data-urlencode 'extended=1' || true)"
+            echo "FROM_ALBUM"
+            jq '{
+              error:.error,
+              count:(.response.count // null),
+              item_count:((.response.items // [])|length),
+              items:[(.response.items // [])[:15][]? | {
+                playlist_position,
+                video:(.video | {
+                  owner_id,id,title,duration,
+                  has_files:(.files!=null),
+                  quality:{
+                    p2160:(.files.mp4_2160!=null),
+                    p1440:(.files.mp4_1440!=null),
+                    p1080:(.files.mp4_1080!=null),
+                    p720:(.files.mp4_720!=null),
+                    hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                  }
+                })
+              }]
+            }' <<<"$from"
+
+            legacy="$(call_api video.get --data-urlencode "owner_id=$owner" --data-urlencode "album_id=$album" --data-urlencode 'count=50' --data-urlencode 'offset=0' --data-urlencode 'sort_album=1' --data-urlencode 'extended=1' || true)"
+            echo "VIDEO_GET"
+            jq '{
+              error:.error,
+              count:(.response.count // null),
+              item_count:((.response.items // [])|length),
+              items:[(.response.items // [])[:15][]? | {
+                owner_id,id,title,duration,
+                has_files:(.files!=null),
+                quality:{
+                  p2160:(.files.mp4_2160!=null),
+                  p1440:(.files.mp4_1440!=null),
+                  p1080:(.files.mp4_1080!=null),
+                  p720:(.files.mp4_720!=null),
+                  hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                }
+              }]
+            }' <<<"$legacy"
+          }
+
+          probe_album "major_s1" -79839550 2
+          probe_album "major_s2" -79839550 3
+          probe_album "kitchen_s1" -56112372 1
+          probe_album "kitchen_all" -180344905 12
+          probe_album "trigger_s1" -31894620 53583149
+          probe_album "trigger_s2" -31894620 53583206
+
+          echo "===== NATIVE OWNER -234262894 ====="
+          native="$(call_api video.getAlbums --data-urlencode 'owner_id=-234262894' --data-urlencode 'count=100' --data-urlencode 'offset=0' --data-urlencode 'extended=1' --data-urlencode 'need_system=0')"
+          jq '{error:.error,count:(.response.count // null),items:[(.response.items // [])[:25][]? | {id,owner_id,title,count,type,response_type,updated_time}]}' <<<"$native"
+
+          mapfile -t native_pairs < <(jq -r '[.response.items // [] | .[] | select(.id!=null) | "\(.owner_id) \(.id)"] | .[:20][]' <<<"$native")
+          for pair in "${native_pairs[@]}"; do
+            read -r owner album <<<"$pair"
+            info="$(call_api video.getAlbumById --data-urlencode "owner_id=$owner" --data-urlencode "album_id=$album" || true)"
+            seasons="$(jq -r '(.response.series_object.seasons // []) | length' <<<"$info")"
+            if [[ "$seasons" -gt 0 ]]; then
+              echo "NATIVE_SERIES_FOUND owner=$owner album=$album"
+              jq '{id:.response.id,owner_id:.response.owner_id,title:.response.title,count:.response.count,series_object:.response.series_object}' <<<"$info"
+              title="$(jq -r '.response.title // empty' <<<"$info")"
+              if [[ -n "$title" ]]; then
+                echo "GLOBAL_SEARCH_NATIVE title=$title"
+                global="$(call_api catalog.getVideoSearchWeb2 --data-urlencode 'screen_ref=search_video_service' --data-urlencode 'input_method=keyboard_search_button' --data-urlencode "q=$title")"
+                jq --arg t "$title" '{
+                  error:.error,
+                  albums:[(.response.albums // [])[:20][]? | {id,owner_id,title,count,type,response_type}],
+                  matching:[(.response.albums // [])[]? | select(.owner_id==-234262894) | {id,owner_id,title,count,type,response_type}]
+                }' <<<"$global"
+              fi
+              break
+            fi
+          done
