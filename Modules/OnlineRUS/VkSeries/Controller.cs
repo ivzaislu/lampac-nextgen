@@ -9,7 +9,6 @@ using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -37,7 +36,7 @@ public class VkSeriesController : BaseOnlineController
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
 
-        if (!await EnsureAnonymToken(init, proxy))
+        if (!await EnsureAnonymToken(init))
             return ShowError("token");
 
         string searchTitle = SearchNameTo.Convert(title);
@@ -1589,7 +1588,7 @@ public class VkSeriesController : BaseOnlineController
         };
     }
 
-    async Task<bool> EnsureAnonymToken(BaseSettings init, WebProxy proxy)
+    async Task<bool> EnsureAnonymToken(BaseSettings init)
     {
         if (!string.IsNullOrEmpty(access_token) && token_expires > DateTime.UtcNow)
             return true;
