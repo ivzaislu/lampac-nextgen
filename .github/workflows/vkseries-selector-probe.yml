@@ -1,0 +1,201 @@
+name: VkSeries selector probe
+
+on:
+  pull_request:
+    branches:
+      - VkSeries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Test global album selector
+        shell: python
+        run: |
+          import json, re, urllib.parse, urllib.request, time
+
+          CLIENT_ID = "52461373"
+          V = "5.264"
+          API = "https://api.vkvideo.ru/method/"
+
+          def post(url, data):
+              body = urllib.parse.urlencode(data).encode()
+              req = urllib.request.Request(url, data=body, method="POST")
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read().decode())
+
+          token_root = post("https://login.vk.com/?act=get_anonym_token", {"client_id": CLIENT_ID})
+          TOKEN = token_root.get("data", {}).get("access_token")
+          assert TOKEN, "anonymous token unavailable"
+          print("TOKEN_OK")
+
+          def api(method, **params):
+              params.update(access_token=TOKEN)
+              return post(f"{API}{method}?v={V}&client_id={CLIENT_ID}", params)
+
+          def norm(s):
+              return "".join(ch.lower() for ch in (s or "") if ch.isalnum()).replace("ё","е").replace("щ","ш")
+
+          noise_words = (
+              "трейлер","тизер","анонс","фрагмент","отрывок","сцена","интервью",
+              "доброеутро","вечернийургант","обзор","премьера","момент","behindthescenes"
+          )
+          compilation_words = ("всесерии","полныйсезон","сезонполностью","allepisodes","fullseason")
+
+          se_patterns = [
+              re.compile(r"(?i)\bS(?P<s>\d{1,2})[\s._-]*E(?P<e>\d{1,3})\b"),
+              re.compile(r"(?i)\b(?P<s>\d{1,2})\s*[xх]\s*(?P<e>\d{1,3})\b"),
+              re.compile(r"(?i)\b(?P<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\D{0,32}(?P<e>\d{1,3})(?:\s*[-–—]?\s*(?:я|ая))?\s*(?:серия|серии|episode|ep|эпизод)\b"),
+              re.compile(r"(?i)\b(?:сезон|season)\s*[№#]?\s*(?P<s>\d{1,2})\D{0,32}(?:серия|серии|episode|ep|эпизод)\s*[№#]?\s*(?P<e>\d{1,3})\b"),
+          ]
+          season_patterns = [
+              re.compile(r"(?i)\b(?:сезон|season)\s*[№#]?\s*(?P<s>\d{1,2})\b"),
+              re.compile(r"(?i)\b(?P<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\b"),
+              re.compile(r"(?i)\bS(?P<s>\d{1,2})\b"),
+          ]
+          ep_patterns = [
+              re.compile(r"(?i)\b(?P<e>\d{1,3})(?:\s*[-–—]?\s*(?:я|ая))?\s*(?:серия|серии|episode|ep|эпизод)\b"),
+              re.compile(r"(?i)\b(?:серия|серии|episode|ep|эпизод)\s*[№#]?\s*(?P<e>\d{1,3})\b"),
+              re.compile(r"(?i)\bE(?P<e>\d{1,3})\b"),
+          ]
+
+          def parse_se(text):
+              for p in se_patterns:
+                  m=p.search(text or "")
+                  if m:
+                      return int(m.group("s")), int(m.group("e"))
+              return None
+
+          def season_hint(text):
+              for p in season_patterns:
+                  m=p.search(text or "")
+                  if m:
+                      return int(m.group("s"))
+              return 0
+
+          def parse_ep(text):
+              for p in ep_patterns:
+                  m=p.search(text or "")
+                  if m:
+                      return int(m.group("e"))
+              return 0
+
+          def quality(files):
+              files=files or {}
+              for rank,key in enumerate(("mp4_2160","mp4_1440","mp4_1080","mp4_720","mp4_480","mp4_360","mp4_240","mp4_144"), start=1):
+                  pass
+              keys=[("mp4_2160",9),("mp4_1440",8),("mp4_1080",7),("mp4_720",6),("mp4_480",5),("mp4_360",4),("mp4_240",3),("mp4_144",2)]
+              for k,r in keys:
+                  if files.get(k): return r
+              if files.get("hls_fmp4") or files.get("hls"): return 1
+              return 0
+
+          def title_score(album_title, title, original, year):
+              v=norm(album_title)
+              qs=[q for q in (norm(title),norm(original)) if q]
+              score=0
+              for q in qs:
+                  if v==q: score=max(score,220)
+                  elif v.startswith(q): score=max(score,180)
+                  elif q in v: score=max(score,120)
+              if not score: return 0
+              if year and str(year) in v: score += 20
+              return score
+
+          def search_albums(title, original, year):
+              found={}
+              queries=[]
+              for q in (title, original):
+                  if q and q not in queries:
+                      queries.append(q)
+                  if q and year:
+                      qy=f"{q} {year}"
+                      if qy not in queries: queries.append(qy)
+              for q in queries:
+                  root=api("catalog.getVideoSearchWeb2", screen_ref="search_video_service", input_method="keyboard_search_button", q=q, count=50)
+                  for a in root.get("response",{}).get("albums",[]) or []:
+                      if a.get("id") and a.get("owner_id"):
+                          found[(a["owner_id"],a["id"])]=a
+              return list(found.values())
+
+          def inspect(album, title, original, year):
+              owner, aid=album["owner_id"],album["id"]
+              base=title_score(album.get("title"),title,original,year)
+              hint=season_hint(album.get("title"))
+              try:
+                  info=api("video.getAlbumById", owner_id=owner, album_id=aid)
+              except Exception:
+                  info={}
+              native=(info.get("response") or {}).get("series_object") or {}
+              native_seasons=len(native.get("seasons") or [])
+
+              try:
+                  root=api("video.getFromAlbum", owner_id=owner, album_id=aid, count=100, offset=0, extended=1)
+              except Exception as ex:
+                  return {"album":album,"base":base,"error":str(ex),"score":-999}
+
+              items=root.get("response",{}).get("items",[]) or []
+              good=[]
+              noise=0
+              playable=0
+              maxq=0
+              for item in items:
+                  v=item.get("video") or {}
+                  q=quality(v.get("files"))
+                  maxq=max(maxq,q)
+                  if q: playable+=1
+                  n=norm((v.get("title") or "")+" "+(v.get("description") or ""))
+                  if any(w in n for w in noise_words+compilation_words) or (0 < (v.get("duration") or 0) < 600):
+                      noise += 1
+                      continue
+                  se=parse_se(v.get("title")) or parse_se(v.get("description"))
+                  ep=0
+                  ss=0
+                  if se:
+                      ss,ep=se
+                  elif hint:
+                      ep=parse_ep(v.get("title")) or parse_ep(v.get("description")) or int(item.get("playlist_position") or 0)
+                      ss=hint
+                  if ep>0 and ss>0 and q>0:
+                      good.append((ss,ep,q,v.get("duration") or 0))
+              unique={(s,e):(q,d) for s,e,q,d in good}
+              good_count=len(unique)
+              score=base + good_count*18 + maxq*8 + min(playable,30) - noise*4 + native_seasons*80
+              if hint: score += 25
+              return {
+                  "album":{"owner_id":owner,"id":aid,"title":album.get("title"),"count":album.get("count")},
+                  "base":base,"season_hint":hint,"native_seasons":native_seasons,
+                  "items":len(items),"playable":playable,"good_episodes":good_count,"noise":noise,
+                  "max_quality":maxq,"score":score,
+                  "episodes":sorted([{"s":s,"e":e,"q":qd[0]} for (s,e),qd in unique.items()], key=lambda x:(x["s"],x["e"]))[:40]
+              }
+
+          tests=[
+              ("Мажор",None,2014),
+              ("Кухня",None,2012),
+              ("Триггер",None,2020),
+              ("Слово пацана",None,2023),
+              ("Ландыши",None,2025),
+          ]
+
+          for title,original,year in tests:
+              print(f"===== SELECT {title} ({year}) =====")
+              albums=search_albums(title,original,year)
+              print("ALBUMS_FOUND",len(albums))
+              results=[]
+              for a in albums[:20]:
+                  if title_score(a.get("title"),title,original,year)<=0:
+                      continue
+                  try:
+                      results.append(inspect(a,title,original,year))
+                  except Exception as ex:
+                      print("INSPECT_ERROR",a.get("owner_id"),a.get("id"),repr(ex))
+                  time.sleep(0.05)
+              results.sort(key=lambda x:x.get("score",-999), reverse=True)
+              for r in results[:8]:
+                  print(json.dumps(r,ensure_ascii=False,separators=(",",":")))
