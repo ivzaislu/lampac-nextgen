@@ -944,21 +944,31 @@ public class VkSeriesController : BaseOnlineController
     {
         var result = new List<ParsedEpisode>();
 
-        foreach (var video in videos)
+        var candidates = (videos ?? Enumerable.Empty<Video>())
+            .Where(video =>
+                video != null &&
+                !IsNoise(video.title) &&
+                !IsMomentVideo(video) &&
+                !IsCompilationVideo(video, albumSeasonHint) &&
+                QualityScore(video.files) > 0)
+            .ToList();
+
+        // playlist_position is useful for season playlists with generic filenames,
+        // but a one-file playlist is ambiguous and is very often the whole season
+        // concatenated into one video. Never turn that into a fake "episode 1".
+        bool allowPlaylistPositionFallback = candidates.Count >= 2;
+
+        foreach (var video in candidates)
         {
-            if (video == null ||
-                IsNoise(video.title) ||
-                IsMomentVideo(video) ||
-                IsCompilationVideo(video, albumSeasonHint))
+            if (!TryParseEpisode(
+                video,
+                albumSeasonHint,
+                allowPlaylistPositionFallback,
+                out short season,
+                out short episode))
             {
                 continue;
             }
-
-            if (!TryParseEpisode(video, albumSeasonHint, out short season, out short episode))
-                continue;
-
-            if (QualityScore(video.files) == 0)
-                continue;
 
             result.Add(new ParsedEpisode
             {
@@ -1226,7 +1236,7 @@ public class VkSeriesController : BaseOnlineController
         return 0;
     }
 
-    static bool TryParseEpisode(Video video, short albumSeasonHint, out short season, out short episode)
+    static bool TryParseEpisode(Video video, short albumSeasonHint, bool allowPlaylistPositionFallback, out short season, out short episode)
     {
         season = 0;
         episode = 0;
@@ -1250,7 +1260,9 @@ public class VkSeriesController : BaseOnlineController
                 return true;
             }
 
-            if (video != null && video.playlist_position > 0)
+            if (allowPlaylistPositionFallback &&
+                video != null &&
+                video.playlist_position > 0)
             {
                 season = (short)explicitSeason;
                 episode = (short)Math.Min(video.playlist_position, short.MaxValue);
@@ -1280,7 +1292,9 @@ public class VkSeriesController : BaseOnlineController
             return true;
         }
 
-        if (video != null && video.playlist_position > 0)
+        if (allowPlaylistPositionFallback &&
+            video != null &&
+            video.playlist_position > 0)
         {
             season = albumSeasonHint;
             episode = (short)Math.Min(video.playlist_position, short.MaxValue);
