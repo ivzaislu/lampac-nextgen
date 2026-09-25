@@ -37,16 +37,22 @@ jobs:
           echo SEARCH_OK
           jq '{error:.error,albums:[(.response.albums // [])[:5][]? | {id,owner_id,title,count}]}' <<<"$search"
 
-          pair="$(jq -r '[.response.albums // [] | .[]? | select((.title // "") | test("Южный парк|South Park";"i")) | select(.count > 1)] | first | "\(.owner_id) \(.id)"' <<<"$search")"
-          test -n "$pair"
-          read -r owner album <<<"$pair"
+          # Use episode albums already verified by the discovery probes. The first
+          # search result may legally be external-only, which is a source property,
+          # not an authentication failure.
+          stream=""
+          for pair in '-240197792 1' '-209745116 10'; do
+            read -r owner album <<<"$pair"
 
-          eps="$(call_api video.getFromAlbum             --data-urlencode "owner_id=$owner"             --data-urlencode "album_id=$album"             --data-urlencode 'extended=1'             --data-urlencode 'count=30')"
+            eps="$(call_api video.getFromAlbum               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album"               --data-urlencode 'extended=1'               --data-urlencode 'count=30')"
 
-          echo ALBUM_OK
-          jq '{error:.error,count:.response.count,playable:[(.response.items // [])[]? | select(.video.files != null) | {playlist_position,title:.video.title,duration:.video.duration}] | length}' <<<"$eps"
+            echo "ALBUM_OK owner=$owner album=$album"
+            jq '{error:.error,count:.response.count,playable:[(.response.items // [])[]? | select(.video.files != null) | {playlist_position,title:.video.title,duration:.video.duration}] | length}' <<<"$eps"
 
-          stream="$(jq -r '[.response.items // [] | .[]?.video.files | select(. != null) | (.mp4_720 // .mp4_480 // .mp4_360 // .hls_fmp4 // .hls // empty)] | map(select(length>0)) | first // empty' <<<"$eps")"
+            stream="$(jq -r '[.response.items // [] | .[]?.video.files | select(. != null) | (.mp4_720 // .mp4_480 // .mp4_360 // .hls_fmp4 // .hls // empty)] | map(select(length>0)) | first // empty' <<<"$eps")"
+            [[ -n "$stream" ]] && break
+          done
+
           test -n "$stream"
 
           code="$(curl -L -sS -o /dev/null -w '%{http_code}' --range 0-1023 --connect-timeout 10 --max-time 30             -H 'Origin: https://vkvideo.ru'             -H 'Referer: https://vkvideo.ru/'             "$stream")"
