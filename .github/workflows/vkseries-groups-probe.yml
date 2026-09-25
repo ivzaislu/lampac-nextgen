@@ -1,0 +1,32 @@
+name: VkSeries groups probe
+
+on:
+  push:
+    branches:
+      - vkseries-global-clean-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect search groups for ten shows
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+          auth="$(curl -fsS -X POST "$API/auth.getAnonymToken?v=$V&client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.response.token // empty' <<<"$auth")"
+          test -n "$TOKEN"
+
+          for q in             'Интерны' 'Универ' 'Воронины' 'Молодёжка' 'Физрук'             'Полицейский с Рублёвки' 'Ивановы-Ивановы' 'Отель Элеон'             'Реальные пацаны' 'Папины дочки'; do
+            echo "===== $q ====="
+            j="$(curl -fsS -X POST "$API/catalog.getVideoSearchWeb2?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN"               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode 'extended=1'               --data-urlencode 'count=50'               --data-urlencode "q=$q")"
+            jq -c '[.response.groups // [] | .[:20][]? | {id,name,screen_name}]' <<<"$j"
+          done
