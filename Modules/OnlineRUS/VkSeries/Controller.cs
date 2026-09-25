@@ -877,6 +877,13 @@ public class VkSeriesController : BaseOnlineController
                 return true;
             }
 
+            if (video?.playlist_position > 0 && video.playlist_position <= 999)
+            {
+                season = (short)explicitSeason;
+                episode = (short)video.playlist_position;
+                return true;
+            }
+
             return false;
         }
 
@@ -887,6 +894,13 @@ public class VkSeriesController : BaseOnlineController
             TryGenericEpisode(video?.description, out episode))
         {
             season = albumSeasonHint;
+            return true;
+        }
+
+        if (video?.playlist_position > 0 && video.playlist_position <= 999)
+        {
+            season = albumSeasonHint;
+            episode = (short)video.playlist_position;
             return true;
         }
 
