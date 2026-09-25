@@ -64,7 +64,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v15:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v16:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchGlobalAlbums(title, original_title, year);
             albums = await ExpandDiscoveredOwnerAlbums(
@@ -350,7 +350,7 @@ public class VkSeriesController : BaseOnlineController
     {
     rhubFallback:
         // Keep the rendered cache separate from the raw album cache.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v15:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v16:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -403,7 +403,7 @@ public class VkSeriesController : BaseOnlineController
         string searchTitle = SearchNameTo.Convert(title);
         string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v15:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v16:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await SearchGlobalVideos(title, original_title, year, season);
             if (videos == null || videos.Count == 0)
@@ -468,7 +468,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v15:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v16:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<VideoAlbum>();
 
@@ -539,7 +539,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v15:owner:{ownerId}:albums"), 60, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v16:owner:{ownerId}:albums"), 60, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -587,7 +587,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v15:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v16:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<Video>();
 
@@ -674,7 +674,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v15:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v16:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -689,7 +689,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v15:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v16:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
@@ -894,48 +894,41 @@ public class VkSeriesController : BaseOnlineController
             return 0;
 
         string value = SearchNameTo.Convert(video.title);
-        string description = SearchNameTo.Convert(video.description);
-        int score = 0;
+        if (value == null)
+            return 0;
 
-        void Match(string query)
-        {
-            if (string.IsNullOrWhiteSpace(query))
-                return;
-
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                if (value == query)
-                    score = Math.Max(score, 220);
-                else if (value.StartsWith(query))
-                    score = Math.Max(score, 180);
-                else if (value.Contains(query))
-                    score = Math.Max(score, 120);
-            }
-
-            if (!string.IsNullOrWhiteSpace(description) && description.Contains(query))
-                score = Math.Max(score, 90);
-        }
-
-        Match(searchTitle);
-        Match(searchOriginalTitle);
+        int score = Math.Max(
+            Math.Max(
+                SeriesIdentityScore(value, searchTitle),
+                SeriesIdentityScore(value, searchOriginalTitle)
+            ),
+            SeriesPairIdentityScore(value, searchTitle, searchOriginalTitle)
+        );
 
         if (score == 0)
             return 0;
 
         string raw = $"{video.title} {video.description}";
-        if (year > 0)
-        {
-            if (raw.Contains(year.ToString()))
-            {
-                score += 30;
-            }
-            else if (Regex.IsMatch(raw, @"\b(?:19|20)\d{2}\b"))
-            {
-                int season = ParseSeason(raw);
+        var years = Regex.Matches(raw, @"\b(?:19|20)\d{2}\b")
+            .Cast<Match>()
+            .Select(i => i.Value)
+            .Distinct()
+            .ToList();
 
-                // As with albums, a later season can legitimately contain a later year.
-                if (season <= 1)
-                    score -= 100;
+        if (year > 0 && years.Count > 0)
+        {
+            int season = ParseSeason(raw);
+
+            if (season <= 1)
+            {
+                if (!years.Contains(year.ToString()))
+                    return 0;
+
+                score += 50;
+            }
+            else if (years.Contains(year.ToString()))
+            {
+                score += 20;
             }
         }
 
