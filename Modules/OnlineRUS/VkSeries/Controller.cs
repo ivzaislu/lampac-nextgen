@@ -819,7 +819,7 @@ public class VkSeriesController : BaseOnlineController
             if (video == null ||
                 IsNoise(video.title) ||
                 IsMomentVideo(video) ||
-                IsCompilationVideo(video))
+                IsCompilationVideo(video, albumSeasonHint))
             {
                 continue;
             }
@@ -1198,7 +1198,7 @@ public class VkSeriesController : BaseOnlineController
         return false;
     }
 
-    static bool IsCompilationVideo(Video video)
+    static bool IsCompilationVideo(Video video, short albumSeasonHint = 0)
     {
         if (video == null)
             return true;
@@ -1268,13 +1268,20 @@ public class VkSeriesController : BaseOnlineController
             return true;
         }
 
-        bool hasSeasonMarker = Regex.IsMatch(raw, @"(?i)\b(?:сезон|сезоны|сезонов|season|seasons)\b");
+        bool hasSeasonMarker =
+            Regex.IsMatch(raw, @"(?i)\b(?:сезон|сезоны|сезонов|season|seasons)\b") ||
+            Regex.IsMatch(raw, @"(?i)\bS\d{1,2}\b");
 
         // VK frequently exposes an entire season as one playable file without saying
         // "all episodes" in the title: e.g. just "Show - 5 season". Treat a very long
         // season-labelled file as a compilation, but do not reject a normal episode
         // that explicitly carries an episode number.
         if (!hasExplicitEpisode && hasSeasonMarker && video.duration >= 150 * 60)
+            return true;
+
+        // Inside a known season playlist, playlist_position must not turn one giant
+        // concatenated file into a fake episode merely because its title is generic.
+        if (!hasExplicitEpisode && albumSeasonHint > 0 && video.duration >= 150 * 60)
             return true;
 
         // Also reject extremely long serial videos even when the uploader omitted
