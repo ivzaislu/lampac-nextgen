@@ -1,0 +1,121 @@
+name: VkSeries direct search probe
+
+on:
+  push:
+    branches: [vkseries-api-probe-20260925]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  direct-search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Test direct episode search
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+
+          token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST 'https://login.vk.com/?act=get_anonym_token'             --data-urlencode "client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
+          test -n "$TOKEN"
+
+          call_api() {
+            local method="$1"; shift
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          probe() {
+            local q="$1"
+            echo "===== QUERY $q ====="
+
+            for mode in plain filtered; do
+              args=(
+                --data-urlencode 'screen_ref=search_video_service'
+                --data-urlencode 'input_method=keyboard_search_button'
+                --data-urlencode "q=$q"
+                --data-urlencode 'extended=1'
+                --data-urlencode 'count=50'
+              )
+              if [[ "$mode" == filtered ]]; then
+                args+=(
+                  --data-urlencode 'content_type=video'
+                  --data-urlencode 'hd=1'
+                  --data-urlencode 'sort=2'
+                )
+              fi
+
+              web="$(call_api catalog.getVideoSearchWeb2 "${args[@]}")"
+              echo "--- WEB2 $mode ---"
+              jq '{
+                count:((.response.catalog_videos // [])|length),
+                long_playable:[
+                  (.response.catalog_videos // [])[]?.video
+                  | select((.duration // 0) >= 600)
+                  | select(.files != null)
+                  | {
+                      owner_id,id,title,duration,owner_name,
+                      quality:{
+                        p2160:(.files.mp4_2160!=null),
+                        p1440:(.files.mp4_1440!=null),
+                        p1080:(.files.mp4_1080!=null),
+                        p720:(.files.mp4_720!=null),
+                        hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                      }
+                    }
+                ][:20],
+                all_titles:[(.response.catalog_videos // [])[:30][]?.video | {owner_id,id,title,duration}]
+              }' <<<"$web"
+            done
+
+            newer="$(call_api catalog.getVideoSearch               --data-urlencode "q=$q"               --data-urlencode "query=$q"               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'sort=2'               --data-urlencode 'need_blocks=1'               --data-urlencode 'live=0')"
+            echo "--- NEW_SEARCH ---"
+            jq '{
+              count:((.response.catalog_videos // [])|length),
+              long_playable:[
+                (.response.catalog_videos // [])[]?.video
+                | select((.duration // 0) >= 600)
+                | select(.files != null)
+                | {owner_id,id,title,duration,owner_name,
+                   quality:{
+                     p2160:(.files.mp4_2160!=null),
+                     p1440:(.files.mp4_1440!=null),
+                     p1080:(.files.mp4_1080!=null),
+                     p720:(.files.mp4_720!=null),
+                     hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                   }}
+              ][:20]
+            }' <<<"$newer"
+
+            legacy="$(call_api video.search               --data-urlencode "q=$q"               --data-urlencode 'count=50'               --data-urlencode 'extended=1'               --data-urlencode 'sort=2')"
+            echo "--- VIDEO_SEARCH ---"
+            jq '{
+              count:(.response.count // null),
+              long_playable:[
+                (.response.items // [])[]?
+                | select((.duration // 0) >= 600)
+                | select(.files != null)
+                | {owner_id,id,title,duration,owner_name,
+                   quality:{
+                     p2160:(.files.mp4_2160!=null),
+                     p1440:(.files.mp4_1440!=null),
+                     p1080:(.files.mp4_1080!=null),
+                     p720:(.files.mp4_720!=null),
+                     hls:(.files.hls!=null or .files.hls_fmp4!=null)
+                   }}
+              ][:20]
+            }' <<<"$legacy"
+          }
+
+          probe 'Кухня 1 сезон'
+          probe 'Кухня 6 сезон'
+          probe 'Мажор 1 сезон'
+          probe 'Триггер 1 сезон'
+          probe 'Триггер 2 сезон'
+          probe 'Слово пацана 1 серия'
+          probe 'Ландыши 1 серия'
