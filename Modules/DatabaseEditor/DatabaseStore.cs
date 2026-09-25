@@ -1276,6 +1276,26 @@ static class DatabaseStore
             }
         }
 
+        var front = new Dictionary<string, long>(StringComparer.Ordinal);
+        var stored = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var pair in existing)
+        {
+            JsonObject owned = ParseRoot(pair.Value.categories) ?? new JsonObject();
+            stored[pair.Key] = owned;
+
+            foreach (string category in SyncCategories)
+            {
+                JsonNode value = owned[category];
+                if (value == null)
+                    continue;
+
+                long at = 0;
+                long.TryParse(NodeText(value), NumberStyles.Integer, CultureInfo.InvariantCulture, out at);
+                if (!front.TryGetValue(category, out long top) || at > top)
+                    front[category] = at;
+            }
+        }
+
         var wanted = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (string category in SyncCategories)
         {
@@ -1291,14 +1311,20 @@ static class DatabaseStore
                 if (!wanted.TryGetValue(cardId, out JsonObject owned))
                     wanted[cardId] = owned = new JsonObject();
 
-                owned[category] = stamp + (array.Count - index);
-            }
-        }
+                long kept = 0;
+                if (stored.TryGetValue(cardId, out JsonObject existingOwned))
+                {
+                    JsonNode value = existingOwned[category];
+                    long at = 0;
+                    if (value != null)
+                        long.TryParse(NodeText(value), NumberStyles.Integer, CultureInfo.InvariantCulture, out at);
 
-        foreach (string cardId in cards.Keys)
-        {
-            if (!wanted.ContainsKey(cardId))
-                wanted[cardId] = new JsonObject();
+                    if (at > 0 && (index > 0 || !front.TryGetValue(category, out long top) || at >= top))
+                        kept = at;
+                }
+
+                owned[category] = kept > 0 ? kept : stamp + (array.Count - index);
+            }
         }
 
         foreach (var pair in wanted)
@@ -1817,7 +1843,8 @@ static class DatabaseStore
 
         await using var connection = await OpenAsync(spec);
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*), {spec.updatedText($"MAX({spec.updatedColumn})")} FROM {spec.table};";
+        string countExpression = spec.sync ? "COUNT(DISTINCT user)" : "COUNT(*)";
+        command.CommandText = $"SELECT {countExpression}, {spec.updatedText($"MAX({spec.updatedColumn})")} FROM {spec.table};";
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow);
         if (await reader.ReadAsync())
         {
