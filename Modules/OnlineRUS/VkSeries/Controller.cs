@@ -1023,20 +1023,31 @@ public class VkSeriesController : BaseOnlineController
 
             return value.Contains("всесерии") ||
                    value.Contains("всесериисезона") ||
+                   value.Contains("всеэпизоды") ||
                    value.Contains("полныйсезон") ||
                    value.Contains("сезонполностью") ||
+                   value.Contains("целиком") ||
+                   value.Contains("подряд") ||
+                   value.Contains("нонстоп") ||
+                   value.Contains("марафон") ||
+                   value.Contains("сборниксерий") ||
                    value.Contains("allepisodes") ||
-                   value.Contains("fullseason");
+                   value.Contains("fullseason") ||
+                   value.Contains("completeseason") ||
+                   value.Contains("wholeseason") ||
+                   value.Contains("nonstop");
         }
 
         if (HasMarker(title) || HasMarker(description))
             return true;
 
         string rawTitle = video.title ?? string.Empty;
+        string rawDescription = video.description ?? string.Empty;
+        string raw = $"{rawTitle} {rawDescription}";
 
         // "1-7 серия", "1–10 серии", "episodes 1-8".
         if (Regex.IsMatch(
-            rawTitle,
+            raw,
             @"(?i)(?:\b\d{1,3}\s*[-–—]\s*\d{1,3}\s*(?:серия|серии|серий|episodes?|ep)\b|\b(?:episodes?|ep)\s*\d{1,3}\s*[-–—]\s*\d{1,3}\b)"))
         {
             return true;
@@ -1044,11 +1055,40 @@ public class VkSeriesController : BaseOnlineController
 
         // "1, 2, 3 серии" / "1 и 2 серия".
         if (Regex.IsMatch(
-            rawTitle,
+            raw,
             @"(?i)\b\d{1,3}(?:\s*[,/&]\s*\d{1,3}|\s+и\s+\d{1,3})+\s*(?:серия|серии|серий|episodes?)\b"))
         {
             return true;
         }
+
+        // Multi-season bundles: "1-3 сезоны", "сезон 1-4", "1 - 13 season".
+        if (Regex.IsMatch(
+            raw,
+            @"(?i)(?:\b\d{1,2}\s*[-–—]\s*\d{1,2}\s*(?:сезон|сезоны|сезонов|seasons?)\b|\b(?:сезон|сезоны|сезонов|seasons?)\s*[:№#]?\s*\d{1,2}\s*[-–—]\s*\d{1,2}\b)"))
+        {
+            return true;
+        }
+
+        bool hasSeasonMarker = Regex.IsMatch(raw, @"(?i)\b(?:сезон|сезоны|сезонов|season|seasons)\b");
+
+        bool hasExplicitEpisode =
+            TrySeasonEpisode(rawTitle, out _, out _) ||
+            TryGenericEpisode(rawTitle, out _) ||
+            TrySeasonEpisode(rawDescription, out _, out _) ||
+            TryGenericEpisode(rawDescription, out _);
+
+        // VK frequently exposes an entire season as one playable file without saying
+        // "all episodes" in the title: e.g. just "Show - 5 season". Treat a very long
+        // season-labelled file as a compilation, but do not reject a normal episode
+        // that explicitly carries an episode number.
+        if (!hasExplicitEpisode && hasSeasonMarker && video.duration >= 150 * 60)
+            return true;
+
+        // Also reject extremely long serial videos even when the uploader omitted
+        // a season marker completely. This covers whole-series/season concatenations
+        // with generic titles such as just the show name.
+        if (!hasExplicitEpisode && video.duration >= 6 * 60 * 60)
+            return true;
 
         return false;
     }
