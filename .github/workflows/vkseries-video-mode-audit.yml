@@ -71,7 +71,7 @@ jobs:
           using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(30)};
           const int clientId=52461373;
           const string api="https://api.vkvideo.ru/method";
-          const string ver="5.264";
+          const string ver="5.282";
 
           using var auth=JsonDocument.Parse(await Post($"{api}/auth.getAnonymToken?v={ver}&client_id={clientId}",new()));
           string token=auth.RootElement.GetProperty("response").GetProperty("token").GetString()!;
