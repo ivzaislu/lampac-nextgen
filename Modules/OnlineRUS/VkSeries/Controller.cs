@@ -63,7 +63,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v24:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v25:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchGlobalAlbums(title, original_title, year);
             var directVideos = await SearchGlobalVideos(title, original_title, year, 0);
@@ -484,7 +484,7 @@ public class VkSeriesController : BaseOnlineController
     {
     rhubFallback:
         // Keep the rendered cache separate from the raw album cache.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v24:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v25:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -539,7 +539,7 @@ public class VkSeriesController : BaseOnlineController
         string searchTitle = SearchNameTo.Convert(title);
         string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v24:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v25:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await SearchGlobalVideos(title, original_title, year, season);
             if (videos == null || videos.Count == 0)
@@ -607,7 +607,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v24:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v25:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<VideoAlbum>();
 
@@ -983,7 +983,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v24:owner:{ownerId}:albums"), 60, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v25:owner:{ownerId}:albums"), 60, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -1031,25 +1031,15 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v24:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v25:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<Video>();
 
             foreach (string query in BuildSearchQueries(title, originalTitle, year, season, albums: false))
             {
-                var root = await SearchCatalog(query);
-                if (root?.error != null || root?.response == null)
-                    continue;
-
-                if (root.response.catalog_videos != null)
-                {
-                    result.AddRange(root.response.catalog_videos
-                        .Where(i => i?.video != null)
-                        .Select(i => i.video));
-                }
-
-                if (root.response.videos != null)
-                    result.AddRange(root.response.videos.Where(i => i != null));
+                var videos = await SearchCatalogVideosPaged(query);
+                if (videos != null && videos.Count > 0)
+                    result.AddRange(videos);
             }
 
             return result
@@ -1057,7 +1047,78 @@ public class VkSeriesController : BaseOnlineController
                 .GroupBy(i => $"{i.owner_id}:{i.id}")
                 .Select(g => g
                     .OrderByDescending(i => QualityScore(i.files))
+                    .ThenByDescending(i => i.duration)
                     .First())
+                .ToList();
+        });
+    }
+
+    async Task<List<Video>> SearchCatalogVideosPaged(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new List<Video>();
+
+        string normalized = SearchNameTo.Convert(query);
+        if (string.IsNullOrWhiteSpace(normalized))
+            normalized = query.Trim().ToLowerInvariant();
+
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v25:catalogvideos:{normalized}"), 10, async () =>
+        {
+            const string apiVersion = "5.282";
+            const int maxPages = 4;
+
+            var result = new List<Video>();
+
+            string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v={apiVersion}&client_id={client_id}";
+            string data =
+                $"screen_ref=search_video_service&input_method=keyboard_search_button&extended=1&content_type=video&count=30&q={HttpUtility.UrlEncode(query)}&access_token={access_token}";
+
+            var root = await httpHydra.Post<Root>(url, data, textJson: true);
+            if (root?.error != null || root?.response == null)
+                return result;
+
+            void Append(Response response)
+            {
+                if (response?.catalog_videos != null)
+                {
+                    result.AddRange(response.catalog_videos
+                        .Where(i => i?.video != null)
+                        .Select(i => i.video));
+                }
+
+                if (response?.videos != null)
+                    result.AddRange(response.videos.Where(i => i != null));
+            }
+
+            Append(root.response);
+
+            CatalogSection section = root.response.section
+                ?? root.response.catalog?.sections?.FirstOrDefault();
+
+            for (int page = 2;
+                 page <= maxPages &&
+                 section != null &&
+                 !string.IsNullOrWhiteSpace(section.id) &&
+                 !string.IsNullOrWhiteSpace(section.next_from);
+                 page++)
+            {
+                string sectionUrl = $"{init.host}/method/catalog.getSection?v={apiVersion}&client_id={client_id}";
+                string sectionData =
+                    $"section_id={HttpUtility.UrlEncode(section.id)}&start_from={HttpUtility.UrlEncode(section.next_from)}&access_token={access_token}";
+
+                var nextRoot = await httpHydra.Post<Root>(sectionUrl, sectionData, textJson: true);
+                if (nextRoot?.error != null || nextRoot?.response == null)
+                    break;
+
+                Append(nextRoot.response);
+                section = nextRoot.response.section
+                    ?? nextRoot.response.catalog?.sections?.FirstOrDefault();
+            }
+
+            return result
+                .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                .GroupBy(i => $"{i.owner_id}:{i.id}")
+                .Select(g => g.First())
                 .ToList();
         });
     }
@@ -1074,7 +1135,7 @@ public class VkSeriesController : BaseOnlineController
         // One catalog response contains both response.albums and video results.
         // Cache it at the query level so album discovery and direct fallback do not
         // send the same VK search request twice.
-        return await InvokeCache<Root>(ipkey($"vkseries:v24:catalog:{normalized}"), 5, async () =>
+        return await InvokeCache<Root>(ipkey($"vkseries:v25:catalog:{normalized}"), 5, async () =>
         {
             string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
             string data =
@@ -1166,7 +1227,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v24:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v25:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -1181,7 +1242,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v24:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v25:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
