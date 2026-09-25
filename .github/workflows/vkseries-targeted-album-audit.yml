@@ -1,0 +1,190 @@
+name: VkSeries targeted album audit
+
+on:
+  push:
+    branches:
+      - vkseries-global-clean-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+      - name: Audit targeted season albums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/VkSeriesAlbumAudit
+          cat >.tmp/VkSeriesAlbumAudit/Audit.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <OutputType>Exe</OutputType>
+              <ImplicitUsings>enable</ImplicitUsings>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="../../Modules/OnlineRUS/VkSeries/VkSeries.csproj" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+          cat >.tmp/VkSeriesAlbumAudit/Program.cs <<'EOF'
+          using System.Collections;
+          using System.Reflection;
+          using System.Text.Json;
+          using Shared.Services.Utilities;
+          using VkSeries;
+
+          var shows=new (string title,short year)[]{
+              ("Интерны",2010),("Универ",2008),("Воронины",2009),("Молодёжка",2013),
+              ("Физрук",2014),("Полицейский с Рублёвки",2016),("Ивановы-Ивановы",2017),
+              ("Отель Элеон",2016),("Реальные пацаны",2010),("Папины дочки",2007)
+          };
+
+          var t=typeof(VkSeriesController);
+          var scoreM=t.GetMethod("AlbumScore",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var parseSeasonM=t.GetMethod("ParseSeason",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var parseVideosM=t.GetMethod("ParseVideos",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var queriesM=t.GetMethod("BuildSearchQueries",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var multiM=t.GetMethod("IsMultiSeasonAlbumTitle",BindingFlags.Static|BindingFlags.NonPublic)!;
+
+          int Score(VideoAlbum a,string st,short year)=>(int)(scoreM.Invoke(null,new object?[]{a,st,"",year})??0);
+          short Season(string? x)=>(short)(int)(parseSeasonM.Invoke(null,new object?[]{x})??0);
+          bool Multi(string? x)=>(bool)(multiM.Invoke(null,new object?[]{x})??false);
+
+          List<(short season,short episode,Video video)> Parse(List<Video> videos,short hint)
+          {
+              var e=(IEnumerable?)parseVideosM.Invoke(null,new object?[]{videos,hint})??Array.Empty<object>();
+              var r=new List<(short,short,Video)>();
+              foreach(var item in e)
+              {
+                  if(item is null)continue;
+                  var it=item.GetType();
+                  var s=(short)(it.GetProperty("season")?.GetValue(item)??(short)0);
+                  var ep=(short)(it.GetProperty("episode")?.GetValue(item)??(short)0);
+                  var v=(Video?)it.GetProperty("video")?.GetValue(item);
+                  if(v!=null)r.Add((s,ep,v));
+              }
+              return r;
+          }
+
+          bool DenseFull(List<(short season,short episode,Video video)> rows)
+          {
+              var u=rows.GroupBy(x=>x.episode).Select(g=>g.OrderByDescending(x=>x.video.duration).First()).OrderBy(x=>x.episode).ToList();
+              if(u.Count<3)return false;
+              int span=u.Last().episode-u.First().episode+1;
+              if(span>u.Count*2)return false;
+              var d=u.Where(x=>x.video.duration>0).Select(x=>x.video.duration).OrderBy(x=>x).ToList();
+              return d.Count>=3 && d[d.Count/2]>=8*60;
+          }
+
+          bool Noise(Video v)
+          {
+              string z=((v.title??"")+" "+(v.description??"")).ToLowerInvariant();
+              return z.Contains("трейлер")||z.Contains("тизер")||z.Contains("анонс")||
+                     z.Contains("trailer")||z.Contains("teaser")||z.Contains("promo")||z.Contains("preview");
+          }
+
+          using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(30)};
+          const int clientId=52461373;
+          const string api="https://api.vkvideo.ru/method";
+          const string ver="5.264";
+          using var auth=JsonDocument.Parse(await Post($"{api}/auth.getAnonymToken?v={ver}&client_id={clientId}",new()));
+          string token=auth.RootElement.GetProperty("response").GetProperty("token").GetString()!;
+
+          foreach(var show in shows)
+          {
+              string st=SearchNameTo.Convert(show.title)??"";
+              var found=new List<object>();
+
+              for(short target=1;target<=4;target++)
+              {
+                  var albums=new List<VideoAlbum>();
+                  var qs=(IEnumerable<string>?)queriesM.Invoke(null,new object?[]{show.title,"",show.year,target,true})??Array.Empty<string>();
+                  foreach(var q in qs)
+                  {
+                      var root=await Search(q);
+                      if(root?.response?.albums!=null)albums.AddRange(root.response.albums);
+                  }
+
+                  var candidates=albums
+                      .Where(a=>a!=null&&a.id>0&&a.owner_id!=0)
+                      .GroupBy(a=>$"{a.owner_id}:{a.id}").Select(g=>g.First())
+                      .Select(a=>new{a,score=Score(a,st,show.year),season=Season(a.title),multi=Multi(a.title)})
+                      .Where(x=>x.score>0&&(x.season==target||x.season==0||x.multi))
+                      .OrderByDescending(x=>x.score)
+                      .ThenByDescending(x=>x.a.count)
+                      .Take(5).ToList();
+
+                  var valid=new List<(VideoAlbum a,int score,int count,int first,int last,bool noise)>();
+                  foreach(var x in candidates)
+                  {
+                      var vids=await Album(x.a.owner_id,x.a.id);
+                      short hint=x.multi?(short)0:x.season;
+                      var parsed=Parse(vids,hint).Where(p=>p.season==target).ToList();
+                      var eps=parsed.Select(p=>p.episode).Distinct().OrderBy(e=>e).ToArray();
+                      if(eps.Length==0)continue;
+
+                      bool explicitSeason=!x.multi&&x.season==target;
+                      if(!explicitSeason&&!DenseFull(parsed))continue;
+
+                      valid.Add((x.a,x.score,eps.Length,eps.First(),eps.Last(),parsed.Any(p=>Noise(p.video))));
+                  }
+
+                  var best=valid.OrderByDescending(x=>x.score+Math.Min(x.count,30)*10)
+                      .ThenByDescending(x=>x.count).FirstOrDefault();
+
+                  if(best.a!=null)
+                  {
+                      found.Add(new{
+                          season=target,source=best.a.title,best.a.owner_id,best.a.id,
+                          episodes=best.count,first=best.first,last=best.last,noise=best.noise,score=best.score
+                      });
+                  }
+              }
+
+              Console.WriteLine(JsonSerializer.Serialize(new{kind="show",show=show.title,seasons=found}));
+          }
+
+          async Task<Root?> Search(string q)
+          {
+              string json=await Post($"{api}/catalog.getVideoSearchWeb2?v={ver}&client_id={clientId}",new(){
+                  ["access_token"]=token,["screen_ref"]="search_video_service",["input_method"]="keyboard_search_button",
+                  ["extended"]="1",["count"]="50",["q"]=q
+              });
+              return JsonSerializer.Deserialize<Root>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+          }
+
+          async Task<List<Video>> Album(long owner,long album)
+          {
+              var r=new List<Video>();
+              string json=await Post($"{api}/video.getFromAlbum?v={ver}&client_id={clientId}",new(){
+                  ["access_token"]=token,["owner_id"]=owner.ToString(),["album_id"]=album.ToString(),["extended"]="1",["count"]="200"
+              });
+              var root=JsonSerializer.Deserialize<VideoFromAlbumRoot>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+              foreach(var item in root?.response?.items??new())
+              {
+                  if(item?.video==null)continue;
+                  item.video.playlist_position=item.playlist_position;
+                  r.Add(item.video);
+              }
+              return r;
+          }
+
+          async Task<string> Post(string url,Dictionary<string,string> form)
+          {
+              using var res=await http.PostAsync(url,new FormUrlEncodedContent(form));
+              return await res.Content.ReadAsStringAsync();
+          }
+          EOF
+
+          dotnet run --project .tmp/VkSeriesAlbumAudit/Audit.csproj --configuration Release
