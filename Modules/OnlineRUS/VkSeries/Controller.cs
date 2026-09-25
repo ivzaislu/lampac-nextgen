@@ -777,11 +777,21 @@ public class VkSeriesController : BaseOnlineController
         if (string.IsNullOrWhiteSpace(query))
             return null;
 
-        string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
-        string data =
-            $"screen_ref=search_video_service&input_method=keyboard_search_button&extended=1&count=50&q={HttpUtility.UrlEncode(query)}&access_token={access_token}";
+        string normalized = SearchNameTo.Convert(query);
+        if (string.IsNullOrWhiteSpace(normalized))
+            normalized = query.Trim().ToLowerInvariant();
 
-        return await httpHydra.Post<Root>(url, data, textJson: true);
+        // One catalog response contains both response.albums and video results.
+        // Cache it at the query level so album discovery and direct fallback do not
+        // send the same VK search request twice.
+        return await InvokeCache<Root>(ipkey($"vkseries:v19:catalog:{normalized}"), 5, async () =>
+        {
+            string url = $"{init.host}/method/catalog.getVideoSearchWeb2?v=5.264&client_id={client_id}";
+            string data =
+                $"screen_ref=search_video_service&input_method=keyboard_search_button&extended=1&count=50&q={HttpUtility.UrlEncode(query)}&access_token={access_token}";
+
+            return await httpHydra.Post<Root>(url, data, textJson: true);
+        });
     }
 
     static List<string> BuildSearchQueries(string title, string originalTitle, short year, short season, bool albums)
