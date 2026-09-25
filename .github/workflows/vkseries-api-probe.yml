@@ -17,103 +17,137 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe VK Video discovery APIs
+      - name: Probe VK Video album discovery
         shell: bash
         run: |
           set -euo pipefail
 
           CLIENT_ID=52461373
           API=https://api.vkvideo.ru/method
+          V=5.264
 
-          token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST 'https://login.vk.com/?act=get_anonym_token'             --data-urlencode 'client_secret=o557NLIkAErNhakXrQ7A'             --data-urlencode "client_id=$CLIENT_ID"             --data-urlencode 'scopes=audio_anonymous,video_anonymous,photos_anonymous,profile_anonymous'             --data-urlencode 'isApiOauthAnonymEnabled=false'             --data-urlencode 'version=1'             --data-urlencode 'app_id=6287487')"
+          token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST 'https://login.vk.com/?act=get_anonym_token'             --data-urlencode "client_id=$CLIENT_ID")"
 
           TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
-          if [[ -z "$TOKEN" ]]; then
-            echo "Anonymous token acquisition failed"
-            jq '{keys: keys, data_keys: (.data // {} | keys), error: .error}' <<<"$token_json"
-            exit 1
-          fi
-          echo "Anonymous token acquired; token is intentionally not printed."
+          test -n "$TOKEN"
+          echo "Anonymous token acquired."
 
           call_api() {
             local method="$1"; shift
-            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=5.264&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN"               "$@"
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN"               "$@"
+          }
+
+          summarize_search() {
+            local q="$1"
+            local json="$2"
+            echo "SEARCH_SUMMARY q=$q"
+            jq '{
+              error:.error,
+              response_keys:(.response // {} | keys),
+              album_count:((.response.albums // [])|length),
+              albums:[(.response.albums // [])[:20][]? | {
+                id,owner_id,title,count,type,response_type,updated_time,
+                first_video_id,share_url,
+                keys:keys,
+                series_object
+              }],
+              group_count:((.response.groups // [])|length),
+              groups:[(.response.groups // [])[:20][]? | {id,name,screen_name,type}],
+              catalog_sections:[(.response.catalog.sections // [])[:10][]? | {
+                id,title,next_from,
+                blocks:[(.blocks // [])[:10][]? | {
+                  id,title,type,layout_name,
+                  videos_ids:(.videos_ids // [])[:8],
+                  albums_ids:(.albums_ids // [])[:8]
+                }]
+              }]
+            }' <<<"$json"
           }
 
           for q in "Мажор" "Кухня" "Триггер"; do
-            echo
-            echo "================ QUERY: $q ================"
+            echo "================ $q ================"
+            web2="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'count=50')"
+            summarize_search "$q" "$web2"
 
-            catalog="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q")"
-
-            echo "-- catalog.getVideoSearchWeb2 summary --"
-            jq '{
-              error: .error,
-              response_keys: (.response // {} | keys),
-              catalog_count: ((.response.catalog_videos // []) | length),
-              videos: [(.response.catalog_videos // [])[:12][]?.video | {
-                owner_id,id,title,duration,owner_name,
-                keys: keys,
-                has_files: (.files != null),
-                quality: {
-                  p2160: (.files.mp4_2160 != null),
-                  p1440: (.files.mp4_1440 != null),
-                  p1080: (.files.mp4_1080 != null),
-                  p720: (.files.mp4_720 != null),
-                  hls: (.files.hls != null or .files.hls_fmp4 != null)
-                }
-              }]
-            }' <<<"$catalog"
-
-            echo "-- catalog paths mentioning album/series/playlist --"
-            jq '[paths as $p
-                 | select(($p | map(tostring) | join(".") | test("album|series|playlist"; "i")))
-                 | ($p | map(tostring) | join("."))] | unique | .[:200]' <<<"$catalog"
-
-            search="$(call_api video.search               --data-urlencode "q=$q"               --data-urlencode 'count=20'               --data-urlencode 'extended=1'               --data-urlencode 'sort=2')"
-
-            echo "-- video.search summary --"
-            jq '{
-              error: .error,
-              count: (.response.count // null),
-              items: [(.response.items // [])[:12][]? | {
-                owner_id,id,title,duration,owner_name,
-                keys: keys,
-                has_files: (.files != null)
-              }]
-            }' <<<"$search"
-
-            mapfile -t pairs < <(jq -r '
-              [(.response.catalog_videos // [])[]?.video
-               | select(.owner_id != null and .id != null)
+            mapfile -t albums < <(jq -r '
+              [(.response.albums // [])[]?
+               | select(.id != null and .owner_id != null)
                | "\(.owner_id) \(.id)"]
-              | unique | .[:8][]' <<<"$catalog")
+              | unique | .[:6][]' <<<"$web2")
 
-            declare -A seen_owner=()
-            for pair in "${pairs[@]}"; do
-              read -r owner video <<<"$pair"
+            for pair in "${albums[@]}"; do
+              read -r owner album <<<"$pair"
 
-              echo "-- video.getAlbumsByVideo owner=$owner video=$video target=$owner --"
-              gav="$(call_api video.getAlbumsByVideo                 --data-urlencode "target_id=$owner"                 --data-urlencode "owner_id=$owner"                 --data-urlencode "video_id=$video"                 --data-urlencode 'extended=1' || true)"
-              if [[ -n "$gav" ]]; then
-                jq '{error:.error,response:.response}' <<<"$gav"
+              echo "ALBUM_INFO q=$q owner=$owner album=$album"
+              info="$(call_api video.getAlbumById                 --data-urlencode "owner_id=$owner"                 --data-urlencode "album_id=$album" || true)"
+              if [[ -n "$info" ]]; then
+                jq '{
+                  error:.error,
+                  response:(if .response then {
+                    id:.response.id,
+                    owner_id:.response.owner_id,
+                    title:.response.title,
+                    count:.response.count,
+                    type:.response.type,
+                    response_type:.response.response_type,
+                    keys:(.response|keys),
+                    series_object:.response.series_object
+                  } else null end)
+                }' <<<"$info"
               fi
 
-              if [[ -z "${seen_owner[$owner]+x}" ]]; then
-                seen_owner[$owner]=1
-                echo "-- video.getAlbums owner=$owner --"
-                albums="$(call_api video.getAlbums                   --data-urlencode "owner_id=$owner"                   --data-urlencode 'count=100'                   --data-urlencode 'offset=0'                   --data-urlencode 'extended=1'                   --data-urlencode 'need_system=0' || true)"
-                if [[ -n "$albums" ]]; then
-                  jq --arg q "$q" '{
-                    error:.error,
-                    count:(.response.count // null),
-                    albums:[(.response.items // [])[:50][]? | {
-                      id,owner_id,title,count,type,updated_time,
-                      title_matches: (.title // "" | ascii_downcase | contains($q|ascii_downcase))
-                    }]
-                  }' <<<"$albums"
-                fi
+              echo "CATALOG_ALBUM q=$q owner=$owner album=$album"
+              cat_album="$(call_api catalog.getVideoAlbum                 --data-urlencode "owner_id=$owner"                 --data-urlencode "album_id=$album"                 --data-urlencode 'offset=0'                 --data-urlencode 'count=30' || true)"
+              if [[ -n "$cat_album" ]]; then
+                jq '{
+                  error:.error,
+                  response_keys:(.response // {} | keys),
+                  album:(.response.album // null),
+                  albums:[(.response.albums // [])[:5][]? | {
+                    id,owner_id,title,count,type,response_type,series_object
+                  }],
+                  videos:[(.response.catalog_videos // [])[:12][]?.video | {
+                    owner_id,id,title,duration,type,response_type,
+                    has_files:(.files != null)
+                  }],
+                  section:(if .response.section then {
+                    id:.response.section.id,
+                    title:.response.section.title,
+                    next_from:.response.section.next_from,
+                    block_count:((.response.section.blocks // [])|length)
+                  } else null end)
+                }' <<<"$cat_album"
               fi
             done
-            unset seen_owner
+
+            echo "NEW_SEARCH q=$q"
+            newer="$(call_api catalog.getVideoSearch               --data-urlencode "q=$q"               --data-urlencode "query=$q"               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'sort=2'               --data-urlencode 'need_blocks=1'               --data-urlencode 'live=0' || true)"
+            if [[ -n "$newer" ]]; then
+              summarize_search "$q" "$newer"
+            fi
+          done
+
+          echo "SMART_TV_PROBES"
+          for ct in "" "video" "series" "serial" "movie"; do
+            args=(
+              --data-urlencode 'q=Кухня'
+              --data-urlencode 'sort=2'
+              --data-urlencode 'show_suggests=0'
+              --data-urlencode 'input_type=keyboard'
+            )
+            if [[ -n "$ct" ]]; then
+              args+=(--data-urlencode "content_type=$ct")
+            fi
+            smart="$(call_api catalog.getVideoSearchSmartTv "${args[@]}" || true)"
+            echo "SMART_TV content_type=${ct:-<empty>}"
+            if [[ -n "$smart" ]]; then
+              jq '{
+                error:.error,
+                response_type:(.response|type),
+                response_keys:(if (.response|type)=="object" then (.response|keys) else [] end),
+                album_count:((.response.albums // [])|length),
+                albums:[(.response.albums // [])[:10][]? | {id,owner_id,title,count,type,response_type,series_object}],
+                video_count:((.response.catalog_videos // .response.items // [])|length)
+              }' <<<"$smart"
+            fi
           done
