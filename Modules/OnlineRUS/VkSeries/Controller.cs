@@ -534,7 +534,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v10:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v11:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -549,55 +549,63 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v10:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v11:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
-            if (ownerId == -234262894)
+            // VK's web player uses video.getFromAlbum for normal playlists too, not only
+            // for the native serial owner. It also provides playlist_position.
+            var fromAlbum = new List<Video>();
+            int offset = 0;
+            int total = int.MaxValue;
+
+            while (offset < total)
             {
-                var fromAlbum = new List<Video>();
-                int offset = 0;
-                int total = int.MaxValue;
+                string url = $"{init.host}/method/video.getFromAlbum?v=5.264&client_id={client_id}";
+                string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&extended=1&access_token={access_token}";
 
-                while (offset < total)
+                var root = await httpHydra.Post<VideoFromAlbumRoot>(url, data, textJson: true);
+                if (root?.error != null || root?.response == null)
                 {
-                    string url = $"{init.host}/method/video.getFromAlbum?v=5.264&client_id={client_id}";
-                    string data = $"owner_id={ownerId}&album_id={albumId}&count={pageSize}&offset={offset}&extended=1&access_token={access_token}";
-
-                    var root = await httpHydra.Post<VideoFromAlbumRoot>(url, data, textJson: true);
-                    if (root?.error != null || root?.response == null)
-                    {
-                        fromAlbum.Clear();
-                        break;
-                    }
-
-                    var items = root.response.items;
-                    total = root.response.count;
-
-                    if (items == null || items.Count == 0)
-                        break;
-
-                    fromAlbum.AddRange(items
-                        .Where(i => i?.video != null)
-                        .Select(i => i.video));
-
-                    int nextOffset = offset + items.Count;
-                    if (nextOffset <= offset)
-                        break;
-
-                    offset = nextOffset;
+                    fromAlbum.Clear();
+                    break;
                 }
 
-                if (fromAlbum.Count > 0)
+                var items = root.response.items;
+                total = root.response.count;
+
+                if (items == null || items.Count == 0)
+                    break;
+
+                foreach (var item in items)
                 {
-                    return fromAlbum
-                        .Where(i => i != null && i.id > 0 && i.owner_id != 0)
-                        .GroupBy(i => $"{i.owner_id}:{i.id}")
-                        .Select(g => g.First())
-                        .ToList();
+                    if (item?.video == null)
+                        continue;
+
+                    item.video.playlist_position = item.playlist_position;
+                    fromAlbum.Add(item.video);
                 }
+
+                int nextOffset = offset + items.Count;
+                if (nextOffset <= offset)
+                    break;
+
+                offset = nextOffset;
+
+                if (items.Count < pageSize)
+                    break;
             }
 
+            if (fromAlbum.Count > 0)
+            {
+                return fromAlbum
+                    .Where(i => i != null && i.id > 0 && i.owner_id != 0)
+                    .GroupBy(i => $"{i.owner_id}:{i.id}")
+                    .Select(g => g.First())
+                    .ToList();
+            }
+
+            // Legacy fallback for playlists where getFromAlbum is unavailable.
             var videos = new List<Video>();
             int legacyOffset = 0;
             int legacyTotal = int.MaxValue;
@@ -624,6 +632,9 @@ public class VkSeriesController : BaseOnlineController
                     break;
 
                 legacyOffset = nextOffset;
+
+                if (items.Count < pageSize)
+                    break;
             }
 
             return videos
