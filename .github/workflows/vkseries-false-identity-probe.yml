@@ -1,0 +1,42 @@
+name: VkSeries false identity probe
+
+on:
+  push:
+    branches:
+      - vkseries-global-clean-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Inspect Realnye patsany false matches
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+          auth="$(curl -fsS -X POST "$API/auth.getAnonymToken?v=$V&client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.response.token // empty' <<<"$auth")"
+          test -n "$TOKEN"
+
+          for q in 'Реальные пацаны 3 сезон' 'Реальные пацаны сезон 3'; do
+            echo "===== $q ====="
+            j="$(curl -fsS -X POST "$API/catalog.getVideoSearchWeb2?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN"               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode 'extended=1'               --data-urlencode 'count=50'               --data-urlencode "q=$q")"
+            jq '{
+              groups:[(.response.groups // [])[:20][]? | {id,name,screen_name}],
+              videos:[(.response.catalog_videos // [])[]?.video
+                | select((.title // "") | contains("Blue Mountain State"))
+                | {
+                    owner_id,id,title,description,duration,owner_name,
+                    owner_title:.owner.title,
+                    owner_screen_name:.owner.screen_name,
+                    keys:keys
+                  }]
+            }' <<<"$j"
+          done
