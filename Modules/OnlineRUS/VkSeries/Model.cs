@@ -13,6 +13,14 @@ public class Response
     public List<CatalogVideo> catalog_videos { get; set; }
     public List<VideoAlbum> albums { get; set; }
     public List<Video> videos { get; set; }
+    public List<VkGroup> groups { get; set; }
+}
+
+public class VkGroup
+{
+    public long id { get; set; }
+    public string name { get; set; }
+    public string screen_name { get; set; }
 }
 
 public class VideoAlbum
