@@ -1260,6 +1260,8 @@ public class VkSeriesController : BaseOnlineController
             }
 
             if (allowPlaylistPositionFallback &&
+                albumSeasonHint > 0 &&
+                explicitSeason == albumSeasonHint &&
                 video != null &&
                 video.playlist_position > 0)
             {
