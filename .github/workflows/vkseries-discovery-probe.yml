@@ -1,0 +1,65 @@
+name: VkSeries discovery probe
+
+on:
+  pull_request:
+    branches:
+      - VkSeries
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe search videos, album lookup and streams
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          token_json="$(curl -fsS -X POST 'https://login.vk.com/?act=get_anonym_token' --data-urlencode "client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
+          test -n "$TOKEN"
+
+          api() {
+            local m="$1"; shift
+            curl -fsS --connect-timeout 10 --max-time 30 -X POST "$API/$m?v=5.264&client_id=$CLIENT_ID" --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          for q in "Мажор" "Мажор 4 сезон" "Кухня" "Триггер"; do
+            echo "===== SEARCH $q ====="
+            j="$(api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q")"
+
+            jq '{
+              error:.error,
+              albums:[(.response.albums // [])[:15][]? | {owner_id,id,title,count,type,response_type}],
+              videos:[(.response.catalog_videos // [])[:30][]?.video | {
+                owner_id,id,title,duration,
+                file_keys:(.files // {} | keys),
+                subtitle_count:((.subtitles // [])|length)
+              }]
+            }' <<<"$j"
+
+            pair="$(jq -r '[.response.catalog_videos // [] | .[]?.video | select(.owner_id!=null and .id!=null)][0] | "\(.owner_id) \(.id)"' <<<"$j")"
+            if [[ "$pair" != "null null" && -n "$pair" ]]; then
+              read -r owner video <<<"$pair"
+              echo "GET_ALBUMS_BY_VIDEO owner=$owner video=$video"
+              gav="$(api video.getAlbumsByVideo                 --data-urlencode "target_id=$owner"                 --data-urlencode "owner_id=$owner"                 --data-urlencode "video_id=$video"                 --data-urlencode 'extended=1' || true)"
+              if [[ -n "$gav" ]]; then
+                jq '{error:.error,response:.response}' <<<"$gav"
+              fi
+            fi
+
+            stream="$(jq -r '
+              [.response.catalog_videos // [] | .[]?.video.files // {}
+               | .mp4_2160 // .mp4_1440 // .mp4_1080 // .mp4_720 // .mp4_480 // .mp4_360 // .hls_fmp4 // .hls // empty][0] // empty' <<<"$j")"
+            if [[ -n "$stream" ]]; then
+              code="$(curl -L -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 -r 0-1023 "$stream" || true)"
+              echo "STREAM_TEST http=$code"
+            else
+              echo "STREAM_TEST none"
+            fi
+          done
