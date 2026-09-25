@@ -232,7 +232,7 @@ public class VkSeriesController : BaseOnlineController
                         count = Math.Max(nativeSeason.count, episodeCount),
                         updated_time = candidate.album.updated_time,
                         season = season
-                    }, candidate.score + 500 + Math.Min(episodeCount, 30) * 10 + quality * 3, episodeCount));
+                    }, candidate.score + 500 + Math.Min(episodeCount, 30) * 10 + quality * 3 + EpisodeDurationScore(parsedNative), episodeCount));
 
                     addedNative++;
                 }
@@ -272,7 +272,7 @@ public class VkSeriesController : BaseOnlineController
                     count = Math.Max(candidate.album.count, episodeCount),
                     updated_time = candidate.album.updated_time,
                     season = group.Key
-                }, candidate.score + Math.Min(episodeCount, 30) * 10 + quality * 3, episodeCount));
+                }, candidate.score + Math.Min(episodeCount, 30) * 10 + quality * 3 + EpisodeDurationScore(group), episodeCount));
             }
         }
 
@@ -316,7 +316,7 @@ public class VkSeriesController : BaseOnlineController
                 title = "VK global search",
                 count = count,
                 season = group.Key
-            }, 300 + Math.Min(count, 30) * 10 + quality * 3, count));
+            }, 300 + Math.Min(count, 30) * 10 + quality * 3 + EpisodeDurationScore(group), count));
         }
     }
 
@@ -1174,6 +1174,24 @@ public class VkSeriesController : BaseOnlineController
                name.Contains("teaser") ||
                name.Contains("премьера") ||
                name.Contains("обзор");
+    }
+
+    static int EpisodeDurationScore(IEnumerable<ParsedEpisode> episodes)
+    {
+        var durations = episodes?
+            .Where(i => i?.video != null && i.video.duration > 0)
+            .Select(i => i.video.duration)
+            .OrderBy(i => i)
+            .ToList();
+
+        if (durations == null || durations.Count == 0)
+            return 0;
+
+        long median = durations[durations.Count / 2];
+
+        // Weak tie-breaker only: prefer complete-looking copies of the same show,
+        // but cap the effect so episode length never dominates identity/completeness.
+        return (int)Math.Min(median / 60, 60);
     }
 
     static int QualityScore(VideoFiles files)
