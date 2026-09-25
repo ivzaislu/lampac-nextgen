@@ -244,8 +244,21 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (var candidate in candidates)
         {
-            var albumInfo = await GetAlbumById(candidate.album.owner_id, candidate.album.id);
-            var nativeSeasons = albumInfo?.series_object?.seasons;
+            // Native series hierarchy is normally attached to a parent album.
+            // Explicit "N season" playlists can go straight to getFromAlbum;
+            // this avoids one network request per season on long-running shows.
+            var nativeSeasons = candidate.album.series_object?.seasons;
+
+            if ((nativeSeasons == null || nativeSeasons.Count == 0) &&
+                candidate.season <= 0)
+            {
+                var albumInfo = await GetAlbumById(
+                    candidate.album.owner_id,
+                    candidate.album.id
+                );
+
+                nativeSeasons = albumInfo?.series_object?.seasons;
+            }
 
             if (nativeSeasons != null && nativeSeasons.Count > 0)
             {
