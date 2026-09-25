@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - vkseries-api-probe-20260925
+  pull_request:
+    branches:
+      - VkSeries
   workflow_dispatch:
 
 permissions:
