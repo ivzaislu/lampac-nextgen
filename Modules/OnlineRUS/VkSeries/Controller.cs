@@ -748,6 +748,52 @@ public class VkSeriesController : BaseOnlineController
                Match(description, searchOriginalTitle);
     }
 
+    static int SeriesVideoScore(Video video, string searchTitle, string searchOriginalTitle, short year)
+    {
+        if (video == null)
+            return 0;
+
+        string value = SearchNameTo.Convert(video.title);
+        string description = SearchNameTo.Convert(video.description);
+        int score = 0;
+
+        void Match(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return;
+
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                if (value == query)
+                    score = Math.Max(score, 220);
+                else if (value.StartsWith(query))
+                    score = Math.Max(score, 180);
+                else if (value.Contains(query))
+                    score = Math.Max(score, 120);
+            }
+
+            if (!string.IsNullOrWhiteSpace(description) && description.Contains(query))
+                score = Math.Max(score, 90);
+        }
+
+        Match(searchTitle);
+        Match(searchOriginalTitle);
+
+        if (score == 0)
+            return 0;
+
+        string raw = $"{video.title} {video.description}";
+        if (year > 0)
+        {
+            if (raw.Contains(year.ToString()))
+                score += 30;
+            else if (Regex.IsMatch(raw, @"\b(?:19|20)\d{2}\b"))
+                score -= 80;
+        }
+
+        return score;
+    }
+
     static int AlbumScore(VideoAlbum album, string searchTitle, string searchOriginalTitle, short year)
     {
         string value = SearchNameTo.Convert(album?.title);
@@ -780,7 +826,7 @@ public class VkSeriesController : BaseOnlineController
             if (value.Contains(year.ToString()))
                 score += 30;
             else if (Regex.IsMatch(value, @"\b(?:19|20)\d{2}\b"))
-                score -= 20;
+                score -= 80;
         }
 
         score += Math.Min(album.count, 50);
