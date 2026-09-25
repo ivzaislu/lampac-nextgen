@@ -1419,7 +1419,7 @@ static class DatabaseStore
             placeholders.Add(parameter);
             command.Parameters.AddWithValue(parameter, user);
         }
-        command.CommandText = $"SELECT user, card_id, card FROM bookmarks WHERE user IN ({string.Join(",", placeholders)}) AND categories <> '{}' AND card IS NOT NULL;";
+        command.CommandText = $"SELECT user, card_id, card FROM bookmarks WHERE user IN ({string.Join(",", placeholders)}) AND categories <> '{{}}' AND card IS NOT NULL;";
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
