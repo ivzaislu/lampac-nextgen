@@ -45,3 +45,23 @@ jobs:
               }]
             }' <<<"$j"
           done
+
+          echo '===== Probe known good episode albums ====='
+          for pair in '-209745116 10' '-93951483 1' '-240197792 1' '-199103112 1'; do
+            read -r owner album <<<"$pair"
+            echo "===== ALBUM $owner $album ====="
+            j="$(call_api video.getFromAlbum               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album"               --data-urlencode 'extended=1'               --data-urlencode 'count=50')"
+            jq '{
+              count:(.response.count // null),
+              items:[(.response.items // [])[:30][]? | {
+                playlist_position,
+                video:{
+                  owner_id:.video.owner_id,
+                  id:.video.id,
+                  title:.video.title,
+                  duration:.video.duration,
+                  has_files:(.video.files != null)
+                }
+              }]
+            }' <<<"$j"
+          done
