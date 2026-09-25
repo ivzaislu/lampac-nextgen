@@ -994,8 +994,9 @@ static class DatabaseStore
 
         await using (var command = connection.CreateCommand())
         {
+            string updatedExpression = TimeCodeStamp("MAX(updated_at)");
             command.CommandText =
-                $"SELECT MIN(Id), user, SUM(length(COALESCE(card, '')) + length(COALESCE(categories, ''))), {TimeCodeStamp("MAX(updated_at)")} " +
+                $"SELECT MIN(Id), user, SUM(length(COALESCE(card, '')) + length(COALESCE(categories, ''))), {updatedExpression} " +
                 $"FROM bookmarks{where} GROUP BY user COLLATE NOCASE ORDER BY MAX(updated_at) DESC, MIN(Id) DESC LIMIT @limit OFFSET @offset;";
             AddFilters(command, searchValue, selectedUser);
             command.Parameters.AddWithValue("@limit", pageSize);
@@ -1238,7 +1239,6 @@ static class DatabaseStore
         }
 
         long stamp = now > last ? now : last + 1;
-        long orderStamp = stamp + 100000;
 
         var existing = new Dictionary<string, SyncStoredRow>(StringComparer.Ordinal);
         await using (var select = connection.CreateCommand())
@@ -1291,10 +1291,8 @@ static class DatabaseStore
                 if (!wanted.TryGetValue(cardId, out JsonObject owned))
                     wanted[cardId] = owned = new JsonObject();
 
-                owned[category] = orderStamp + (array.Count - index);
+                owned[category] = stamp + (array.Count - index);
             }
-
-            orderStamp += array.Count + 1;
         }
 
         foreach (string cardId in cards.Keys)
