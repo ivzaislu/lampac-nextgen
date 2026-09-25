@@ -1,0 +1,54 @@
+name: VkSeries auth probe
+
+on:
+  push:
+    branches:
+      - vkseries-global-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Test auth.getAnonymToken end to end
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+
+          auth="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST "$API/auth.getAnonymToken?v=$V&client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.response.token // empty' <<<"$auth")"
+          test -n "$TOKEN"
+          echo "TOKEN_OK expired_at=$(jq -r '.response.expired_at // empty' <<<"$auth")"
+
+          call_api() {
+            local method="$1"; shift
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30               -X POST "$API/$method?v=$V&client_id=$CLIENT_ID"               --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          search="$(call_api catalog.getVideoSearchWeb2             --data-urlencode 'screen_ref=search_video_service'             --data-urlencode 'input_method=keyboard_search_button'             --data-urlencode 'q=Южный парк 1 сезон'             --data-urlencode 'extended=1'             --data-urlencode 'count=50')"
+
+          echo SEARCH_OK
+          jq '{error:.error,albums:[(.response.albums // [])[:5][]? | {id,owner_id,title,count}]}' <<<"$search"
+
+          pair="$(jq -r '[.response.albums // [] | .[]? | select((.title // "") | test("Южный парк|South Park";"i")) | select(.count > 1)] | first | "\(.owner_id) \(.id)"' <<<"$search")"
+          test -n "$pair"
+          read -r owner album <<<"$pair"
+
+          eps="$(call_api video.getFromAlbum             --data-urlencode "owner_id=$owner"             --data-urlencode "album_id=$album"             --data-urlencode 'extended=1'             --data-urlencode 'count=30')"
+
+          echo ALBUM_OK
+          jq '{error:.error,count:.response.count,playable:[(.response.items // [])[]? | select(.video.files != null) | {playlist_position,title:.video.title,duration:.video.duration}] | length}' <<<"$eps"
+
+          stream="$(jq -r '[.response.items // [] | .[]?.video.files | select(. != null) | (.mp4_720 // .mp4_480 // .mp4_360 // .hls_fmp4 // .hls // empty)] | map(select(length>0)) | first // empty' <<<"$eps")"
+          test -n "$stream"
+
+          code="$(curl -L -sS -o /dev/null -w '%{http_code}' --range 0-1023 --connect-timeout 10 --max-time 30             -H 'Origin: https://vkvideo.ru'             -H 'Referer: https://vkvideo.ru/'             "$stream")"
+          echo "STREAM_HTTP=$code"
+          test "$code" = "206" -o "$code" = "200"
