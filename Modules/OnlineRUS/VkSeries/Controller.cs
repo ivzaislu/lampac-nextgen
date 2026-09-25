@@ -583,16 +583,41 @@ public class VkSeriesController : BaseOnlineController
                 continue;
 
             bool contextual = contextualOwners.Contains(ownerId);
-            int genericCount = contextual
-                ? ownerAlbums.Count(IsGenericSeasonAlbum)
-                : 0;
+            var genericSiblings = contextual
+                ? ownerAlbums
+                    .Where(IsGenericSeasonAlbum)
+                    .OrderByDescending(i => i.count)
+                    .ThenByDescending(i => i.updated_time ?? 0)
+                    .ToList()
+                : new List<VideoAlbum>();
 
-            // Only expand nameless sibling seasons when the owner really looks like
-            // a season collection, not a random profile that happened to contain one.
-            bool allowGenericSiblings =
-                contextual &&
-                genericCount >= 3 &&
-                genericCount * 2 >= ownerAlbums.Count;
+            // A single validated "9 season" is not enough to trust every nameless
+            // season on a mixed owner. Require content confirmation from at least two
+            // different season albums before promoting all generic siblings.
+            int verifiedGenericSiblings = 0;
+
+            if (contextual &&
+                genericSiblings.Count >= 3 &&
+                genericSiblings.Count * 2 >= ownerAlbums.Count)
+            {
+                foreach (var sibling in genericSiblings.Take(6))
+                {
+                    if (!await ValidateGenericSeasonAlbum(
+                        sibling,
+                        searchTitle,
+                        searchOriginalTitle,
+                        year))
+                    {
+                        continue;
+                    }
+
+                    verifiedGenericSiblings++;
+                    if (verifiedGenericSiblings >= 2)
+                        break;
+                }
+            }
+
+            bool allowGenericSiblings = verifiedGenericSiblings >= 2;
 
             foreach (var album in ownerAlbums)
             {
