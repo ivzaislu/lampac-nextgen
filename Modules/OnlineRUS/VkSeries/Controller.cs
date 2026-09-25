@@ -1735,6 +1735,9 @@ public class VkSeriesController : BaseOnlineController
         foreach (string pattern in new[]
         {
             @"(?i)\bS(?<s>\d{1,2})[\s._-]*E(?<e>\d{1,3})\b",
+            // "21 серия 2 сезон (42 серия)" means S02E21; the number in
+            // parentheses is often the absolute episode number across the show.
+            @"(?i)\b(?<e>\d{1,3})\s*(?:серия|серии|episode|ep)\b[^\r\n]{0,24}?\b(?<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\b",
             @"(?i)\b(?<s>\d{1,2})\s*[xх]\s*(?<e>\d{1,3})\b",
             @"(?i)\b(?<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\D{0,32}(?<e>\d{1,3})(?:\s*[-–—]?\s*(?:я|ая))?\s*(?:серия|серии|episode|ep|эпизод)\b",
             @"(?i)\b(?:сезон|season)\s*[№#]?\s*(?<s>\d{1,2})\D{0,32}(?:серия|серии|episode|ep|эпизод)\s*[№#]?\s*(?<e>\d{1,3})\b"
