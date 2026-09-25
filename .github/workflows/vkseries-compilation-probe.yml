@@ -46,6 +46,13 @@ jobs:
             }' <<<"$j"
           done
 
+          echo '===== Probe targeted missing seasons ====='
+          for q in             'Симпсоны 6 сезон' 'Симпсоны 7 сезон' 'Симпсоны 9 сезон' 'Симпсоны 10 сезон'             'Симпсоны 11 сезон' 'Симпсоны 13 сезон' 'Симпсоны 15 сезон' 'Симпсоны 16 сезон'             'Симпсоны 18 сезон' 'Симпсоны 19 сезон' 'Симпсоны 20 сезон' 'Симпсоны 21 сезон'             'Симпсоны 22 сезон' 'Симпсоны 24 сезон' 'Симпсоны 31 сезон' 'Симпсоны 32 сезон'             'Симпсоны 36 сезон' 'Симпсоны 37 сезон'             'Южный парк 14 сезон' 'Южный парк 21 сезон' 'Южный парк 22 сезон'             'Южный парк 23 сезон' 'Южный парк 24 сезон' 'Южный парк 25 сезон'             'Южный парк 26 сезон' 'Южный парк 27 сезон' 'Южный парк 28 сезон'; do
+            echo "===== TARGET $q ====="
+            j="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'extended=1'               --data-urlencode 'count=50')"
+            jq '{albums:[(.response.albums // [])[:12][]? | {id,owner_id,title,count,updated_time}]}' <<<"$j"
+          done
+
           echo '===== Probe discovered owner albums ====='
           for owner in -209745116 -199103112 -222948973 -228778077 -102553865 -240197792; do
             echo "===== OWNER $owner ====="
