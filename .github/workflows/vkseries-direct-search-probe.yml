@@ -119,3 +119,30 @@ jobs:
           probe 'Триггер 2 сезон'
           probe 'Слово пацана 1 серия'
           probe 'Ландыши 1 серия'
+
+
+          echo '===== HYDRATE_KNOWN_EPISODES ====='
+          for ids in             '-180344905_456245665'             '-79839550_456239108'             '-121546880_456242622'; do
+            echo "--- video.get videos=$ids ---"
+            hydrated="$(call_api video.get               --data-urlencode "videos=$ids"               --data-urlencode 'extended=1')"
+            jq '{
+              error:.error,
+              items:[(.response.items // [])[]? | {
+                owner_id,id,title,duration,
+                files:(if .files then {
+                  p2160:(.files.mp4_2160!=null),
+                  p1440:(.files.mp4_1440!=null),
+                  p1080:(.files.mp4_1080!=null),
+                  p720:(.files.mp4_720!=null),
+                  p480:(.files.mp4_480!=null),
+                  hls:(.files.hls!=null),
+                  hls_fmp4:(.files.hls_fmp4!=null),
+                  keys:(.files|keys)
+                } else null end)
+              }]
+            }' <<<"$hydrated"
+          done
+
+          echo '===== AUTH_METHOD_WITH_CLIENT_ID_ONLY ====='
+          auth="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30             -X POST "$API/auth.getAnonymToken?v=$V&client_id=$CLIENT_ID" || true)"
+          jq '{error:.error,response_keys:(.response // {} | keys),has_token:(.response.token!=null),expired_at:.response.expired_at}' <<<"$auth"
