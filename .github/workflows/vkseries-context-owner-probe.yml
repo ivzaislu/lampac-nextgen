@@ -1,0 +1,41 @@
+name: VkSeries contextual owner probe
+
+on:
+  push:
+    branches:
+      - vkseries-global-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Probe contextual owners
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+          token_json="$(curl -fsS -X POST 'https://login.vk.com/?act=get_anonym_token' --data-urlencode "client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
+          test -n "$TOKEN"
+
+          call_api() {
+            local method="$1"; shift
+            curl -fsS -X POST "$API/$method?v=$V&client_id=$CLIENT_ID" --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          for owner in -268980 -34149383 744257364; do
+            echo "===== OWNER $owner ====="
+            for offset in 0 100 200; do
+              j="$(call_api video.getAlbums                 --data-urlencode "owner_id=$owner"                 --data-urlencode 'extended=1'                 --data-urlencode 'need_system=0'                 --data-urlencode 'count=100'                 --data-urlencode "offset=$offset")"
+              jq -c --argjson off "$offset" '{offset:$off,count:.response.count,albums:[(.response.items // [])[]? | {id,owner_id,title,count,updated_time}]}' <<<"$j"
+              total="$(jq -r '.response.count // 0' <<<"$j")"
+              (( offset + 100 >= total )) && break
+            done
+          done
