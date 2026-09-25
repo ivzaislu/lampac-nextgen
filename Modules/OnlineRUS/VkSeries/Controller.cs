@@ -794,8 +794,8 @@ public class VkSeriesController : BaseOnlineController
 
         foreach (string pattern in new[]
         {
-            @"(?i)\b(?:сезон|season)\s*[№#]?\s*(?<s>\d{1,2})\b",
             @"(?i)\b(?<s>\d{1,2})\s*(?:-?й\s*)?(?:сезон|season)\b",
+            @"(?i)\b(?:сезон|season)\s*[№#]?\s*(?<s>\d{1,2})\b",
             @"(?i)\bS(?<s>\d{1,2})\b"
         })
         {
