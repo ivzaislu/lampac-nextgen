@@ -167,3 +167,15 @@ jobs:
               [[ "$found" -ge 3 ]] && break
             fi
           done
+
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build VkSeries
+        run: dotnet build Modules/OnlineRUS/VkSeries/VkSeries.csproj -c Release
