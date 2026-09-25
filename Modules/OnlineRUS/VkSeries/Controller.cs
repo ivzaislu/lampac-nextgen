@@ -177,7 +177,7 @@ public class VkSeriesController : BaseOnlineController
         var candidates = albums
             .Where(i => i != null && i.id > 0 && i.owner_id != 0)
             .Select(i => (album: i, score: AlbumScore(i, searchTitle, searchOriginalTitle, year)))
-            .Where(i => i.score >= 140)
+            .Where(i => i.score >= 150)
             .OrderByDescending(i => i.score)
             .ThenByDescending(i => i.album.count)
             .ThenByDescending(i => i.album.updated_time ?? 0)
