@@ -555,7 +555,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v10:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v13:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -570,7 +570,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v12:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v13:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
@@ -598,9 +598,14 @@ public class VkSeriesController : BaseOnlineController
                 if (items == null || items.Count == 0)
                     break;
 
-                fromAlbum.AddRange(items
-                    .Where(i => i?.video != null)
-                    .Select(i => i.video));
+                foreach (var item in items)
+                {
+                    if (item?.video == null)
+                        continue;
+
+                    item.video.playlist_position = item.playlist_position;
+                    fromAlbum.Add(item.video);
+                }
 
                 int nextOffset = offset + items.Count;
                 if (nextOffset <= offset)
