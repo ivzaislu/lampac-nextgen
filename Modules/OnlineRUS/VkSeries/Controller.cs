@@ -64,7 +64,7 @@ public class VkSeriesController : BaseOnlineController
     async Task<ActionResult> Seasons(string title, string original_title, short year, byte serial, string searchTitle, string searchOriginalTitle, bool rjson)
     {
     rhubFallback:
-        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v17:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<VideoAlbum>>(ipkey($"vkseries:v18:global:{searchTitle}:{searchOriginalTitle}:{year}"), 20, textJson: true, onget: async e =>
         {
             var albums = await SearchGlobalAlbums(title, original_title, year);
             albums = await ExpandDiscoveredOwnerAlbums(
@@ -350,7 +350,7 @@ public class VkSeriesController : BaseOnlineController
     {
     rhubFallback:
         // Keep the rendered cache separate from the raw album cache.
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v17:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v18:episodes:{ownerId}:{albumId}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await GetAlbumVideos(ownerId, albumId);
             if (videos == null || videos.Count == 0)
@@ -403,7 +403,7 @@ public class VkSeriesController : BaseOnlineController
         string searchTitle = SearchNameTo.Convert(title);
         string searchOriginalTitle = SearchNameTo.Convert(original_title);
 
-        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v17:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
+        var cache = await InvokeCacheResult<List<Video>>(ipkey($"vkseries:v18:direct:{searchTitle}:{searchOriginalTitle}:{year}:{season}"), 20, textJson: true, onget: async e =>
         {
             var videos = await SearchGlobalVideos(title, original_title, year, season);
             if (videos == null || videos.Count == 0)
@@ -468,7 +468,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v17:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v18:search:albums:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<VideoAlbum>();
 
@@ -539,7 +539,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<VideoAlbum>> GetDiscoveredOwnerAlbums(long ownerId)
     {
-        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v17:owner:{ownerId}:albums"), 60, async () =>
+        return await InvokeCache<List<VideoAlbum>>(ipkey($"vkseries:v18:owner:{ownerId}:albums"), 60, async () =>
         {
             const int pageSize = 100;
             var albums = new List<VideoAlbum>();
@@ -587,7 +587,7 @@ public class VkSeriesController : BaseOnlineController
         string keyTitle = SearchNameTo.Convert(title);
         string keyOriginal = SearchNameTo.Convert(originalTitle);
 
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v17:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v18:search:videos:{keyTitle}:{keyOriginal}:{year}:{season}"), 20, async () =>
         {
             var result = new List<Video>();
 
@@ -674,7 +674,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<VideoAlbum> GetAlbumById(long ownerId, long albumId)
     {
-        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v17:albuminfo:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<VideoAlbum>(ipkey($"vkseries:v18:albuminfo:{ownerId}:{albumId}"), 20, async () =>
         {
             string url = $"{init.host}/method/video.getAlbumById?v=5.264&client_id={client_id}";
             string data = $"owner_id={ownerId}&album_id={albumId}&access_token={access_token}";
@@ -689,7 +689,7 @@ public class VkSeriesController : BaseOnlineController
 
     async Task<List<Video>> GetAlbumVideos(long ownerId, long albumId)
     {
-        return await InvokeCache<List<Video>>(ipkey($"vkseries:v17:album:{ownerId}:{albumId}"), 20, async () =>
+        return await InvokeCache<List<Video>>(ipkey($"vkseries:v18:album:{ownerId}:{albumId}"), 20, async () =>
         {
             const int pageSize = 200;
 
@@ -1191,7 +1191,6 @@ public class VkSeriesController : BaseOnlineController
                    value.Contains("всеэпизоды") ||
                    value.Contains("полныйсезон") ||
                    value.Contains("сезонполностью") ||
-                   value.Contains("целиком") ||
                    value.Contains("нонстоп") ||
                    value.Contains("сборниксерий") ||
                    value.Contains("allepisodes") ||
@@ -1201,12 +1200,24 @@ public class VkSeriesController : BaseOnlineController
                    value.Contains("nonstop");
         }
 
-        if (HasMarker(title) || HasMarker(description))
-            return true;
-
         string rawTitle = video.title ?? string.Empty;
         string rawDescription = video.description ?? string.Empty;
         string raw = $"{rawTitle} {rawDescription}";
+
+        bool hasExplicitEpisode =
+            TrySeasonEpisode(rawTitle, out _, out _) ||
+            TryGenericEpisode(rawTitle, out _) ||
+            TrySeasonEpisode(rawDescription, out _, out _) ||
+            TryGenericEpisode(rawDescription, out _);
+
+        if (HasMarker(title))
+            return true;
+
+        // Descriptions often contain promotional "watch all episodes" text even on
+        // a normal episode. Treat description-only markers as compilation evidence
+        // only when the video itself does not identify a concrete episode.
+        if (HasMarker(description) && !hasExplicitEpisode)
+            return true;
 
         // "1-7 серия", "1–10 серии", "episodes 1-8".
         if (Regex.IsMatch(
@@ -1233,12 +1244,6 @@ public class VkSeriesController : BaseOnlineController
         }
 
         bool hasSeasonMarker = Regex.IsMatch(raw, @"(?i)\b(?:сезон|сезоны|сезонов|season|seasons)\b");
-
-        bool hasExplicitEpisode =
-            TrySeasonEpisode(rawTitle, out _, out _) ||
-            TryGenericEpisode(rawTitle, out _) ||
-            TrySeasonEpisode(rawDescription, out _, out _) ||
-            TryGenericEpisode(rawDescription, out _);
 
         // VK frequently exposes an entire season as one playable file without saying
         // "all episodes" in the title: e.g. just "Show - 5 season". Treat a very long
