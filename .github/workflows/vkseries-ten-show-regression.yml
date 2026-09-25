@@ -1,0 +1,177 @@
+name: VkSeries ten-show regression
+
+on:
+  push:
+    branches:
+      - vkseries-global-clean-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+      - name: Audit direct fallback on ten shows
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/VkSeriesRegression
+
+          cat >.tmp/VkSeriesRegression/Test.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <OutputType>Exe</OutputType>
+              <ImplicitUsings>enable</ImplicitUsings>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="../../Modules/OnlineRUS/VkSeries/VkSeries.csproj" />
+            </ItemGroup>
+          </Project>
+          EOF
+
+          cat >.tmp/VkSeriesRegression/Program.cs <<'EOF'
+          using System.Collections;
+          using System.Reflection;
+          using System.Text.Json;
+          using Shared.Services.Utilities;
+          using VkSeries;
+
+          var shows=new (string title,short year)[]{
+              ("Интерны",2010),("Универ",2008),("Воронины",2009),("Молодёжка",2013),
+              ("Физрук",2014),("Полицейский с Рублёвки",2016),("Ивановы-Ивановы",2017),
+              ("Отель Элеон",2016),("Реальные пацаны",2010),("Папины дочки",2007)
+          };
+
+          var t=typeof(VkSeriesController);
+          var queriesM=t.GetMethod("BuildSearchQueries",BindingFlags.Static|BindingFlags.NonPublic)!;
+          var trustedM=t.GetMethod("ParseTrustedDirectVideos",BindingFlags.Static|BindingFlags.NonPublic)!;
+
+          using var http=new HttpClient{Timeout=TimeSpan.FromSeconds(35)};
+          const int clientId=52461373;
+          const string api="https://api.vkvideo.ru/method";
+          const string ver="5.282";
+
+          var auth=JsonDocument.Parse(await Post($"https://api.vkvideo.ru/method/auth.getAnonymToken?v=5.264&client_id={clientId}",new()));
+          string token=auth.RootElement.GetProperty("response").GetProperty("token").GetString()!;
+
+          List<(short season,short episode,Video video)> Read(object? value)
+          {
+              var r=new List<(short,short,Video)>();
+              foreach(var item in (IEnumerable?)value??Array.Empty<object>())
+              {
+                  if(item is null)continue;
+                  var it=item.GetType();
+                  short s=(short)(it.GetProperty("season")?.GetValue(item)??(short)0);
+                  short e=(short)(it.GetProperty("episode")?.GetValue(item)??(short)0);
+                  var v=(Video?)it.GetProperty("video")?.GetValue(item);
+                  if(v!=null)r.Add((s,e,v));
+              }
+              return r;
+          }
+
+          bool Noise(string? value)
+          {
+              string x=(value??"").ToLowerInvariant();
+              return x.Contains("трейлер")||x.Contains("тизер")||x.Contains("анонс")||
+                     x.Contains("trailer")||x.Contains("teaser")||x.Contains("promo")||
+                     x.Contains("preview")||x.Contains("нарезк")||x.Contains("лучшие моменты");
+          }
+
+          foreach(var show in shows)
+          {
+              var all=new List<Video>();
+
+              for(short season=1;season<=4;season++)
+              {
+                  var qs=(IEnumerable<string>?)queriesM.Invoke(null,new object?[]{show.title,"",show.year,season,false})
+                      ?? Array.Empty<string>();
+
+                  foreach(var q in qs)
+                  {
+                      all.AddRange(await SearchPaged(q));
+                  }
+              }
+
+              all=all.Where(v=>v!=null&&v.id>0&&v.owner_id!=0)
+                  .GroupBy(v=>$"{v.owner_id}:{v.id}")
+                  .Select(g=>g.First()).ToList();
+
+              string st=SearchNameTo.Convert(show.title)??"";
+              var trusted=Read(trustedM.Invoke(null,new object?[]{all,st,"",show.year,(short)0}));
+
+              var groups=trusted
+                  .GroupBy(x=>x.season)
+                  .Where(g=>g.Key>0)
+                  .OrderBy(g=>g.Key)
+                  .Select(g=>new{
+                      season=g.Key,
+                      count=g.Select(x=>x.episode).Distinct().Count(),
+                      first=g.Min(x=>x.episode),
+                      last=g.Max(x=>x.episode),
+                      noisy=g.Count(x=>Noise(x.video.title)||Noise(x.video.description)),
+                      samples=g.OrderBy(x=>x.episode).Take(4).Select(x=>x.video.title).ToArray()
+                  }).ToArray();
+
+              Console.WriteLine(JsonSerializer.Serialize(new{
+                  kind="show",show=show.title,raw=all.Count,
+                  seasons=groups.Select(x=>x.season).ToArray(),
+                  noisy=groups.Sum(x=>x.noisy),
+                  details=groups
+              }));
+
+              if(groups.Any(x=>x.noisy>0))
+                  throw new Exception($"{show.title}: noisy episode survived");
+          }
+
+          async Task<List<Video>> SearchPaged(string q)
+          {
+              var result=new List<Video>();
+              string json=await Post($"{api}/catalog.getVideoSearchWeb2?v={ver}&client_id={clientId}",new(){
+                  ["access_token"]=token,["screen_ref"]="search_video_service",
+                  ["input_method"]="keyboard_search_button",["extended"]="1",
+                  ["content_type"]="video",["count"]="30",["q"]=q
+              });
+
+              var root=JsonSerializer.Deserialize<Root>(json,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+              if(root?.response==null)return result;
+
+              void Add(Response r)
+              {
+                  if(r.catalog_videos!=null)result.AddRange(r.catalog_videos.Where(x=>x?.video!=null).Select(x=>x.video));
+                  if(r.videos!=null)result.AddRange(r.videos.Where(x=>x!=null));
+              }
+
+              Add(root.response);
+              var section=root.response.section??root.response.catalog?.sections?.FirstOrDefault();
+
+              for(int page=2;page<=4 && section!=null && !string.IsNullOrWhiteSpace(section.id) && !string.IsNullOrWhiteSpace(section.next_from);page++)
+              {
+                  string j=await Post($"{api}/catalog.getSection?v={ver}&client_id={clientId}",new(){
+                      ["access_token"]=token,["section_id"]=section.id,["start_from"]=section.next_from
+                  });
+                  var n=JsonSerializer.Deserialize<Root>(j,new JsonSerializerOptions{PropertyNameCaseInsensitive=true});
+                  if(n?.response==null)break;
+                  Add(n.response);
+                  section=n.response.section??n.response.catalog?.sections?.FirstOrDefault();
+              }
+
+              return result;
+          }
+
+          async Task<string> Post(string url,Dictionary<string,string> form)
+          {
+              using var res=await http.PostAsync(url,new FormUrlEncodedContent(form));
+              return await res.Content.ReadAsStringAsync();
+          }
+          EOF
+
+          dotnet run --project .tmp/VkSeriesRegression/Test.csproj --configuration Release
