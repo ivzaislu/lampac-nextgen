@@ -160,8 +160,10 @@ public class VideoFiles
     public string mp4_2160 { get; set; }
     public string hls { get; set; }
     public string hls_fmp4 { get; set; }
+    public string hls_ondemand { get; set; }
     public string hls_streams { get; set; }
     public string dash_sep { get; set; }
+    public string dash_ondemand { get; set; }
     public string dash_streams { get; set; }
     public string dash_webm { get; set; }
     public string failover_host { get; set; }
