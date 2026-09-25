@@ -1,0 +1,37 @@
+name: VkSeries gap probe
+
+on:
+  push:
+    branches:
+      - vkseries-global-20260925
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe targeted missing seasons
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLIENT_ID=52461373
+          API=https://api.vkvideo.ru/method
+          V=5.264
+          token_json="$(curl -fsS --retry 2 --connect-timeout 10 --max-time 30 -X POST 'https://login.vk.com/?act=get_anonym_token' --data-urlencode "client_id=$CLIENT_ID")"
+          TOKEN="$(jq -r '.data.access_token // empty' <<<"$token_json")"
+          test -n "$TOKEN"
+
+          call_api() {
+            local method="$1"; shift
+            curl -fsS --retry 2 --connect-timeout 10 --max-time 30 -X POST "$API/$method?v=$V&client_id=$CLIENT_ID" --data-urlencode "access_token=$TOKEN" "$@"
+          }
+
+          for q in             'Симпсоны 6 сезон' 'Симпсоны 7 сезон' 'Симпсоны 9 сезон' 'Симпсоны 10 сезон'             'Симпсоны 11 сезон' 'Симпсоны 13 сезон' 'Симпсоны 15 сезон' 'Симпсоны 16 сезон'             'Симпсоны 18 сезон' 'Симпсоны 19 сезон' 'Симпсоны 20 сезон' 'Симпсоны 21 сезон'             'Симпсоны 22 сезон' 'Симпсоны 24 сезон' 'Симпсоны 31 сезон' 'Симпсоны 32 сезон'             'Симпсоны 36 сезон' 'Симпсоны 37 сезон'             'Южный парк 14 сезон' 'Южный парк 21 сезон' 'Южный парк 22 сезон'             'Южный парк 23 сезон' 'Южный парк 24 сезон' 'Южный парк 25 сезон'             'Южный парк 26 сезон' 'Южный парк 27 сезон' 'Южный парк 28 сезон'; do
+            j="$(call_api catalog.getVideoSearchWeb2               --data-urlencode 'screen_ref=search_video_service'               --data-urlencode 'input_method=keyboard_search_button'               --data-urlencode "q=$q"               --data-urlencode 'extended=1'               --data-urlencode 'count=50')"
+            echo "===== $q ====="
+            jq -c '[.response.albums // [] | .[:8][]? | {id,owner_id,title,count,updated_time}]' <<<"$j"
+          done
