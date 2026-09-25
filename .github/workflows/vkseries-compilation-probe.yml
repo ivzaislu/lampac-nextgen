@@ -56,6 +56,20 @@ jobs:
             }' <<<"$j"
           done
 
+          echo '===== Probe Simpsons native hierarchy ====='
+          for pair in '-222948973 194' '-222948973 36'; do
+            read -r owner album <<<"$pair"
+            echo "===== ALBUM_INFO $owner $album ====="
+            j="$(call_api video.getAlbumById               --data-urlencode "owner_id=$owner"               --data-urlencode "album_id=$album")"
+            jq '{
+              id:.response.id,
+              owner_id:.response.owner_id,
+              title:.response.title,
+              count:.response.count,
+              series_object:.response.series_object
+            }' <<<"$j"
+          done
+
           echo '===== Probe known good episode albums ====='
           for pair in '-209745116 10' '-93951483 1' '-240197792 1' '-199103112 1'; do
             read -r owner album <<<"$pair"
