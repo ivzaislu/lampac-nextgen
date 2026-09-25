@@ -802,23 +802,35 @@ public class VkSeriesController : BaseOnlineController
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
+            bool cyrillic = Regex.IsMatch(name, @"[А-Яа-яЁё]");
+
             if (season > 0)
             {
-                Add($"{name} {season} сезон");
-                Add($"{name} сезон {season}");
+                if (cyrillic)
+                {
+                    Add($"{name} {season} сезон");
+                    Add($"{name} сезон {season}");
+                }
+                else
+                {
+                    Add($"{name} season {season}");
+                    Add($"{name} S{season:00}");
+                }
+
                 if (year > 0)
-                    Add($"{name} {year} {season} сезон");
+                    Add($"{name} {year} {(cyrillic ? $"{season} сезон" : $"season {season}")}");
             }
             else
             {
                 Add(name);
+
                 if (year > 0)
                     Add($"{name} {year}");
 
                 if (albums)
                 {
-                    Add($"{name} сезон");
-                    Add($"{name} сериал");
+                    Add(cyrillic ? $"{name} сезон" : $"{name} season");
+                    Add(cyrillic ? $"{name} сериал" : $"{name} series");
                 }
             }
         }
