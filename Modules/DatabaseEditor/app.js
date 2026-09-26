@@ -24,7 +24,7 @@
     categoryHead: $('categoryCardHead'), categoryOptions: $('categoryOptions'), backupModal: $('backupModal'),
     backupResults: $('backupResults'), renameUserModal: $('renameUserModal'), oldUser: $('oldUserField'), newUser: $('newUserField'),
     confirmRenameUser: $('confirmRenameUserBtn'), mergeUserModal: $('mergeUserModal'), mergeOldUser: $('mergeOldUserField'),
-    mergeNewUser: $('mergeNewUserField'), mergeUserTargets: $('mergeUserTargets'), confirmMergeUser: $('confirmMergeUserBtn'),
+    mergeNewUser: $('mergeNewUserField'), mergeUserTargets: $('mergeUserTargets'), mergeConflictPolicy: $('mergeConflictPolicyField'), confirmMergeUser: $('confirmMergeUserBtn'),
     deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
     confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty')
   };
@@ -39,6 +39,7 @@
     new_user_required: 'Укажите новое имя пользователя', user_name_unchanged: 'Новое имя совпадает с текущим',
     user_not_found: 'Пользователь не найден ни в Sync, ни в TimeCode', rename_user_conflict: 'Новое имя уже занято или создаёт конфликт записей',
     merge_user_conflict: 'Не удалось безопасно объединить записи из-за конфликта уникальных ключей',
+    invalid_merge_conflict_policy: 'Неизвестный режим разрешения конфликтов',
     invalid_backup_file: 'Недопустимое имя файла резервной копии', backup_not_found: 'Резервная копия не найдена',
     backup_integrity_failed: 'Проверка целостности резервной копии не пройдена', backup_schema_mismatch: 'Копия относится к другой базе',
     invalid_backup_database: 'Файл не является исправной SQLite-базой',
@@ -560,6 +561,7 @@
     els.mergeUserTargets.textContent = '';
     var loading = document.createElement('option'); loading.value = ''; loading.textContent = 'Загрузка пользователей…'; els.mergeOldUser.appendChild(loading);
     els.mergeNewUser.value = '';
+    if (els.mergeConflictPolicy) els.mergeConflictPolicy.value = 'newest';
     els.confirmMergeUser.disabled = true;
     openModal('mergeUserModal');
     Promise.all([api('users?database=sync'), api('users?database=timecode')]).then(function (responses) {
@@ -605,9 +607,15 @@
     if (!oldUser) return showError(new Error('old_user_required'));
     if (!newUser) return showError(new Error('new_user_required'));
     if (oldUser.toLowerCase() === newUser.toLowerCase()) return showError(new Error('user_name_unchanged'));
-    if (!confirm('Объединить данные пользователя «' + oldUser + '» с «' + newUser + '»?\n\nПри совпадении записей останется более свежая. Перед миграцией автоматически создаются резервные копии Sync и TimeCode.\n\nПосле операции источник будет удалён.')) return;
+    var conflictPolicy = els.mergeConflictPolicy ? els.mergeConflictPolicy.value : 'newest';
+    var conflictText = conflictPolicy === 'source'
+      ? 'При совпадении будет принудительно взята запись ИСТОЧНИКА и целевая запись будет заменена.'
+      : conflictPolicy === 'target'
+        ? 'При совпадении будет сохранена ЦЕЛЕВАЯ запись, а запись источника будет удалена.'
+        : 'При совпадении останется запись с более свежей клиентской меткой.';
+    if (!confirm('Объединить данные пользователя «' + oldUser + '» с «' + newUser + '»?\n\n' + conflictText + '\n\nПеред миграцией автоматически создаются резервные копии Sync и TimeCode.\n\nПосле операции источник будет удалён.')) return;
     els.confirmMergeUser.disabled = true;
-    api('merge-user', { method: 'POST', body: JSON.stringify({ oldUser: oldUser, newUser: newUser }) }).then(function (data) {
+    api('merge-user', { method: 'POST', body: JSON.stringify({ oldUser: oldUser, newUser: newUser, conflictPolicy: conflictPolicy }) }).then(function (data) {
       var result = data.result;
       closeModal('mergeUserModal');
       state.selectedUser = '';
@@ -618,6 +626,12 @@
       els.backupResults.textContent = '';
       var summary = el('div', 'backup-result');
       summary.appendChild(el('strong', '', oldUser + ' → ' + newUser));
+      var policyLabel = (result.conflictPolicy || conflictPolicy) === 'source'
+        ? 'конфликты: источник'
+        : (result.conflictPolicy || conflictPolicy) === 'target'
+          ? 'конфликты: целевая'
+          : 'конфликты: более свежая';
+      summary.appendChild(el('div', 'backup-path', policyLabel));
       summary.appendChild(el('div', 'backup-path',
         'Sync: перенесено ' + mergeMetric(result.sync && result.sync.movedRecords) + ' из ' + mergeMetric(result.sync && result.sync.sourceRecords) +
         ', заменено целевых ' + mergeMetric(result.sync && result.sync.replacedTargetRecords) + ', оставлено целевых ' + mergeMetric(result.sync && result.sync.keptTargetRecords) +
