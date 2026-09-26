@@ -23,7 +23,9 @@
     syncPrev: $('syncPrev'), syncNext: $('syncNext'), syncPageLabel: $('syncPageLabel'), categoryModal: $('categoryModal'),
     categoryHead: $('categoryCardHead'), categoryOptions: $('categoryOptions'), backupModal: $('backupModal'),
     backupResults: $('backupResults'), renameUserModal: $('renameUserModal'), oldUser: $('oldUserField'), newUser: $('newUserField'),
-    confirmRenameUser: $('confirmRenameUserBtn'), deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
+    confirmRenameUser: $('confirmRenameUserBtn'), mergeUserModal: $('mergeUserModal'), mergeOldUser: $('mergeOldUserField'),
+    mergeNewUser: $('mergeNewUserField'), mergeUserTargets: $('mergeUserTargets'), confirmMergeUser: $('confirmMergeUserBtn'),
+    deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
     confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty')
   };
   var errorMessages = {
@@ -36,6 +38,7 @@
     multiple_statuses: 'Для карточки можно выбрать только один статус', old_user_required: 'Укажите текущее имя пользователя',
     new_user_required: 'Укажите новое имя пользователя', user_name_unchanged: 'Новое имя совпадает с текущим',
     user_not_found: 'Пользователь не найден ни в Sync, ни в TimeCode', rename_user_conflict: 'Новое имя уже занято или создаёт конфликт записей',
+    merge_user_conflict: 'Не удалось безопасно объединить записи из-за конфликта уникальных ключей',
     invalid_backup_file: 'Недопустимое имя файла резервной копии', backup_not_found: 'Резервная копия не найдена',
     backup_integrity_failed: 'Проверка целостности резервной копии не пройдена', backup_schema_mismatch: 'Копия относится к другой базе',
     invalid_backup_database: 'Файл не является исправной SQLite-базой',
@@ -542,6 +545,92 @@
       showError(error);
     });
   }
+  var mergeTargetTouched = false;
+  function mergeUserSuggestion(value) {
+    return (value || '').replace(/[^a-z0-9\-_\.]+/gi, '');
+  }
+  function suggestMergeTarget() {
+    if (mergeTargetTouched && els.mergeNewUser.value.trim()) return;
+    els.mergeNewUser.value = mergeUserSuggestion(els.mergeOldUser.value.trim());
+  }
+  function openMergeUser() {
+    var selected = state.syncUser ? state.syncUser.user || '' : state.selectedUser || '';
+    mergeTargetTouched = false;
+    els.mergeOldUser.textContent = '';
+    els.mergeUserTargets.textContent = '';
+    var loading = document.createElement('option'); loading.value = ''; loading.textContent = 'Загрузка пользователей…'; els.mergeOldUser.appendChild(loading);
+    els.mergeNewUser.value = '';
+    els.confirmMergeUser.disabled = true;
+    openModal('mergeUserModal');
+    Promise.all([api('users?database=sync'), api('users?database=timecode')]).then(function (responses) {
+      var users = new Map();
+      responses.forEach(function (response, databaseIndex) {
+        (response.users || []).forEach(function (entry) {
+          var key = (entry.user || '').toLowerCase();
+          if (!key) return;
+          var current = users.get(key) || { user: entry.user, sync: 0, timecode: 0 };
+          current[databaseIndex === 0 ? 'sync' : 'timecode'] += Number(entry.records || 0);
+          users.set(key, current);
+        });
+      });
+      var list = Array.from(users.values()).sort(function (left, right) { return left.user.localeCompare(right.user, 'ru', { sensitivity: 'base' }); });
+      els.mergeOldUser.textContent = '';
+      els.mergeUserTargets.textContent = '';
+      var placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = list.length ? 'Выберите источник' : 'Пользователей нет';
+      els.mergeOldUser.appendChild(placeholder);
+      list.forEach(function (entry) {
+        var option = document.createElement('option'); option.value = entry.user;
+        option.textContent = entry.user + ' · Sync: ' + entry.sync + ', TimeCode: ' + entry.timecode;
+        els.mergeOldUser.appendChild(option);
+        var target = document.createElement('option'); target.value = entry.user; els.mergeUserTargets.appendChild(target);
+      });
+      var match = list.find(function (entry) { return entry.user.toLowerCase() === selected.toLowerCase(); });
+      if (match) els.mergeOldUser.value = match.user;
+      suggestMergeTarget();
+      els.confirmMergeUser.disabled = !list.length;
+      setTimeout(function () { (els.mergeOldUser.value ? els.mergeNewUser : els.mergeOldUser).focus(); }, 0);
+    }).catch(function (error) {
+      els.mergeOldUser.textContent = '';
+      var failed = document.createElement('option'); failed.value = ''; failed.textContent = 'Не удалось загрузить пользователей'; els.mergeOldUser.appendChild(failed);
+      showError(error);
+    });
+  }
+  function mergeUser() {
+    var oldUser = els.mergeOldUser.value.trim();
+    var newUser = els.mergeNewUser.value.trim();
+    if (!oldUser) return showError(new Error('old_user_required'));
+    if (!newUser) return showError(new Error('new_user_required'));
+    if (oldUser.toLowerCase() === newUser.toLowerCase()) return showError(new Error('user_name_unchanged'));
+    if (!confirm('Объединить данные пользователя «' + oldUser + '» с «' + newUser + '»?\n\nПри совпадении записей останется более свежая. Перед миграцией автоматически создаются резервные копии Sync и TimeCode.\n\nПосле операции источник будет удалён.')) return;
+    els.confirmMergeUser.disabled = true;
+    api('merge-user', { method: 'POST', body: JSON.stringify({ oldUser: oldUser, newUser: newUser }) }).then(function (data) {
+      var result = data.result;
+      closeModal('mergeUserModal');
+      state.selectedUser = '';
+      if (state.syncUser && state.syncUser.user.toLowerCase() === oldUser.toLowerCase()) state.syncUser = null;
+      els.syncDetail.hidden = true; els.listView.hidden = false;
+      loadRecords(); loadSummary(); loadTimeCodeUsers();
+
+      els.backupResults.textContent = '';
+      var summary = el('div', 'backup-result');
+      summary.appendChild(el('strong', '', oldUser + ' → ' + newUser));
+      summary.appendChild(el('div', 'backup-path',
+        'Sync: перенесено ' + result.sync.movedRecords + ' из ' + result.sync.sourceRecords +
+        ', заменено целевых ' + result.sync.replacedTargetRecords + ', оставлено целевых ' + result.sync.keptTargetRecords +
+        ' · TimeCode: перенесено ' + result.timecode.movedRecords + ' из ' + result.timecode.sourceRecords +
+        ', заменено целевых ' + result.timecode.replacedTargetRecords + ', оставлено целевых ' + result.timecode.keptTargetRecords));
+      els.backupResults.appendChild(summary);
+      (result.backups || []).forEach(function (backup) {
+        var row = el('div', 'backup-result');
+        row.appendChild(el('strong', '', backup.database === 'timecode' ? 'TimeCode backup' : 'Sync backup'));
+        row.appendChild(el('div', 'backup-path', backup.path));
+        els.backupResults.appendChild(row);
+      });
+      openModal('backupModal');
+      toast('Миграция пользователя завершена');
+    }).catch(showError).finally(function () { els.confirmMergeUser.disabled = false; });
+  }
+
   function openDeleteUser() {
     var selected = state.syncUser ? state.syncUser.user || '' : state.selectedUser || '';
     els.deleteUser.textContent = '';
@@ -622,6 +711,10 @@
   document.querySelectorAll('[data-restore-db]').forEach(function (tab) { tab.addEventListener('click', function () { restoreDatabase = tab.dataset.restoreDb; document.querySelectorAll('[data-restore-db]').forEach(function (item) { item.classList.toggle('active', item === tab); }); loadBackups(); }); });
   $('renameUserBtn').addEventListener('click', openRenameUser);
   els.confirmRenameUser.addEventListener('click', renameUser);
+  $('mergeUserBtn').addEventListener('click', openMergeUser);
+  els.mergeOldUser.addEventListener('change', function () { mergeTargetTouched = false; suggestMergeTarget(); });
+  els.mergeNewUser.addEventListener('input', function () { mergeTargetTouched = true; });
+  els.confirmMergeUser.addEventListener('click', mergeUser);
   $('deleteUserBtn').addEventListener('click', openDeleteUser);
   els.confirmDeleteUser.addEventListener('click', deleteUser);
   $('backToUsers').addEventListener('click', function () { els.syncDetail.hidden = true; els.listView.hidden = false; state.syncUser = null; loadRecords(); loadSummary(); });
