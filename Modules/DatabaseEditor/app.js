@@ -595,6 +595,10 @@
       showError(error);
     });
   }
+  function mergeMetric(value) {
+    return value == null || value === '' || isNaN(Number(value)) ? 0 : Number(value);
+  }
+
   function mergeUser() {
     var oldUser = els.mergeOldUser.value.trim();
     var newUser = els.mergeNewUser.value.trim();
@@ -615,10 +619,10 @@
       var summary = el('div', 'backup-result');
       summary.appendChild(el('strong', '', oldUser + ' → ' + newUser));
       summary.appendChild(el('div', 'backup-path',
-        'Sync: перенесено ' + result.sync.movedRecords + ' из ' + result.sync.sourceRecords +
-        ', заменено целевых ' + result.sync.replacedTargetRecords + ', оставлено целевых ' + result.sync.keptTargetRecords +
-        ' · TimeCode: перенесено ' + result.timecode.movedRecords + ' из ' + result.timecode.sourceRecords +
-        ', заменено целевых ' + result.timecode.replacedTargetRecords + ', оставлено целевых ' + result.timecode.keptTargetRecords));
+        'Sync: перенесено ' + mergeMetric(result.sync && result.sync.movedRecords) + ' из ' + mergeMetric(result.sync && result.sync.sourceRecords) +
+        ', заменено целевых ' + mergeMetric(result.sync && result.sync.replacedTargetRecords) + ', оставлено целевых ' + mergeMetric(result.sync && result.sync.keptTargetRecords) +
+        ' · TimeCode: перенесено ' + mergeMetric(result.timecode && result.timecode.movedRecords) + ' из ' + mergeMetric(result.timecode && result.timecode.sourceRecords) +
+        ', заменено целевых ' + mergeMetric(result.timecode && result.timecode.replacedTargetRecords) + ', оставлено целевых ' + mergeMetric(result.timecode && result.timecode.keptTargetRecords)));
       els.backupResults.appendChild(summary);
       (result.backups || []).forEach(function (backup) {
         var row = el('div', 'backup-result');
