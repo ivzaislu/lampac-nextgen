@@ -683,7 +683,6 @@ static class DatabaseStore
 
         string oldUser = ValidateKey(request.oldUser, "old_user_required");
         string newUser = ValidateKey(request.newUser, "new_user_required");
-        string conflictPolicy = NormalizeMergeConflictPolicy(request.conflictPolicy);
         if (string.Equals(oldUser, newUser, StringComparison.Ordinal))
             throw new DatabaseEditorValidationException("user_name_unchanged");
         if (!File.Exists(Sync.path) || !File.Exists(TimeCode.path))
@@ -769,6 +768,7 @@ static class DatabaseStore
 
         string oldUser = ValidateKey(request.oldUser, "old_user_required");
         string newUser = ValidateKey(request.newUser, "new_user_required");
+        string conflictPolicy = NormalizeMergeConflictPolicy(request.conflictPolicy);
         if (string.Equals(oldUser, newUser, StringComparison.OrdinalIgnoreCase))
             throw new DatabaseEditorValidationException("user_name_unchanged");
         if (!File.Exists(Sync.path) || !File.Exists(TimeCode.path))
