@@ -921,9 +921,7 @@ static class DatabaseStore
                 }
             }
 
-            bool sourceWins = targetId == 0 ||
-                row.updatedAt > targetUpdatedAt ||
-                (row.updatedAt == targetUpdatedAt && row.changedAt > targetChangedAt);
+            bool sourceWins = targetId == 0 || IsSourceNewer(row.changedAt, row.updatedAt, targetChangedAt, targetUpdatedAt);
 
             if (!sourceWins)
             {
@@ -1010,9 +1008,7 @@ static class DatabaseStore
                 }
             }
 
-            bool sourceWins = targetIds.Count == 0 ||
-                row.updatedAt > newestTargetUpdatedAt ||
-                (row.updatedAt == newestTargetUpdatedAt && row.watchedAt > newestTargetWatchedAt);
+            bool sourceWins = targetIds.Count == 0 || IsSourceNewer(row.watchedAt, row.updatedAt, newestTargetWatchedAt, newestTargetUpdatedAt);
 
             if (!sourceWins)
             {
@@ -1036,6 +1032,20 @@ static class DatabaseStore
         }
 
         return result;
+    }
+
+    static bool IsSourceNewer(long sourceChangedAt, long sourceUpdatedAt, long targetChangedAt, long targetUpdatedAt)
+    {
+        // Sync и TimeCode арбитрируют конфликт устройств по клиентскому времени изменения
+        // (changed_at / watched_at). updated_at — серверный курсор доставки и используется
+        // только когда клиентская метка отсутствует или равна.
+        if (sourceChangedAt > 0 && targetChangedAt > 0 && sourceChangedAt != targetChangedAt)
+            return sourceChangedAt > targetChangedAt;
+        if (sourceChangedAt > 0 && targetChangedAt <= 0)
+            return true;
+        if (sourceChangedAt <= 0 && targetChangedAt > 0)
+            return false;
+        return sourceUpdatedAt > targetUpdatedAt;
     }
 
     static async Task DeleteRowByIdAsync(SqliteConnection connection, SqliteTransaction transaction, string table, long id)
