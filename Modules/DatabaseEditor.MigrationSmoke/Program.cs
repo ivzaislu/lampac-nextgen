@@ -38,6 +38,8 @@ internal static class Program
             Log("=== BEFORE MIGRATION ===");
             await PrintStateAsync();
 
+            VerifyConflictPolicies();
+
             MergeUserResult result = await RunMergeAsync();
 
             Log("");
@@ -88,9 +90,25 @@ internal static class Program
         MethodInfo method = store.GetMethod("MergeUserAsync", BindingFlags.Public | BindingFlags.Static)
             ?? throw new InvalidOperationException("MergeUserAsync not found");
 
-        var request = new MergeUserRequest { oldUser = OldUser, newUser = NewUser };
+        var request = new MergeUserRequest { oldUser = OldUser, newUser = NewUser, conflictPolicy = "newest" };
         var task = (Task<MergeUserResult>)method.Invoke(null, new object[] { request });
         return await task;
+    }
+
+    static void VerifyConflictPolicies()
+    {
+        Type store = typeof(MergeUserRequest).Assembly.GetType("DatabaseEditor.DatabaseStore", throwOnError: true);
+        MethodInfo method = store.GetMethod("MergeSourceWins", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("MergeSourceWins not found");
+
+        bool SourceWins(string policy, long sourceClient, long sourceUpdated, long targetClient, long targetUpdated)
+            => (bool)(method.Invoke(null, new object[] { policy, sourceClient, sourceUpdated, targetClient, targetUpdated })
+                ?? throw new InvalidOperationException("MergeSourceWins returned null"));
+
+        Require(SourceWins("source", 1, 1, 999, 999), "Conflict policy source always replaces target");
+        Require(!SourceWins("target", 999, 999, 1, 1), "Conflict policy target always keeps target");
+        Require(SourceWins("newest", 999, 1, 1, 999), "Conflict policy newest prefers newer client timestamp");
+        Require(!SourceWins("newest", 1, 999, 999, 1), "Conflict policy newest keeps newer target client timestamp");
     }
 
     static async Task CreateSyncAsync()
