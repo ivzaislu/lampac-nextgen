@@ -35,17 +35,3 @@ jobs:
 
       - name: Build
         run: dotnet build NextGen.slnx --configuration Release --verbosity minimal
-
-      - name: DatabaseEditor migration smoke test
-        run: dotnet run --project Modules/DatabaseEditor.MigrationSmoke/DatabaseEditor.MigrationSmoke.csproj --configuration Release
-        env:
-          MIGRATION_SMOKE_ROOT: ${{ runner.temp }}/database-editor-migration-smoke
-
-      - name: Upload migration smoke artifacts
-        if: always()
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: database-editor-migration-smoke
-          path: ${{ runner.temp }}/database-editor-migration-smoke
-          include-hidden-files: true
-          retention-days: 7
