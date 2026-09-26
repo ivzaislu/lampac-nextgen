@@ -35,7 +35,7 @@
       <section id="listView">
         <div class="hero">
           <div><h1>Редактор TimeCode и Sync</h1><p>Пользователи, карточки, позиции просмотра и безопасные копии SQLite.</p></div>
-          <div class="hero-actions"><button class="btn" id="backupAllBtn">⇩ <span>Backup TimeCode + Sync</span></button><button class="btn" id="restoreBtn">↥ <span>Восстановить</span></button><button class="btn" id="renameUserBtn">Переименовать пользователя</button><button class="btn danger" id="deleteUserBtn">Удалить пользователя</button></div>
+          <div class="hero-actions"><button class="btn" id="backupAllBtn">⇩ <span>Backup TimeCode + Sync</span></button><button class="btn" id="restoreBtn">↥ <span>Восстановить</span></button><button class="btn" id="renameUserBtn">Переименовать пользователя</button><button class="btn" id="mergeUserBtn">Миграция пользователя</button><button class="btn danger" id="deleteUserBtn">Удалить пользователя</button></div>
         </div>
 
         <section class="summary" id="summary"></section>
@@ -110,6 +110,19 @@
         <p class="modal-hint field full">Важно: перед переименованием выйдите из старой учётной записи на всех устройствах или заранее измените её логин/account_email в настройках Lampa и, если пользователь задан там, в init/AccsDB. Активный клиент со старым именем после обновления страницы создаст его в Sync и TimeCode повторно. Новое имя не должно быть занято.</p>
       </div></div>
       <div class="modal-foot"><button class="btn" data-close="renameUserModal">Отмена</button><button class="btn primary" id="confirmRenameUserBtn">Переименовать</button></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="mergeUserModal" role="dialog" aria-modal="true">
+    <div class="modal modal-compact">
+      <div class="modal-head"><span class="modal-title">Миграция пользователя</span><button class="icon-btn modal-close" data-close="mergeUserModal">×</button></div>
+      <div class="modal-body"><div class="form-grid">
+        <div class="field full"><label for="mergeOldUserField">Источник</label><select class="select" id="mergeOldUserField"><option value="">Загрузка пользователей…</option></select></div>
+        <div class="field full"><label for="mergeNewUserField">Целевой пользователь</label><input id="mergeNewUserField" list="mergeUserTargets" maxlength="512" autocomplete="off"><datalist id="mergeUserTargets"></datalist></div>
+        <div class="field full"><label for="mergeConflictPolicyField">При совпадении записей</label><select class="select" id="mergeConflictPolicyField"><option value="newest">Оставить более свежую</option><option value="source">Всегда брать источник</option><option value="target">Всегда оставлять целевую</option></select></div>
+        <p class="modal-hint field full">Данные источника будут объединены с целевым пользователем сразу в Sync и TimeCode. Режим «более свежую» сравнивает <code>changed_at</code> для Sync и <code>watched_at</code> для TimeCode; <code>updated_at</code> используется как резервный критерий. Если целевой пользователь содержит повреждённые данные, выберите «Всегда брать источник». Перед изменениями автоматически создаются резервные копии обеих баз.</p>
+      </div></div>
+      <div class="modal-foot"><button class="btn" data-close="mergeUserModal">Отмена</button><button class="btn primary" id="confirmMergeUserBtn">Мигрировать и объединить</button></div>
     </div>
   </div>
 

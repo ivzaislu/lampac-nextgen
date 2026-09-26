@@ -53,6 +53,31 @@ public sealed class RenameUserResult
     public int timecodeRecords { get; set; }
 }
 
+public sealed class MergeUserRequest
+{
+    public string oldUser { get; set; }
+    public string newUser { get; set; }
+    public string conflictPolicy { get; set; } = "newest";
+}
+
+public sealed class MergeUserDatabaseResult
+{
+    public int sourceRecords { get; set; }
+    public int movedRecords { get; set; }
+    public int replacedTargetRecords { get; set; }
+    public int keptTargetRecords { get; set; }
+}
+
+public sealed class MergeUserResult
+{
+    public string oldUser { get; set; }
+    public string newUser { get; set; }
+    public string conflictPolicy { get; set; }
+    public MergeUserDatabaseResult sync { get; set; }
+    public MergeUserDatabaseResult timecode { get; set; }
+    public List<DatabaseBackupResult> backups { get; set; }
+}
+
 public sealed class DeleteUserRequest
 {
     public string user { get; set; }
@@ -214,6 +239,7 @@ static class DatabaseStore
         public string table;
         public string semaphore;
         public bool timecode;
+        public bool sync;
 
         /// <summary>Колонка, по которой сортируем и берём MAX.</summary>
         public string updatedColumn = "updated";
@@ -226,26 +252,33 @@ static class DatabaseStore
     /// TimeCode хранит таймкод типизированными колонками, а редактор правит road-объект Lampa —
     /// тот же контракт, что у легаси `/timecode/all`. Собираем его на стороне SQLite.
     /// </summary>
-    const string TimeCodeRoad = "json_object('duration', duration, 'time', position, 'percent', percent, 'profile', profile, 'updated', watched_at)";
+    const string TimeCodeRoad = "json_patch(COALESCE(extra, '{}'), json_object('duration', duration, 'time', position, 'percent', percent, 'profile', profile, 'updated', watched_at, 'id', identity))";
 
     static string TimeCodeStamp(string expression) => $"strftime('%Y-%m-%dT%H:%M:%SZ', {expression} / 1000, 'unixepoch')";
 
     /// <summary>Обратная операция к <see cref="TimeCodeRoad"/>: road из редактора → колонки.</summary>
-    const string TimeCodeColumns = "position, duration, percent, profile, watched_at";
+    const string TimeCodeColumns = "identity, position, duration, percent, profile, watched_at, extra, deleted";
+
+    const string TimeCodeExtra =
+        "NULLIF(json_remove(@data, '$.time', '$.duration', '$.percent', '$.profile', '$.updated', '$.hash', '$.id'), '{}')";
 
     const string TimeCodeValues =
+        "NULLIF(TRIM(json_extract(@data, '$.id')), ''), " +
         "COALESCE(json_extract(@data, '$.time'), 0), " +
         "COALESCE(json_extract(@data, '$.duration'), 0), " +
         "COALESCE(json_extract(@data, '$.percent'), 0), " +
         "COALESCE(json_extract(@data, '$.profile'), 0), " +
-        "COALESCE(json_extract(@data, '$.updated'), 0)";
+        "COALESCE(json_extract(@data, '$.updated'), 0), " +
+        TimeCodeExtra + ", 0";
 
     const string TimeCodeAssignments =
+        "identity = NULLIF(TRIM(json_extract(@data, '$.id')), ''), " +
         "position = COALESCE(json_extract(@data, '$.time'), 0), " +
         "duration = COALESCE(json_extract(@data, '$.duration'), 0), " +
         "percent = COALESCE(json_extract(@data, '$.percent'), 0), " +
         "profile = COALESCE(json_extract(@data, '$.profile'), 0), " +
-        "watched_at = COALESCE(json_extract(@data, '$.updated'), 0)";
+        "watched_at = COALESCE(json_extract(@data, '$.updated'), 0), " +
+        "extra = " + TimeCodeExtra + ", deleted = 0";
 
     sealed class MediaMetadata
     {
@@ -264,7 +297,10 @@ static class DatabaseStore
         title = "Sync / закладки",
         path = Path.Combine("database", "Sync.sql"),
         table = "bookmarks",
-        semaphore = "Sync"
+        semaphore = "Sync",
+        sync = true,
+        updatedColumn = "updated_at",
+        updatedText = TimeCodeStamp
     };
 
     static readonly DatabaseSpec TimeCode = new()
@@ -318,6 +354,9 @@ static class DatabaseStore
         user = (user ?? string.Empty).Trim();
         if (user.Length > MaxKeyLength)
             throw new DatabaseEditorValidationException("key_too_long");
+
+        if (spec.sync)
+            return await GetSyncRecordsAsync(query, page, pageSize, user);
 
         await using var connection = await OpenAsync(spec);
         string where = BuildWhere(spec, query, user, out string searchValue, out string selectedUser);
@@ -391,6 +430,9 @@ static class DatabaseStore
         if (id <= 0)
             throw new DatabaseEditorValidationException("invalid_id");
 
+        if (spec.sync)
+            return await GetSyncRecordAsync(id);
+
         await using var connection = await OpenAsync(spec);
         await using var command = connection.CreateCommand();
         command.CommandText = spec.timecode
@@ -426,18 +468,11 @@ static class DatabaseStore
         if (id <= 0)
             throw new DatabaseEditorValidationException("invalid_id");
 
-        await using var connection = await OpenAsync(Sync);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, user, data, updated FROM bookmarks WHERE Id = @id LIMIT 1;";
-        command.Parameters.AddWithValue("@id", id);
-
-        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow);
-        if (!await reader.ReadAsync())
+        DatabaseRecord record = await GetSyncRecordAsync(id);
+        if (record == null)
             return null;
 
-        string data = ReadString(reader, 2);
-        var details = BuildSyncUserDetails(reader.GetInt64(0), ReadString(reader, 1), ReadString(reader, 3), data);
-        return details;
+        return BuildSyncUserDetails(record.id, record.user, record.updated, record.data);
     }
 
     public static async Task<List<string>> SaveSyncItemAsync(SaveSyncItemRequest request)
@@ -529,9 +564,21 @@ static class DatabaseStore
             throw new DatabaseEditorValidationException("request_required");
 
         DatabaseSpec spec = GetSpec(request.database);
+        if (spec.sync)
+            return await SaveSyncRecordAsync(request);
+
         string user = ValidateKey(request.user, "user_required");
         string card = spec.timecode ? ValidateKey(request.card, "card_required") : null;
-        string item = spec.timecode ? ValidateKey(request.item, "item_required") : null;
+        string item = null;
+        if (spec.timecode)
+        {
+            item = (request.item ?? string.Empty).Trim();
+            if (item.Length > MaxKeyLength)
+                throw new DatabaseEditorValidationException("key_too_long");
+            if (item.Length == 0)
+                item = null;
+        }
+
         string data = NormalizeJson(request.data);
         long id = request.id.GetValueOrDefault();
         if (id < 0)
@@ -572,7 +619,7 @@ static class DatabaseStore
             if (spec.timecode)
             {
                 command.Parameters.AddWithValue("@card", card);
-                command.Parameters.AddWithValue("@item", item);
+                command.Parameters.AddWithValue("@item", (object)item ?? DBNull.Value);
             }
             command.Parameters.AddWithValue("@data", data);
             if (!spec.timecode)
@@ -603,6 +650,9 @@ static class DatabaseStore
         DatabaseSpec spec = GetSpec(database);
         if (id <= 0)
             throw new DatabaseEditorValidationException("invalid_id");
+
+        if (spec.sync)
+            return await DeleteSyncRecordAsync(id);
 
         var semaphore = new SemaphorManager(spec.semaphore, TimeSpan.FromSeconds(20));
         bool acquired = await semaphore.WaitAsync();
@@ -709,6 +759,349 @@ static class DatabaseStore
         command.Parameters.AddWithValue("@oldUser", oldUser);
         command.Parameters.AddWithValue("@newUser", newUser);
         return await command.ExecuteNonQueryAsync();
+    }
+
+    public static async Task<MergeUserResult> MergeUserAsync(MergeUserRequest request)
+    {
+        if (request == null)
+            throw new DatabaseEditorValidationException("request_required");
+
+        string oldUser = ValidateKey(request.oldUser, "old_user_required");
+        string newUser = ValidateKey(request.newUser, "new_user_required");
+        string conflictPolicy = NormalizeMergeConflictPolicy(request.conflictPolicy);
+        if (string.Equals(oldUser, newUser, StringComparison.OrdinalIgnoreCase))
+            throw new DatabaseEditorValidationException("user_name_unchanged");
+        if (!File.Exists(Sync.path) || !File.Exists(TimeCode.path))
+            throw new DatabaseEditorValidationException("database_not_found");
+
+        var syncSemaphore = new SemaphorManager(Sync.semaphore, TimeSpan.FromSeconds(20));
+        var timecodeSemaphore = new SemaphorManager(TimeCode.semaphore, TimeSpan.FromSeconds(20));
+        bool syncAcquired = await syncSemaphore.WaitAsync();
+        if (!syncAcquired)
+            throw new DatabaseEditorBusyException("database_busy");
+
+        bool timecodeAcquired = false;
+        try
+        {
+            timecodeAcquired = await timecodeSemaphore.WaitAsync();
+            if (!timecodeAcquired)
+                throw new DatabaseEditorBusyException("database_busy");
+
+            await using var connection = await OpenAsync(TimeCode, pooling: false);
+            await using (var attach = connection.CreateCommand())
+            {
+                attach.CommandText = "ATTACH DATABASE @syncPath AS syncdb;";
+                attach.Parameters.AddWithValue("@syncPath", Path.GetFullPath(Sync.path));
+                await attach.ExecuteNonQueryAsync();
+            }
+
+            int timecodeSourceRecords = await CountUserRowsAsync(connection, null, "main.timecodes", oldUser);
+            int syncSourceRecords = await CountUserRowsAsync(connection, null, "syncdb.bookmarks", oldUser);
+            if (timecodeSourceRecords == 0 && syncSourceRecords == 0)
+                throw new DatabaseEditorValidationException("user_not_found");
+
+            var backups = new List<DatabaseBackupResult>(2)
+            {
+                new() { database = TimeCode.key, path = await CreateBackupLockedAsync(TimeCode, "before-user-merge") },
+                new() { database = Sync.key, path = await CreateBackupLockedAsync(Sync, "before-user-merge") }
+            };
+
+            using var transaction = connection.BeginTransaction();
+            long timecodeStamp = await NextMigrationStampAsync(connection, transaction, "main.timecodes", oldUser, newUser);
+            long syncStamp = await NextMigrationStampAsync(connection, transaction, "syncdb.bookmarks", oldUser, newUser);
+
+            MergeUserDatabaseResult timecode = await MergeTimeCodeUserAsync(connection, transaction, oldUser, newUser, timecodeStamp, conflictPolicy);
+            MergeUserDatabaseResult sync = await MergeSyncUserAsync(connection, transaction, oldUser, newUser, syncStamp, conflictPolicy);
+
+            transaction.Commit();
+
+            Serilog.Log.Warning(
+                "DatabaseEditor merged user {OldUser} into {NewUser} using {ConflictPolicy}: Sync moved {SyncMoved}/{SyncSource}, replaced {SyncReplaced}, kept {SyncKept}; TimeCode moved {TimecodeMoved}/{TimecodeSource}, replaced {TimecodeReplaced}, kept {TimecodeKept}",
+                oldUser, newUser, conflictPolicy,
+                sync.movedRecords, sync.sourceRecords, sync.replacedTargetRecords, sync.keptTargetRecords,
+                timecode.movedRecords, timecode.sourceRecords, timecode.replacedTargetRecords, timecode.keptTargetRecords);
+
+            return new MergeUserResult
+            {
+                oldUser = oldUser,
+                newUser = newUser,
+                conflictPolicy = conflictPolicy,
+                sync = sync,
+                timecode = timecode,
+                backups = backups
+            };
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            throw new DatabaseEditorConflictException("merge_user_conflict");
+        }
+        finally
+        {
+            if (timecodeAcquired)
+                timecodeSemaphore.Release();
+            syncSemaphore.Release();
+        }
+    }
+
+    sealed class MergeSyncRow
+    {
+        public long id;
+        public string cardId;
+        public long changedAt;
+        public long updatedAt;
+    }
+
+    sealed class MergeTimeCodeRow
+    {
+        public long id;
+        public string identity;
+        public string card;
+        public string item;
+        public long watchedAt;
+        public long updatedAt;
+    }
+
+    static async Task<int> CountUserRowsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, string user)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COUNT(*) FROM {table} WHERE user = @user COLLATE NOCASE;";
+        command.Parameters.AddWithValue("@user", user);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    static async Task<long> NextMigrationStampAsync(SqliteConnection connection, SqliteTransaction transaction, string table, string oldUser, string newUser)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COALESCE(MAX(updated_at), 0) FROM {table} WHERE user = @oldUser COLLATE NOCASE OR user = @newUser COLLATE NOCASE;";
+        command.Parameters.AddWithValue("@oldUser", oldUser);
+        command.Parameters.AddWithValue("@newUser", newUser);
+        long maximum = Convert.ToInt64(await command.ExecuteScalarAsync());
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return Math.Max(now, maximum + 1);
+    }
+
+    static async Task<MergeUserDatabaseResult> MergeSyncUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp, string conflictPolicy)
+    {
+        var source = new List<MergeSyncRow>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT Id, card_id, changed_at, updated_at FROM syncdb.bookmarks WHERE user = @oldUser COLLATE NOCASE ORDER BY updated_at, Id;";
+            select.Parameters.AddWithValue("@oldUser", oldUser);
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                source.Add(new MergeSyncRow
+                {
+                    id = reader.GetInt64(0),
+                    cardId = ReadString(reader, 1),
+                    changedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2),
+                    updatedAt = reader.IsDBNull(3) ? 0 : reader.GetInt64(3)
+                });
+            }
+        }
+
+        var result = new MergeUserDatabaseResult { sourceRecords = source.Count };
+        foreach (MergeSyncRow row in source)
+        {
+            long targetId = 0;
+            long targetChangedAt = 0;
+            long targetUpdatedAt = 0;
+
+            await using (var target = connection.CreateCommand())
+            {
+                target.Transaction = transaction;
+                target.CommandText = "SELECT Id, changed_at, updated_at FROM syncdb.bookmarks WHERE user = @newUser COLLATE NOCASE AND card_id = @cardId LIMIT 1;";
+                target.Parameters.AddWithValue("@newUser", newUser);
+                target.Parameters.AddWithValue("@cardId", row.cardId);
+                await using var reader = await target.ExecuteReaderAsync(CommandBehavior.SingleRow);
+                if (await reader.ReadAsync())
+                {
+                    targetId = reader.GetInt64(0);
+                    targetChangedAt = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+                    targetUpdatedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+                }
+            }
+
+            bool sourceWins = targetId == 0 || MergeSourceWins(
+                conflictPolicy,
+                row.changedAt,
+                row.updatedAt,
+                targetChangedAt,
+                targetUpdatedAt);
+
+            if (!sourceWins)
+            {
+                await DeleteRowByIdAsync(connection, transaction, "syncdb.bookmarks", row.id);
+                result.keptTargetRecords++;
+                continue;
+            }
+
+            if (targetId != 0)
+            {
+                await DeleteRowByIdAsync(connection, transaction, "syncdb.bookmarks", targetId);
+                result.replacedTargetRecords++;
+            }
+
+            await using var move = connection.CreateCommand();
+            move.Transaction = transaction;
+            move.CommandText = "UPDATE syncdb.bookmarks SET user = @newUser, updated_at = @updatedAt WHERE Id = @id;";
+            move.Parameters.AddWithValue("@newUser", newUser);
+            move.Parameters.AddWithValue("@updatedAt", stamp++);
+            move.Parameters.AddWithValue("@id", row.id);
+            await move.ExecuteNonQueryAsync();
+            result.movedRecords++;
+        }
+
+        return result;
+    }
+
+    static async Task<MergeUserDatabaseResult> MergeTimeCodeUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp, string conflictPolicy)
+    {
+        var source = new List<MergeTimeCodeRow>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT Id, identity, card, item, watched_at, updated_at FROM main.timecodes WHERE user = @oldUser COLLATE NOCASE ORDER BY updated_at, Id;";
+            select.Parameters.AddWithValue("@oldUser", oldUser);
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                source.Add(new MergeTimeCodeRow
+                {
+                    id = reader.GetInt64(0),
+                    identity = ReadString(reader, 1),
+                    card = ReadString(reader, 2),
+                    item = ReadString(reader, 3),
+                    watchedAt = reader.IsDBNull(4) ? 0 : reader.GetInt64(4),
+                    updatedAt = reader.IsDBNull(5) ? 0 : reader.GetInt64(5)
+                });
+            }
+        }
+
+        var result = new MergeUserDatabaseResult { sourceRecords = source.Count };
+        foreach (MergeTimeCodeRow row in source)
+        {
+            var targetIds = new List<long>();
+            bool hasNewestTarget = false;
+            long newestTargetUpdatedAt = 0;
+            long newestTargetWatchedAt = 0;
+
+            await using (var target = connection.CreateCommand())
+            {
+                target.Transaction = transaction;
+                target.CommandText = """
+                    SELECT Id, updated_at, watched_at
+                    FROM main.timecodes
+                    WHERE user = @newUser COLLATE NOCASE
+                      AND ((@item IS NOT NULL AND card = @card AND item = @item)
+                           OR (@identity IS NOT NULL AND identity = @identity));
+                    """;
+                target.Parameters.AddWithValue("@newUser", newUser);
+                target.Parameters.AddWithValue("@card", row.card ?? string.Empty);
+                target.Parameters.AddWithValue("@item", (object)row.item ?? DBNull.Value);
+                target.Parameters.AddWithValue("@identity", (object)row.identity ?? DBNull.Value);
+
+                await using var reader = await target.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    targetIds.Add(reader.GetInt64(0));
+                    long updatedAt = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+                    long watchedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+                    if (!hasNewestTarget || IsSourceNewer(watchedAt, updatedAt, newestTargetWatchedAt, newestTargetUpdatedAt))
+                    {
+                        hasNewestTarget = true;
+                        newestTargetUpdatedAt = updatedAt;
+                        newestTargetWatchedAt = watchedAt;
+                    }
+                }
+            }
+
+            bool sourceWins = !hasNewestTarget || MergeSourceWins(
+                conflictPolicy,
+                row.watchedAt,
+                row.updatedAt,
+                newestTargetWatchedAt,
+                newestTargetUpdatedAt);
+
+            if (!sourceWins)
+            {
+                await DeleteRowByIdAsync(connection, transaction, "main.timecodes", row.id);
+                result.keptTargetRecords++;
+                continue;
+            }
+
+            foreach (long targetId in targetIds)
+                await DeleteRowByIdAsync(connection, transaction, "main.timecodes", targetId);
+            result.replacedTargetRecords += targetIds.Count;
+
+            await using var move = connection.CreateCommand();
+            move.Transaction = transaction;
+            move.CommandText = "UPDATE main.timecodes SET user = @newUser, updated_at = @updatedAt WHERE Id = @id;";
+            move.Parameters.AddWithValue("@newUser", newUser);
+            move.Parameters.AddWithValue("@updatedAt", stamp++);
+            move.Parameters.AddWithValue("@id", row.id);
+            await move.ExecuteNonQueryAsync();
+            result.movedRecords++;
+        }
+
+        return result;
+    }
+
+    static string NormalizeMergeConflictPolicy(string policy)
+    {
+        string normalized = string.IsNullOrWhiteSpace(policy)
+            ? "newest"
+            : policy.Trim().ToLowerInvariant();
+
+        return normalized switch
+        {
+            "newest" => "newest",
+            "source" => "source",
+            "target" => "target",
+            _ => throw new DatabaseEditorValidationException("invalid_merge_conflict_policy")
+        };
+    }
+
+    static bool MergeSourceWins(
+        string conflictPolicy,
+        long sourceChangedAt,
+        long sourceUpdatedAt,
+        long targetChangedAt,
+        long targetUpdatedAt)
+    {
+        if (string.Equals(conflictPolicy, "source", StringComparison.Ordinal))
+            return true;
+
+        if (string.Equals(conflictPolicy, "target", StringComparison.Ordinal))
+            return false;
+
+        return IsSourceNewer(sourceChangedAt, sourceUpdatedAt, targetChangedAt, targetUpdatedAt);
+    }
+
+    static bool IsSourceNewer(long sourceChangedAt, long sourceUpdatedAt, long targetChangedAt, long targetUpdatedAt)
+    {
+        // Sync и TimeCode арбитрируют конфликт устройств по клиентскому времени изменения
+        // (changed_at / watched_at). updated_at — серверный курсор доставки и используется
+        // только когда клиентская метка отсутствует или равна.
+        if (sourceChangedAt > 0 && targetChangedAt > 0 && sourceChangedAt != targetChangedAt)
+            return sourceChangedAt > targetChangedAt;
+        if (sourceChangedAt > 0 && targetChangedAt <= 0)
+            return true;
+        if (sourceChangedAt <= 0 && targetChangedAt > 0)
+            return false;
+        return sourceUpdatedAt > targetUpdatedAt;
+    }
+
+    static async Task DeleteRowByIdAsync(SqliteConnection connection, SqliteTransaction transaction, string table, long id)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"DELETE FROM {table} WHERE Id = @id;";
+        command.Parameters.AddWithValue("@id", id);
+        await command.ExecuteNonQueryAsync();
     }
 
     public static async Task<DeleteUserResult> DeleteUserAsync(DeleteUserRequest request)
@@ -929,6 +1322,443 @@ static class DatabaseStore
         return destinationPath.Replace('\\', '/');
     }
 
+    sealed class SyncStoredRow
+    {
+        public long id;
+        public string cardId;
+        public string card;
+        public string categories;
+    }
+
+    static async Task<RecordsPage> GetSyncRecordsAsync(string query, int page, int pageSize, string user)
+    {
+        await using var connection = await OpenAsync(Sync);
+
+        string searchValue = string.IsNullOrEmpty(query)
+            ? null
+            : "%" + query.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+        string selectedUser = string.IsNullOrEmpty(user) ? null : user;
+        var clauses = new List<string>();
+
+        if (searchValue != null)
+            clauses.Add("(CAST(Id AS TEXT) LIKE @search ESCAPE '\\' OR user LIKE @search ESCAPE '\\' COLLATE NOCASE OR card_id LIKE @search ESCAPE '\\' COLLATE NOCASE OR card LIKE @search ESCAPE '\\' COLLATE NOCASE OR categories LIKE @search ESCAPE '\\' COLLATE NOCASE)");
+        if (selectedUser != null)
+            clauses.Add("user = @selectedUser COLLATE NOCASE");
+
+        string where = clauses.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", clauses);
+
+        long total;
+        await using (var count = connection.CreateCommand())
+        {
+            count.CommandText = $"SELECT COUNT(DISTINCT user) FROM bookmarks{where};";
+            AddFilters(count, searchValue, selectedUser);
+            total = Convert.ToInt64(await count.ExecuteScalarAsync());
+        }
+
+        int pages = Math.Max(1, (int)Math.Ceiling(total / (double)pageSize));
+        page = Math.Min(page, pages);
+        int offset = (page - 1) * pageSize;
+        var records = new List<DatabaseRecord>(pageSize);
+
+        await using (var command = connection.CreateCommand())
+        {
+            string updatedExpression = TimeCodeStamp("MAX(updated_at)");
+            command.CommandText =
+                $"SELECT MIN(Id), user, SUM(length(COALESCE(card, '')) + length(COALESCE(categories, ''))), {updatedExpression} " +
+                $"FROM bookmarks{where} GROUP BY user COLLATE NOCASE ORDER BY MAX(updated_at) DESC, MIN(Id) DESC LIMIT @limit OFFSET @offset;";
+            AddFilters(command, searchValue, selectedUser);
+            command.Parameters.AddWithValue("@limit", pageSize);
+            command.Parameters.AddWithValue("@offset", offset);
+
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                records.Add(new DatabaseRecord
+                {
+                    id = reader.GetInt64(0),
+                    user = ReadString(reader, 1),
+                    dataLength = reader.IsDBNull(2) ? 0 : reader.GetInt64(2),
+                    updated = ReadString(reader, 3)
+                });
+            }
+        }
+
+        return new RecordsPage
+        {
+            database = Sync.key,
+            page = page,
+            pageSize = pageSize,
+            total = total,
+            pages = pages,
+            records = records
+        };
+    }
+
+    static async Task<DatabaseRecord> GetSyncRecordAsync(long id)
+    {
+        await using var connection = await OpenAsync(Sync);
+        string user = await GetSyncUserByRecordIdAsync(connection, null, id);
+        if (string.IsNullOrEmpty(user))
+            return null;
+
+        var state = await BuildSyncLegacyDataAsync(connection, null, user);
+        return new DatabaseRecord
+        {
+            id = id,
+            user = user,
+            data = state.data,
+            dataLength = Encoding.UTF8.GetByteCount(state.data ?? string.Empty),
+            preview = BuildPreview(state.data),
+            updated = FormatUnixMilliseconds(state.updatedAt)
+        };
+    }
+
+    static async Task<DatabaseRecord> SaveSyncRecordAsync(SaveRecordRequest request)
+    {
+        string user = ValidateKey(request.user, "user_required");
+        string data = NormalizeJson(request.data);
+        JsonObject root = ParseRoot(data) ?? throw new DatabaseEditorValidationException("invalid_json");
+        long id = request.id.GetValueOrDefault();
+        if (id < 0)
+            throw new DatabaseEditorValidationException("invalid_id");
+
+        var semaphore = new SemaphorManager(Sync.semaphore, TimeSpan.FromSeconds(20));
+        if (!await semaphore.WaitAsync())
+            throw new DatabaseEditorBusyException("database_busy");
+
+        long resultId = 0;
+        try
+        {
+            await using var connection = await OpenAsync(Sync);
+            using var transaction = connection.BeginTransaction();
+
+            string oldUser = id > 0 ? await GetSyncUserByRecordIdAsync(connection, transaction, id) : null;
+            if (id > 0 && string.IsNullOrEmpty(oldUser))
+                throw new DatabaseEditorValidationException("record_not_found");
+
+            if (!string.IsNullOrEmpty(oldUser) && !string.Equals(oldUser, user, StringComparison.Ordinal))
+            {
+                await using var rename = connection.CreateCommand();
+                rename.Transaction = transaction;
+                rename.CommandText = "UPDATE bookmarks SET user = @newUser WHERE user = @oldUser;";
+                rename.Parameters.AddWithValue("@newUser", user);
+                rename.Parameters.AddWithValue("@oldUser", oldUser);
+                await rename.ExecuteNonQueryAsync();
+            }
+
+            await SaveSyncLegacyDataAsync(connection, transaction, user, root);
+
+            await using (var representative = connection.CreateCommand())
+            {
+                representative.Transaction = transaction;
+                representative.CommandText = "SELECT MIN(Id) FROM bookmarks WHERE user = @user;";
+                representative.Parameters.AddWithValue("@user", user);
+                object value = await representative.ExecuteScalarAsync();
+                if (value == null || value == DBNull.Value)
+                    throw new DatabaseEditorValidationException("data_required");
+                resultId = Convert.ToInt64(value);
+            }
+
+            transaction.Commit();
+            Serilog.Log.Information("DatabaseEditor saved Sync user {User}", user);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            throw new DatabaseEditorConflictException("duplicate_record_key");
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+
+        return await GetSyncRecordAsync(resultId);
+    }
+
+    static async Task<bool> DeleteSyncRecordAsync(long id)
+    {
+        var semaphore = new SemaphorManager(Sync.semaphore, TimeSpan.FromSeconds(20));
+        if (!await semaphore.WaitAsync())
+            throw new DatabaseEditorBusyException("database_busy");
+
+        try
+        {
+            await using var connection = await OpenAsync(Sync);
+            string user = await GetSyncUserByRecordIdAsync(connection, null, id);
+            if (string.IsNullOrEmpty(user))
+                return false;
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM bookmarks WHERE user = @user;";
+            command.Parameters.AddWithValue("@user", user);
+            bool deleted = await command.ExecuteNonQueryAsync() > 0;
+            if (deleted)
+                Serilog.Log.Information("DatabaseEditor deleted Sync user {User}", user);
+            return deleted;
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    static async Task<string> GetSyncUserByRecordIdAsync(SqliteConnection connection, SqliteTransaction transaction, long id)
+    {
+        await using var command = connection.CreateCommand();
+        if (transaction != null)
+            command.Transaction = transaction;
+        command.CommandText = "SELECT user FROM bookmarks WHERE Id = @id LIMIT 1;";
+        command.Parameters.AddWithValue("@id", id);
+        object value = await command.ExecuteScalarAsync();
+        return value == null || value == DBNull.Value ? null : Convert.ToString(value);
+    }
+
+    static async Task<(string data, long updatedAt)> BuildSyncLegacyDataAsync(SqliteConnection connection, SqliteTransaction transaction, string user)
+    {
+        var root = new JsonObject();
+        var categoryRows = new Dictionary<string, List<(string id, long at)>>(StringComparer.Ordinal);
+        foreach (string category in SyncCategories)
+            categoryRows[category] = new List<(string, long)>();
+
+        var cards = new List<(JsonObject card, long at)>();
+        long updatedAt = 0;
+
+        await using var command = connection.CreateCommand();
+        if (transaction != null)
+            command.Transaction = transaction;
+        command.CommandText = "SELECT card_id, card, categories, updated_at FROM bookmarks WHERE user = @user ORDER BY updated_at DESC, Id DESC;";
+        command.Parameters.AddWithValue("@user", user);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            string cardId = ReadString(reader, 0);
+            if (string.IsNullOrEmpty(cardId))
+                continue;
+
+            long rowUpdated = reader.IsDBNull(3) ? 0 : reader.GetInt64(3);
+            if (rowUpdated > updatedAt)
+                updatedAt = rowUpdated;
+
+            JsonObject owned = ParseRoot(ReadString(reader, 2));
+            if (owned == null || owned.Count == 0)
+                continue;
+
+            long newest = 0;
+            foreach (string category in SyncCategories)
+            {
+                JsonNode value = owned[category];
+                if (value == null)
+                    continue;
+
+                long at = 0;
+                long.TryParse(NodeText(value), NumberStyles.Integer, CultureInfo.InvariantCulture, out at);
+                if (at > newest)
+                    newest = at;
+                categoryRows[category].Add((cardId, at));
+            }
+
+            JsonObject card = ParseRoot(ReadString(reader, 1));
+            if (card != null)
+            {
+                if (card["id"] == null)
+                    card["id"] = CreateCardIdNode(cardId);
+                cards.Add((card, newest));
+            }
+        }
+
+        cards.Sort((left, right) => right.at.CompareTo(left.at));
+        var cardArray = new JsonArray();
+        foreach (var entry in cards)
+            cardArray.Add(entry.card);
+        root["card"] = cardArray;
+
+        foreach (string category in SyncCategories)
+        {
+            List<(string id, long at)> list = categoryRows[category];
+            list.Sort((left, right) =>
+            {
+                int byTime = right.at.CompareTo(left.at);
+                return byTime != 0 ? byTime : string.CompareOrdinal(left.id, right.id);
+            });
+
+            var array = new JsonArray();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in list)
+            {
+                if (seen.Add(entry.id))
+                    array.Add(CreateCardIdNode(entry.id));
+            }
+            root[category] = array;
+        }
+
+        return (root.ToJsonString(new JsonSerializerOptions { WriteIndented = false }), updatedAt);
+    }
+
+    static async Task SaveSyncLegacyDataAsync(SqliteConnection connection, SqliteTransaction transaction, string user, JsonObject root)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long last;
+        await using (var cursor = connection.CreateCommand())
+        {
+            cursor.Transaction = transaction;
+            cursor.CommandText = "SELECT COALESCE(MAX(updated_at), 0) FROM bookmarks WHERE user = @user;";
+            cursor.Parameters.AddWithValue("@user", user);
+            last = Convert.ToInt64(await cursor.ExecuteScalarAsync());
+        }
+
+        long stamp = now > last ? now : last + 1;
+
+        var existing = new Dictionary<string, SyncStoredRow>(StringComparer.Ordinal);
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT Id, card_id, card, categories FROM bookmarks WHERE user = @user;";
+            select.Parameters.AddWithValue("@user", user);
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                string cardId = ReadString(reader, 1);
+                if (string.IsNullOrEmpty(cardId))
+                    continue;
+
+                existing[cardId] = new SyncStoredRow
+                {
+                    id = reader.GetInt64(0),
+                    cardId = cardId,
+                    card = ReadString(reader, 2),
+                    categories = ReadString(reader, 3) ?? "{}"
+                };
+            }
+        }
+
+        var cards = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (root["card"] is JsonArray cardArray)
+        {
+            foreach (JsonNode node in cardArray)
+            {
+                if (node is not JsonObject card)
+                    continue;
+                string cardId = NodeText(card["id"]);
+                if (!string.IsNullOrEmpty(cardId))
+                    cards[cardId] = card.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+            }
+        }
+
+        var front = new Dictionary<string, long>(StringComparer.Ordinal);
+        var stored = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (var pair in existing)
+        {
+            JsonObject owned = ParseRoot(pair.Value.categories) ?? new JsonObject();
+            stored[pair.Key] = owned;
+
+            foreach (string category in SyncCategories)
+            {
+                JsonNode value = owned[category];
+                if (value == null)
+                    continue;
+
+                long at = 0;
+                long.TryParse(NodeText(value), NumberStyles.Integer, CultureInfo.InvariantCulture, out at);
+                if (!front.TryGetValue(category, out long top) || at > top)
+                    front[category] = at;
+            }
+        }
+
+        var wanted = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        foreach (string category in SyncCategories)
+        {
+            if (root[category] is not JsonArray array)
+                continue;
+
+            for (int index = 0; index < array.Count; index++)
+            {
+                string cardId = NodeText(array[index]);
+                if (string.IsNullOrEmpty(cardId))
+                    continue;
+
+                if (!wanted.TryGetValue(cardId, out JsonObject owned))
+                    wanted[cardId] = owned = new JsonObject();
+
+                long kept = 0;
+                if (stored.TryGetValue(cardId, out JsonObject existingOwned))
+                {
+                    JsonNode value = existingOwned[category];
+                    long at = 0;
+                    if (value != null)
+                        long.TryParse(NodeText(value), NumberStyles.Integer, CultureInfo.InvariantCulture, out at);
+
+                    if (at > 0 && (index > 0 || !front.TryGetValue(category, out long top) || at >= top))
+                        kept = at;
+                }
+
+                owned[category] = kept > 0 ? kept : stamp + (array.Count - index);
+            }
+        }
+
+        foreach (var pair in wanted)
+        {
+            string cardId = pair.Key;
+            string categories = pair.Value.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+            cards.TryGetValue(cardId, out string card);
+
+            if (existing.TryGetValue(cardId, out SyncStoredRow row))
+            {
+                string nextCard = card ?? row.card;
+                if (string.Equals(row.categories, categories, StringComparison.Ordinal) &&
+                    string.Equals(row.card, nextCard, StringComparison.Ordinal))
+                    continue;
+
+                await using var update = connection.CreateCommand();
+                update.Transaction = transaction;
+                update.CommandText = "UPDATE bookmarks SET card = @card, categories = @categories, changed_at = @stamp, updated_at = @stamp WHERE Id = @id;";
+                update.Parameters.AddWithValue("@card", (object)nextCard ?? DBNull.Value);
+                update.Parameters.AddWithValue("@categories", categories);
+                update.Parameters.AddWithValue("@stamp", stamp++);
+                update.Parameters.AddWithValue("@id", row.id);
+                await update.ExecuteNonQueryAsync();
+            }
+            else
+            {
+                await using var insert = connection.CreateCommand();
+                insert.Transaction = transaction;
+                insert.CommandText = "INSERT INTO bookmarks (user, card_id, card, categories, changed_at, updated_at) VALUES (@user, @cardId, @card, @categories, @stamp, @stamp);";
+                insert.Parameters.AddWithValue("@user", user);
+                insert.Parameters.AddWithValue("@cardId", cardId);
+                insert.Parameters.AddWithValue("@card", (object)card ?? DBNull.Value);
+                insert.Parameters.AddWithValue("@categories", categories);
+                insert.Parameters.AddWithValue("@stamp", stamp++);
+                await insert.ExecuteNonQueryAsync();
+            }
+        }
+
+        foreach (var pair in existing)
+        {
+            if (wanted.ContainsKey(pair.Key) || string.Equals(pair.Value.categories, "{}", StringComparison.Ordinal))
+                continue;
+
+            await using var tombstone = connection.CreateCommand();
+            tombstone.Transaction = transaction;
+            tombstone.CommandText = "UPDATE bookmarks SET categories = '{}', changed_at = @stamp, updated_at = @stamp WHERE Id = @id;";
+            tombstone.Parameters.AddWithValue("@stamp", stamp++);
+            tombstone.Parameters.AddWithValue("@id", pair.Value.id);
+            await tombstone.ExecuteNonQueryAsync();
+        }
+    }
+
+    static string FormatUnixMilliseconds(long value)
+    {
+        if (value <= 0)
+            return null;
+        try
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime.ToString("O");
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
     static async Task EnrichTimeCodeRecordsAsync(List<DatabaseRecord> records)
     {
         if (!File.Exists(Sync.path))
@@ -957,25 +1787,17 @@ static class DatabaseStore
             placeholders.Add(parameter);
             command.Parameters.AddWithValue(parameter, user);
         }
-        command.CommandText = $"SELECT user, data FROM bookmarks WHERE user IN ({string.Join(",", placeholders)});";
+        command.CommandText = $"SELECT user, card_id, card FROM bookmarks WHERE user IN ({string.Join(",", placeholders)}) AND categories <> '{{}}' AND card IS NOT NULL;";
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
             string user = ReadString(reader, 0);
-            JsonObject root = ParseRoot(ReadString(reader, 1));
-            if (root?["card"] is not JsonArray cards)
+            string cardId = ReadString(reader, 1);
+            JsonObject card = ParseRoot(ReadString(reader, 2));
+            if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(cardId) || card == null)
                 continue;
-
-            foreach (JsonNode node in cards)
-            {
-                if (node is not JsonObject card)
-                    continue;
-                string cardId = NodeText(card["id"]);
-                if (string.IsNullOrEmpty(cardId))
-                    continue;
-                metadata[MediaKey(user, cardId)] = ReadMediaMetadata(card);
-            }
+            metadata[MediaKey(user, cardId)] = ReadMediaMetadata(card);
         }
 
         foreach (DatabaseRecord record in records)
@@ -1089,31 +1911,20 @@ static class DatabaseStore
         {
             await using var connection = await OpenAsync(Sync);
             using var transaction = connection.BeginTransaction();
-            string data;
-            await using (var select = connection.CreateCommand())
-            {
-                select.Transaction = transaction;
-                select.CommandText = "SELECT data FROM bookmarks WHERE Id = @id LIMIT 1;";
-                select.Parameters.AddWithValue("@id", recordId);
-                data = Convert.ToString(await select.ExecuteScalarAsync());
-            }
-            if (string.IsNullOrEmpty(data))
+
+            string user = await GetSyncUserByRecordIdAsync(connection, transaction, recordId);
+            if (string.IsNullOrEmpty(user))
                 throw new DatabaseEditorValidationException("record_not_found");
 
-            JsonObject root = ParseRoot(data) ?? throw new DatabaseEditorValidationException("invalid_json");
+            var state = await BuildSyncLegacyDataAsync(connection, transaction, user);
+            JsonObject root = ParseRoot(state.data) ?? throw new DatabaseEditorValidationException("invalid_json");
             update(root);
+
             string updatedData = root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
             if (Encoding.UTF8.GetByteCount(updatedData) > MaxDataBytes)
                 throw new DatabaseEditorValidationException("data_too_large");
 
-            await using var save = connection.CreateCommand();
-            save.Transaction = transaction;
-            save.CommandText = "UPDATE bookmarks SET data = @data, updated = @updated WHERE Id = @id;";
-            save.Parameters.AddWithValue("@data", updatedData);
-            save.Parameters.AddWithValue("@updated", DateTime.UtcNow.ToString("O"));
-            save.Parameters.AddWithValue("@id", recordId);
-            if (await save.ExecuteNonQueryAsync() == 0)
-                throw new DatabaseEditorValidationException("record_not_found");
+            await SaveSyncLegacyDataAsync(connection, transaction, user, root);
             transaction.Commit();
         }
         finally
@@ -1400,7 +2211,8 @@ static class DatabaseStore
 
         await using var connection = await OpenAsync(spec);
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT COUNT(*), {spec.updatedText($"MAX({spec.updatedColumn})")} FROM {spec.table};";
+        string countExpression = spec.sync ? "COUNT(DISTINCT user)" : "COUNT(*)";
+        command.CommandText = $"SELECT {countExpression}, {spec.updatedText($"MAX({spec.updatedColumn})")} FROM {spec.table};";
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow);
         if (await reader.ReadAsync())
         {

@@ -129,6 +129,62 @@
         function cursor() { return Lampa.Storage.get('lampac_bookmark_version', '0'); }
         function setCursor(value) { Lampa.Storage.set('lampac_bookmark_version', String(value || 0)); }
 
+        var accountContextKey = 'lampac_bookmark_account_context';
+        var accountPullTimer = null;
+
+        function accountContext() {
+          var account = Lampa.Storage.get('account', '{}') || {};
+          var accountProfile = account && account.profile ? (account.profile.id || '') : '';
+
+          return [
+            Lampa.Storage.get('account_use', false) ? '1' : '0',
+            String(Lampa.Storage.get('account_email', '') || '').toLowerCase(),
+            String(accountProfile),
+            String(Lampa.Storage.get('lampac_profile_id', '') || '')
+          ].join('|');
+        }
+
+        function rememberAccountContext() {
+          Lampa.Storage.set(accountContextKey, accountContext(), true);
+        }
+
+        function resetCursorAfterReloadIfAccountChanged() {
+          var current = accountContext();
+          var previous = Lampa.Storage.get(accountContextKey, '');
+
+          // Первый запуск новой версии тоже делает один полный dump: старый глобальный cursor
+          // мог быть сохранён до исправления и не доказывает наличие local favorite.
+          if (!previous || previous !== current) {
+            setCursor(0);
+            Lampa.Storage.set(accountContextKey, current, true);
+            return true;
+          }
+
+          return false;
+        }
+
+        function reloadAfterAccountChange() {
+          // Часть account-событий Lampa публикует обычным Storage change. Logout — исключение:
+          // account.js пишет их с nolisten=true и затем делает location.reload(), поэтому его
+          // ловит resetCursorAfterReloadIfAccountChanged() уже на следующем запуске плагина.
+          setCursor(0);
+
+          if (accountPullTimer)
+            clearTimeout(accountPullTimer);
+
+          accountPullTimer = setTimeout(function() {
+            accountPullTimer = null;
+            rememberAccountContext();
+
+            if (syncInProgress) {
+              reloadAfterAccountChange();
+              return;
+            }
+
+            pullFromServer();
+          }, 750);
+        }
+
         /**
          * Сверка идёт дельтами: сервер держит строку на карточку и курсор, и присылает только то,
          * что менялось. Полный список тянем лишь когда курсора ещё нет.
@@ -299,7 +355,28 @@
         }
 
         bindEvents();
+
+        // Logout в Lampa очищает account-поля с nolisten=true и сразу перезагружает страницу,
+        // поэтому Storage listener его не видит. Сравнение контекста на старте переживает reload
+        // и заставляет новую сессию начать с полного /dump вместо старого /changelog cursor.
+        resetCursorAfterReloadIfAccountChanged();
         pullFromServer();
+
+        // Login и другие account-изменения, которые Lampa всё-таки публикует, обрабатываем сразу.
+        if (Lampa.Storage.listener && Lampa.Storage.listener.follow) {
+          Lampa.Storage.listener.follow('change', function(e) {
+            if (!e) return;
+
+            if (
+              e.name == 'account' ||
+              e.name == 'account_use' ||
+              e.name == 'account_email' ||
+              e.name == 'account_bookmarks'
+            ) {
+              reloadAfterAccountChange();
+            }
+          });
+        }
 		
         document.addEventListener('lwsEvent', function(evnt) {
           if (evnt.detail.name == 'bookmark'){
