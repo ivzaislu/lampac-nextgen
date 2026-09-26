@@ -976,8 +976,9 @@ static class DatabaseStore
         foreach (MergeTimeCodeRow row in source)
         {
             var targetIds = new List<long>();
-            long newestTargetUpdatedAt = long.MinValue;
-            long newestTargetWatchedAt = long.MinValue;
+            bool hasNewestTarget = false;
+            long newestTargetUpdatedAt = 0;
+            long newestTargetWatchedAt = 0;
 
             await using (var target = connection.CreateCommand())
             {
@@ -1000,15 +1001,16 @@ static class DatabaseStore
                     targetIds.Add(reader.GetInt64(0));
                     long updatedAt = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
                     long watchedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
-                    if (updatedAt > newestTargetUpdatedAt || (updatedAt == newestTargetUpdatedAt && watchedAt > newestTargetWatchedAt))
+                    if (!hasNewestTarget || IsSourceNewer(watchedAt, updatedAt, newestTargetWatchedAt, newestTargetUpdatedAt))
                     {
+                        hasNewestTarget = true;
                         newestTargetUpdatedAt = updatedAt;
                         newestTargetWatchedAt = watchedAt;
                     }
                 }
             }
 
-            bool sourceWins = targetIds.Count == 0 || IsSourceNewer(row.watchedAt, row.updatedAt, newestTargetWatchedAt, newestTargetUpdatedAt);
+            bool sourceWins = !hasNewestTarget || IsSourceNewer(row.watchedAt, row.updatedAt, newestTargetWatchedAt, newestTargetUpdatedAt);
 
             if (!sourceWins)
             {
