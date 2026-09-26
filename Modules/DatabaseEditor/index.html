@@ -119,7 +119,8 @@
       <div class="modal-body"><div class="form-grid">
         <div class="field full"><label for="mergeOldUserField">Источник</label><select class="select" id="mergeOldUserField"><option value="">Загрузка пользователей…</option></select></div>
         <div class="field full"><label for="mergeNewUserField">Целевой пользователь</label><input id="mergeNewUserField" list="mergeUserTargets" maxlength="512" autocomplete="off"><datalist id="mergeUserTargets"></datalist></div>
-        <p class="modal-hint field full">Данные источника будут объединены с целевым пользователем сразу в Sync и TimeCode. При совпадении ключей сохраняется запись с более свежей клиентской меткой (<code>changed_at</code> для Sync, <code>watched_at</code> для TimeCode); <code>updated_at</code> используется как резервный критерий. Перенесённые строки получают новый курсор, чтобы клиенты увидели миграцию. Перед изменениями автоматически создаются резервные копии обеих баз.</p>
+        <div class="field full"><label for="mergeConflictPolicyField">При совпадении записей</label><select class="select" id="mergeConflictPolicyField"><option value="newest">Оставить более свежую</option><option value="source">Всегда брать источник</option><option value="target">Всегда оставлять целевую</option></select></div>
+        <p class="modal-hint field full">Данные источника будут объединены с целевым пользователем сразу в Sync и TimeCode. Режим «более свежую» сравнивает <code>changed_at</code> для Sync и <code>watched_at</code> для TimeCode; <code>updated_at</code> используется как резервный критерий. Если целевой пользователь содержит повреждённые данные, выберите «Всегда брать источник». Перед изменениями автоматически создаются резервные копии обеих баз.</p>
       </div></div>
       <div class="modal-foot"><button class="btn" data-close="mergeUserModal">Отмена</button><button class="btn primary" id="confirmMergeUserBtn">Мигрировать и объединить</button></div>
     </div>
