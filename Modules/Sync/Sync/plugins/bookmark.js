@@ -129,6 +129,29 @@
         function cursor() { return Lampa.Storage.get('lampac_bookmark_version', '0'); }
         function setCursor(value) { Lampa.Storage.set('lampac_bookmark_version', String(value || 0)); }
 
+        var accountPullTimer = null;
+
+        function reloadAfterAccountChange() {
+          // Lampa при login/logout может очистить или заменить локальный favorite.
+          // Даже при том же user_uid старый delta-cursor уже недостаточен:
+          // changelog может быть пустым, хотя локально данных больше нет.
+          setCursor(0);
+
+          if (accountPullTimer)
+            clearTimeout(accountPullTimer);
+
+          accountPullTimer = setTimeout(function() {
+            accountPullTimer = null;
+
+            if (syncInProgress) {
+              reloadAfterAccountChange();
+              return;
+            }
+
+            pullFromServer();
+          }, 750);
+        }
+
         /**
          * Сверка идёт дельтами: сервер держит строку на карточку и курсор, и присылает только то,
          * что менялось. Полный список тянем лишь когда курсора ещё нет.
@@ -300,6 +323,18 @@
 
         bindEvents();
         pullFromServer();
+
+        // Lampa при входе/выходе пересобирает локальные закладки. Серверная область при этом
+        // может остаться той же, но сохранённый delta-cursor уже не доказывает, что local favorite
+        // заполнен. После завершения account-событий принудительно делаем полный /dump.
+        if (Lampa.Storage.listener && Lampa.Storage.listener.follow) {
+          Lampa.Storage.listener.follow('change', function(e) {
+            if (!e) return;
+
+            if (e.name == 'account' || e.name == 'account_bookmarks')
+              reloadAfterAccountChange();
+          });
+        }
 		
         document.addEventListener('lwsEvent', function(evnt) {
           if (evnt.detail.name == 'bookmark'){
