@@ -57,6 +57,7 @@ public sealed class MergeUserRequest
 {
     public string oldUser { get; set; }
     public string newUser { get; set; }
+    public string conflictPolicy { get; set; } = "newest";
 }
 
 public sealed class MergeUserDatabaseResult
@@ -71,6 +72,7 @@ public sealed class MergeUserResult
 {
     public string oldUser { get; set; }
     public string newUser { get; set; }
+    public string conflictPolicy { get; set; }
     public MergeUserDatabaseResult sync { get; set; }
     public MergeUserDatabaseResult timecode { get; set; }
     public List<DatabaseBackupResult> backups { get; set; }
@@ -681,6 +683,7 @@ static class DatabaseStore
 
         string oldUser = ValidateKey(request.oldUser, "old_user_required");
         string newUser = ValidateKey(request.newUser, "new_user_required");
+        string conflictPolicy = NormalizeMergeConflictPolicy(request.conflictPolicy);
         if (string.Equals(oldUser, newUser, StringComparison.Ordinal))
             throw new DatabaseEditorValidationException("user_name_unchanged");
         if (!File.Exists(Sync.path) || !File.Exists(TimeCode.path))
@@ -807,14 +810,14 @@ static class DatabaseStore
             long timecodeStamp = await NextMigrationStampAsync(connection, transaction, "main.timecodes", oldUser, newUser);
             long syncStamp = await NextMigrationStampAsync(connection, transaction, "syncdb.bookmarks", oldUser, newUser);
 
-            MergeUserDatabaseResult timecode = await MergeTimeCodeUserAsync(connection, transaction, oldUser, newUser, timecodeStamp);
-            MergeUserDatabaseResult sync = await MergeSyncUserAsync(connection, transaction, oldUser, newUser, syncStamp);
+            MergeUserDatabaseResult timecode = await MergeTimeCodeUserAsync(connection, transaction, oldUser, newUser, timecodeStamp, conflictPolicy);
+            MergeUserDatabaseResult sync = await MergeSyncUserAsync(connection, transaction, oldUser, newUser, syncStamp, conflictPolicy);
 
             transaction.Commit();
 
             Serilog.Log.Warning(
-                "DatabaseEditor merged user {OldUser} into {NewUser}: Sync moved {SyncMoved}/{SyncSource}, replaced {SyncReplaced}, kept {SyncKept}; TimeCode moved {TimecodeMoved}/{TimecodeSource}, replaced {TimecodeReplaced}, kept {TimecodeKept}",
-                oldUser, newUser,
+                "DatabaseEditor merged user {OldUser} into {NewUser} using {ConflictPolicy}: Sync moved {SyncMoved}/{SyncSource}, replaced {SyncReplaced}, kept {SyncKept}; TimeCode moved {TimecodeMoved}/{TimecodeSource}, replaced {TimecodeReplaced}, kept {TimecodeKept}",
+                oldUser, newUser, conflictPolicy,
                 sync.movedRecords, sync.sourceRecords, sync.replacedTargetRecords, sync.keptTargetRecords,
                 timecode.movedRecords, timecode.sourceRecords, timecode.replacedTargetRecords, timecode.keptTargetRecords);
 
@@ -822,6 +825,7 @@ static class DatabaseStore
             {
                 oldUser = oldUser,
                 newUser = newUser,
+                conflictPolicy = conflictPolicy,
                 sync = sync,
                 timecode = timecode,
                 backups = backups
@@ -878,7 +882,7 @@ static class DatabaseStore
         return Math.Max(now, maximum + 1);
     }
 
-    static async Task<MergeUserDatabaseResult> MergeSyncUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp)
+    static async Task<MergeUserDatabaseResult> MergeSyncUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp, string conflictPolicy)
     {
         var source = new List<MergeSyncRow>();
         await using (var select = connection.CreateCommand())
@@ -921,7 +925,12 @@ static class DatabaseStore
                 }
             }
 
-            bool sourceWins = targetId == 0 || IsSourceNewer(row.changedAt, row.updatedAt, targetChangedAt, targetUpdatedAt);
+            bool sourceWins = targetId == 0 || MergeSourceWins(
+                conflictPolicy,
+                row.changedAt,
+                row.updatedAt,
+                targetChangedAt,
+                targetUpdatedAt);
 
             if (!sourceWins)
             {
@@ -949,7 +958,7 @@ static class DatabaseStore
         return result;
     }
 
-    static async Task<MergeUserDatabaseResult> MergeTimeCodeUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp)
+    static async Task<MergeUserDatabaseResult> MergeTimeCodeUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp, string conflictPolicy)
     {
         var source = new List<MergeTimeCodeRow>();
         await using (var select = connection.CreateCommand())
@@ -1010,7 +1019,12 @@ static class DatabaseStore
                 }
             }
 
-            bool sourceWins = !hasNewestTarget || IsSourceNewer(row.watchedAt, row.updatedAt, newestTargetWatchedAt, newestTargetUpdatedAt);
+            bool sourceWins = !hasNewestTarget || MergeSourceWins(
+                conflictPolicy,
+                row.watchedAt,
+                row.updatedAt,
+                newestTargetWatchedAt,
+                newestTargetUpdatedAt);
 
             if (!sourceWins)
             {
@@ -1034,6 +1048,37 @@ static class DatabaseStore
         }
 
         return result;
+    }
+
+    static string NormalizeMergeConflictPolicy(string policy)
+    {
+        string normalized = string.IsNullOrWhiteSpace(policy)
+            ? "newest"
+            : policy.Trim().ToLowerInvariant();
+
+        return normalized switch
+        {
+            "newest" => "newest",
+            "source" => "source",
+            "target" => "target",
+            _ => throw new DatabaseEditorValidationException("invalid_merge_conflict_policy")
+        };
+    }
+
+    static bool MergeSourceWins(
+        string conflictPolicy,
+        long sourceChangedAt,
+        long sourceUpdatedAt,
+        long targetChangedAt,
+        long targetUpdatedAt)
+    {
+        if (string.Equals(conflictPolicy, "source", StringComparison.Ordinal))
+            return true;
+
+        if (string.Equals(conflictPolicy, "target", StringComparison.Ordinal))
+            return false;
+
+        return IsSourceNewer(sourceChangedAt, sourceUpdatedAt, targetChangedAt, targetUpdatedAt);
     }
 
     static bool IsSourceNewer(long sourceChangedAt, long sourceUpdatedAt, long targetChangedAt, long targetUpdatedAt)
