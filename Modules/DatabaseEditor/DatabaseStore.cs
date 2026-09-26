@@ -53,6 +53,29 @@ public sealed class RenameUserResult
     public int timecodeRecords { get; set; }
 }
 
+public sealed class MergeUserRequest
+{
+    public string oldUser { get; set; }
+    public string newUser { get; set; }
+}
+
+public sealed class MergeUserDatabaseResult
+{
+    public int sourceRecords { get; set; }
+    public int movedRecords { get; set; }
+    public int replacedTargetRecords { get; set; }
+    public int keptTargetRecords { get; set; }
+}
+
+public sealed class MergeUserResult
+{
+    public string oldUser { get; set; }
+    public string newUser { get; set; }
+    public MergeUserDatabaseResult sync { get; set; }
+    public MergeUserDatabaseResult timecode { get; set; }
+    public List<DatabaseBackupResult> backups { get; set; }
+}
+
 public sealed class DeleteUserRequest
 {
     public string user { get; set; }
@@ -734,6 +757,294 @@ static class DatabaseStore
         command.Parameters.AddWithValue("@oldUser", oldUser);
         command.Parameters.AddWithValue("@newUser", newUser);
         return await command.ExecuteNonQueryAsync();
+    }
+
+    public static async Task<MergeUserResult> MergeUserAsync(MergeUserRequest request)
+    {
+        if (request == null)
+            throw new DatabaseEditorValidationException("request_required");
+
+        string oldUser = ValidateKey(request.oldUser, "old_user_required");
+        string newUser = ValidateKey(request.newUser, "new_user_required");
+        if (string.Equals(oldUser, newUser, StringComparison.OrdinalIgnoreCase))
+            throw new DatabaseEditorValidationException("user_name_unchanged");
+        if (!File.Exists(Sync.path) || !File.Exists(TimeCode.path))
+            throw new DatabaseEditorValidationException("database_not_found");
+
+        var syncSemaphore = new SemaphorManager(Sync.semaphore, TimeSpan.FromSeconds(20));
+        var timecodeSemaphore = new SemaphorManager(TimeCode.semaphore, TimeSpan.FromSeconds(20));
+        bool syncAcquired = await syncSemaphore.WaitAsync();
+        if (!syncAcquired)
+            throw new DatabaseEditorBusyException("database_busy");
+
+        bool timecodeAcquired = false;
+        try
+        {
+            timecodeAcquired = await timecodeSemaphore.WaitAsync();
+            if (!timecodeAcquired)
+                throw new DatabaseEditorBusyException("database_busy");
+
+            await using var connection = await OpenAsync(TimeCode, pooling: false);
+            await using (var attach = connection.CreateCommand())
+            {
+                attach.CommandText = "ATTACH DATABASE @syncPath AS syncdb;";
+                attach.Parameters.AddWithValue("@syncPath", Path.GetFullPath(Sync.path));
+                await attach.ExecuteNonQueryAsync();
+            }
+
+            int timecodeSourceRecords = await CountUserRowsAsync(connection, null, "main.timecodes", oldUser);
+            int syncSourceRecords = await CountUserRowsAsync(connection, null, "syncdb.bookmarks", oldUser);
+            if (timecodeSourceRecords == 0 && syncSourceRecords == 0)
+                throw new DatabaseEditorValidationException("user_not_found");
+
+            var backups = new List<DatabaseBackupResult>(2)
+            {
+                new() { database = TimeCode.key, path = await CreateBackupLockedAsync(TimeCode, "before-user-merge") },
+                new() { database = Sync.key, path = await CreateBackupLockedAsync(Sync, "before-user-merge") }
+            };
+
+            using var transaction = connection.BeginTransaction();
+            long timecodeStamp = await NextMigrationStampAsync(connection, transaction, "main.timecodes", oldUser, newUser);
+            long syncStamp = await NextMigrationStampAsync(connection, transaction, "syncdb.bookmarks", oldUser, newUser);
+
+            MergeUserDatabaseResult timecode = await MergeTimeCodeUserAsync(connection, transaction, oldUser, newUser, timecodeStamp);
+            MergeUserDatabaseResult sync = await MergeSyncUserAsync(connection, transaction, oldUser, newUser, syncStamp);
+
+            transaction.Commit();
+
+            Serilog.Log.Warning(
+                "DatabaseEditor merged user {OldUser} into {NewUser}: Sync moved {SyncMoved}/{SyncSource}, replaced {SyncReplaced}, kept {SyncKept}; TimeCode moved {TimecodeMoved}/{TimecodeSource}, replaced {TimecodeReplaced}, kept {TimecodeKept}",
+                oldUser, newUser,
+                sync.movedRecords, sync.sourceRecords, sync.replacedTargetRecords, sync.keptTargetRecords,
+                timecode.movedRecords, timecode.sourceRecords, timecode.replacedTargetRecords, timecode.keptTargetRecords);
+
+            return new MergeUserResult
+            {
+                oldUser = oldUser,
+                newUser = newUser,
+                sync = sync,
+                timecode = timecode,
+                backups = backups
+            };
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            throw new DatabaseEditorConflictException("merge_user_conflict");
+        }
+        finally
+        {
+            if (timecodeAcquired)
+                timecodeSemaphore.Release();
+            syncSemaphore.Release();
+        }
+    }
+
+    sealed class MergeSyncRow
+    {
+        public long id;
+        public string cardId;
+        public long changedAt;
+        public long updatedAt;
+    }
+
+    sealed class MergeTimeCodeRow
+    {
+        public long id;
+        public string identity;
+        public string card;
+        public string item;
+        public long watchedAt;
+        public long updatedAt;
+    }
+
+    static async Task<int> CountUserRowsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, string user)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COUNT(*) FROM {table} WHERE user = @user COLLATE NOCASE;";
+        command.Parameters.AddWithValue("@user", user);
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    static async Task<long> NextMigrationStampAsync(SqliteConnection connection, SqliteTransaction transaction, string table, string oldUser, string newUser)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"SELECT COALESCE(MAX(updated_at), 0) FROM {table} WHERE user = @oldUser COLLATE NOCASE OR user = @newUser COLLATE NOCASE;";
+        command.Parameters.AddWithValue("@oldUser", oldUser);
+        command.Parameters.AddWithValue("@newUser", newUser);
+        long maximum = Convert.ToInt64(await command.ExecuteScalarAsync());
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return Math.Max(now, maximum + 1);
+    }
+
+    static async Task<MergeUserDatabaseResult> MergeSyncUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp)
+    {
+        var source = new List<MergeSyncRow>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT Id, card_id, changed_at, updated_at FROM syncdb.bookmarks WHERE user = @oldUser COLLATE NOCASE ORDER BY updated_at, Id;";
+            select.Parameters.AddWithValue("@oldUser", oldUser);
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                source.Add(new MergeSyncRow
+                {
+                    id = reader.GetInt64(0),
+                    cardId = ReadString(reader, 1),
+                    changedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2),
+                    updatedAt = reader.IsDBNull(3) ? 0 : reader.GetInt64(3)
+                });
+            }
+        }
+
+        var result = new MergeUserDatabaseResult { sourceRecords = source.Count };
+        foreach (MergeSyncRow row in source)
+        {
+            long targetId = 0;
+            long targetChangedAt = 0;
+            long targetUpdatedAt = 0;
+
+            await using (var target = connection.CreateCommand())
+            {
+                target.Transaction = transaction;
+                target.CommandText = "SELECT Id, changed_at, updated_at FROM syncdb.bookmarks WHERE user = @newUser COLLATE NOCASE AND card_id = @cardId LIMIT 1;";
+                target.Parameters.AddWithValue("@newUser", newUser);
+                target.Parameters.AddWithValue("@cardId", row.cardId);
+                await using var reader = await target.ExecuteReaderAsync(CommandBehavior.SingleRow);
+                if (await reader.ReadAsync())
+                {
+                    targetId = reader.GetInt64(0);
+                    targetChangedAt = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+                    targetUpdatedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+                }
+            }
+
+            bool sourceWins = targetId == 0 ||
+                row.updatedAt > targetUpdatedAt ||
+                (row.updatedAt == targetUpdatedAt && row.changedAt > targetChangedAt);
+
+            if (!sourceWins)
+            {
+                await DeleteRowByIdAsync(connection, transaction, "syncdb.bookmarks", row.id);
+                result.keptTargetRecords++;
+                continue;
+            }
+
+            if (targetId != 0)
+            {
+                await DeleteRowByIdAsync(connection, transaction, "syncdb.bookmarks", targetId);
+                result.replacedTargetRecords++;
+            }
+
+            await using var move = connection.CreateCommand();
+            move.Transaction = transaction;
+            move.CommandText = "UPDATE syncdb.bookmarks SET user = @newUser, updated_at = @updatedAt WHERE Id = @id;";
+            move.Parameters.AddWithValue("@newUser", newUser);
+            move.Parameters.AddWithValue("@updatedAt", stamp++);
+            move.Parameters.AddWithValue("@id", row.id);
+            await move.ExecuteNonQueryAsync();
+            result.movedRecords++;
+        }
+
+        return result;
+    }
+
+    static async Task<MergeUserDatabaseResult> MergeTimeCodeUserAsync(SqliteConnection connection, SqliteTransaction transaction, string oldUser, string newUser, long stamp)
+    {
+        var source = new List<MergeTimeCodeRow>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT Id, identity, card, item, watched_at, updated_at FROM main.timecodes WHERE user = @oldUser COLLATE NOCASE ORDER BY updated_at, Id;";
+            select.Parameters.AddWithValue("@oldUser", oldUser);
+            await using var reader = await select.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                source.Add(new MergeTimeCodeRow
+                {
+                    id = reader.GetInt64(0),
+                    identity = ReadString(reader, 1),
+                    card = ReadString(reader, 2),
+                    item = ReadString(reader, 3),
+                    watchedAt = reader.IsDBNull(4) ? 0 : reader.GetInt64(4),
+                    updatedAt = reader.IsDBNull(5) ? 0 : reader.GetInt64(5)
+                });
+            }
+        }
+
+        var result = new MergeUserDatabaseResult { sourceRecords = source.Count };
+        foreach (MergeTimeCodeRow row in source)
+        {
+            var targetIds = new List<long>();
+            long newestTargetUpdatedAt = long.MinValue;
+            long newestTargetWatchedAt = long.MinValue;
+
+            await using (var target = connection.CreateCommand())
+            {
+                target.Transaction = transaction;
+                target.CommandText = """
+                    SELECT Id, updated_at, watched_at
+                    FROM main.timecodes
+                    WHERE user = @newUser COLLATE NOCASE
+                      AND ((@item IS NOT NULL AND card = @card AND item = @item)
+                           OR (@identity IS NOT NULL AND identity = @identity));
+                    """;
+                target.Parameters.AddWithValue("@newUser", newUser);
+                target.Parameters.AddWithValue("@card", row.card ?? string.Empty);
+                target.Parameters.AddWithValue("@item", (object)row.item ?? DBNull.Value);
+                target.Parameters.AddWithValue("@identity", (object)row.identity ?? DBNull.Value);
+
+                await using var reader = await target.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    targetIds.Add(reader.GetInt64(0));
+                    long updatedAt = reader.IsDBNull(1) ? 0 : reader.GetInt64(1);
+                    long watchedAt = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+                    if (updatedAt > newestTargetUpdatedAt || (updatedAt == newestTargetUpdatedAt && watchedAt > newestTargetWatchedAt))
+                    {
+                        newestTargetUpdatedAt = updatedAt;
+                        newestTargetWatchedAt = watchedAt;
+                    }
+                }
+            }
+
+            bool sourceWins = targetIds.Count == 0 ||
+                row.updatedAt > newestTargetUpdatedAt ||
+                (row.updatedAt == newestTargetUpdatedAt && row.watchedAt > newestTargetWatchedAt);
+
+            if (!sourceWins)
+            {
+                await DeleteRowByIdAsync(connection, transaction, "main.timecodes", row.id);
+                result.keptTargetRecords++;
+                continue;
+            }
+
+            foreach (long targetId in targetIds)
+                await DeleteRowByIdAsync(connection, transaction, "main.timecodes", targetId);
+            result.replacedTargetRecords += targetIds.Count;
+
+            await using var move = connection.CreateCommand();
+            move.Transaction = transaction;
+            move.CommandText = "UPDATE main.timecodes SET user = @newUser, updated_at = @updatedAt WHERE Id = @id;";
+            move.Parameters.AddWithValue("@newUser", newUser);
+            move.Parameters.AddWithValue("@updatedAt", stamp++);
+            move.Parameters.AddWithValue("@id", row.id);
+            await move.ExecuteNonQueryAsync();
+            result.movedRecords++;
+        }
+
+        return result;
+    }
+
+    static async Task DeleteRowByIdAsync(SqliteConnection connection, SqliteTransaction transaction, string table, long id)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"DELETE FROM {table} WHERE Id = @id;";
+        command.Parameters.AddWithValue("@id", id);
+        await command.ExecuteNonQueryAsync();
     }
 
     public static async Task<DeleteUserResult> DeleteUserAsync(DeleteUserRequest request)
