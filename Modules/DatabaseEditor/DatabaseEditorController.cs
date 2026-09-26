@@ -193,6 +193,24 @@ public class DatabaseEditorApiController : BaseController
     }
 
     [HttpPost]
+    [Route("/database-editor/api/merge-user")]
+    public async Task<ActionResult> MergeUser([FromBody] MergeUserRequest request)
+    {
+        if (!IsEditorRequest())
+            return BadRequest(new { success = false, error = "invalid_editor_request" });
+
+        try
+        {
+            var result = await DatabaseStore.MergeUserAsync(request);
+            return Json(new { success = true, result });
+        }
+        catch (Exception ex)
+        {
+            return KnownOrUnexpected(ex, "merge-user");
+        }
+    }
+
+    [HttpPost]
     [Route("/database-editor/api/delete-user")]
     public async Task<ActionResult> DeleteUser([FromBody] DeleteUserRequest request)
     {
