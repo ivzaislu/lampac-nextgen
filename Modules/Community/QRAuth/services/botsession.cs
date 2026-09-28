@@ -215,14 +215,43 @@ namespace QRAuth.Services
                 return;
             }
 
+            // The explicit "Войти через Telegram" button already proves intent: the user
+            // clicked the session-bound tg_<id> deep link and Telegram supplied the trusted
+            // From.Id. Requiring a second callback button here only leaves the Lampa screen
+            // waiting while the user is already inside Telegram. Confirm this same-device
+            // flow immediately. QR scans keep the explicit confirmation below because the
+            // person holding the phone may be authenticating a different screen/device.
+            if (!fromQr)
+            {
+                if (!QrAuthSessions.TryConfirm(sessionId, existing.Id))
+                {
+                    await bot.SendMessage(msg.Chat.Id,
+                        "Ссылка входа устарела. Вернитесь в Lampa и нажмите «Войти через Telegram» ещё раз.",
+                        cancellationToken: ct);
+                    return;
+                }
+
+                await bot.SendMessage(msg.Chat.Id,
+                    "✅  Вход подтверждён. Вернитесь в Lampa — вход выполнится автоматически.",
+                    replyMarkup: PasswordKeyboard,
+                    cancellationToken: ct);
+
+                var lines = new List<string>
+                {
+                    "🔓  <b>Вход через Telegram подтверждён</b>",
+                    $"👤  <b>{HtmlEsc(existing.Comment)}</b>",
+                    $"🆔  <code>{existing.TgId}</code>"
+                };
+                await NotifyAdminsAsync(bot, string.Join("\n", lines), ct);
+                return;
+            }
+
             var kb = new InlineKeyboardMarkup(new[]
             {
-                new[] { InlineKeyboardButton.WithCallbackData("✅  Подтвердить вход", (fromQr ? "qrauth:" : "tgauth:") + sessionId) }
+                new[] { InlineKeyboardButton.WithCallbackData("✅  Подтвердить вход", "qrauth:" + sessionId) }
             });
             await bot.SendMessage(msg.Chat.Id,
-                fromQr
-                    ? "🖥  Кто-то отсканировал QR-код на экране входа Lampa.\n\nЕсли это вы — нажмите кнопку ниже."
-                    : "🖥  Кто-то пытается войти в Lampa через Telegram.\n\nЕсли это вы — нажмите кнопку ниже.",
+                "🖥  Кто-то отсканировал QR-код на экране входа Lampa.\n\nЕсли это вы — нажмите кнопку ниже.",
                 replyMarkup: kb, cancellationToken: ct);
         }
 
