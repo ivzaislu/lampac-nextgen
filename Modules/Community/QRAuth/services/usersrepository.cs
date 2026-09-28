@@ -69,27 +69,63 @@ namespace QRAuth.Services
         // value, so the only thing that can ever end access is Ban (RevokeByToken).
         static readonly string NoExpiry = DateTime.UtcNow.AddYears(100).ToString("O");
 
-        /// <summary>Grants a fresh token to a Telegram id, replacing any existing record for
-        /// that id. Returns the generated token (the password the user logs in with).</summary>
+        /// <summary>
+        /// Grants access to a Telegram account.
+        ///
+        /// Telegram id is the account key inside QRAuth: once a tg_id receives a random Lampac
+        /// token, that token is kept permanently and reused on every device. This is important
+        /// because Lampac Sync/History is keyed by the accsdb id. Regenerating the token for the
+        /// same Telegram user would make Lampac see a brand-new account with empty history.
+        ///
+        /// The Telegram id itself is never used as the login password: it is public/predictable,
+        /// while Id remains a random secret credential.
+        /// </summary>
         public string AddUser(long tgId, string comment)
         {
+            if (tgId <= 0)
+                throw new ArgumentOutOfRangeException(nameof(tgId));
+
             lock (_writeLock)
             {
                 var users = ReadAll();
-                users.RemoveAll(u => u.TgId == tgId);
+                var matches = users.Where(u => u.TgId == tgId).ToList();
+                var user = matches.FirstOrDefault();
 
-                var token = GenerateToken();
-                users.Add(new LampacUser
+                if (user == null)
                 {
-                    Id = token,
-                    TgId = tgId,
-                    Group = 1,
-                    Expires = NoExpiry,
-                    Comment = comment
-                });
+                    user = new LampacUser
+                    {
+                        Id = GenerateToken(),
+                        TgId = tgId,
+                        Group = 1,
+                        Expires = NoExpiry,
+                        Comment = comment,
+                        Ban = false,
+                        BanMsg = ""
+                    };
+
+                    users.Add(user);
+                }
+                else
+                {
+                    // Keep the original credential so all devices and all Sync data continue
+                    // to belong to the same Lampac account.
+                    if (string.IsNullOrWhiteSpace(user.Id))
+                        user.Id = GenerateToken();
+
+                    user.Comment = comment;
+                    user.Ban = false;
+                    user.BanMsg = "";
+
+                    // Older/custom builds could leave duplicate rows for one Telegram account.
+                    // QRAuth always resolves GetByTgId to the first row, so keep exactly that
+                    // canonical row and remove the rest.
+                    foreach (var duplicate in matches.Skip(1))
+                        users.Remove(duplicate);
+                }
 
                 File.WriteAllText(_path, JsonSerializer.Serialize(users, _writeOptions));
-                return token;
+                return user.Id;
             }
         }
 
