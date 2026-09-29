@@ -1,0 +1,40 @@
+name: DatabaseEditor migration smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "Modules/DatabaseEditor/**"
+      - "Modules/DatabaseEditor.MigrationSmoke/**"
+      - ".github/workflows/database-editor-migration-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  migration-smoke:
+    name: email migration conflict smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
+
+      - name: Run migration smoke
+        run: dotnet run --project Modules/DatabaseEditor.MigrationSmoke/DatabaseEditor.MigrationSmoke.csproj --configuration Release
+        env:
+          MIGRATION_SMOKE_ROOT: ${{ runner.temp }}/database-editor-migration-smoke
+
+      - name: Upload migration smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: database-editor-migration-smoke
+          path: ${{ runner.temp }}/database-editor-migration-smoke
+          include-hidden-files: true
+          retention-days: 7

@@ -9,7 +9,8 @@
   var state = {
     database: 'timecode', page: 1, pageSize: 25, pages: 1, total: 0, query: '', selectedUser: '', loading: false,
     editingId: 0, editingDatabase: 'timecode', syncUser: null, syncItems: [], syncCategories: [], syncStatuses: [],
-    syncPage: 1, syncPageSize: 48, syncQuery: '', syncCategory: '', syncItem: null
+    syncPage: 1, syncPageSize: 48, syncQuery: '', syncCategory: '', syncItem: null,
+    translationRecord: null, translationData: null
   };
   var $ = function (id) { return document.getElementById(id); };
   var els = {
@@ -23,8 +24,13 @@
     syncPrev: $('syncPrev'), syncNext: $('syncNext'), syncPageLabel: $('syncPageLabel'), categoryModal: $('categoryModal'),
     categoryHead: $('categoryCardHead'), categoryOptions: $('categoryOptions'), backupModal: $('backupModal'),
     backupResults: $('backupResults'), renameUserModal: $('renameUserModal'), oldUser: $('oldUserField'), newUser: $('newUserField'),
-    confirmRenameUser: $('confirmRenameUserBtn'), deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
-    confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty')
+    confirmRenameUser: $('confirmRenameUserBtn'), mergeUserModal: $('mergeUserModal'), mergeOldUser: $('mergeOldUserField'),
+    mergeNewUser: $('mergeNewUserField'), mergeUserTargets: $('mergeUserTargets'), mergeConflictPolicy: $('mergeConflictPolicyField'), confirmMergeUser: $('confirmMergeUserBtn'),
+    deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
+    confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty'),
+    userLabel: $('userFieldLabel'), translationDetail: $('translationDetail'), translationTitle: $('translationTitle'),
+    translationMeta: $('translationMeta'), translationPoster: $('translationPoster'), translationBadges: $('translationBadges'),
+    translationInfo: $('translationInfo'), translationSources: $('translationSources'), translationSourcesEmpty: $('translationSourcesEmpty')
   };
   var errorMessages = {
     unauthorized: 'Требуется повторный вход', unknown_database: 'Неизвестная база', database_not_found: 'Файл базы не найден',
@@ -36,9 +42,12 @@
     multiple_statuses: 'Для карточки можно выбрать только один статус', old_user_required: 'Укажите текущее имя пользователя',
     new_user_required: 'Укажите новое имя пользователя', user_name_unchanged: 'Новое имя совпадает с текущим',
     user_not_found: 'Пользователь не найден ни в Sync, ни в TimeCode', rename_user_conflict: 'Новое имя уже занято или создаёт конфликт записей',
+    merge_user_conflict: 'Не удалось безопасно объединить записи из-за конфликта уникальных ключей',
+    invalid_merge_conflict_policy: 'Неизвестный режим разрешения конфликтов',
     invalid_backup_file: 'Недопустимое имя файла резервной копии', backup_not_found: 'Резервная копия не найдена',
     backup_integrity_failed: 'Проверка целостности резервной копии не пройдена', backup_schema_mismatch: 'Копия относится к другой базе',
-    invalid_backup_database: 'Файл не является исправной SQLite-базой',
+    invalid_backup_database: 'Файл не является исправной SQLite-базой', database_schema_mismatch: 'Структура базы TranslationSub не соответствует ожидаемой',
+    translation_subscription_id_required: 'В JSON подписки обязательно поле id', translation_progress_subscription_required: 'В JSON прогресса обязательно поле subscription_id',
     internal_error: 'Внутренняя ошибка сервера', invalid_response: 'Сервер вернул неожиданный ответ'
   };
 
@@ -108,24 +117,115 @@
     var rest = seconds % 60;
     return (hours ? hours + ':' + String(minutes).padStart(2, '0') : minutes) + ':' + String(rest).padStart(2, '0');
   }
+  function posterCandidates(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return [];
+
+    var candidates = [];
+    function add(url) {
+      if (url && candidates.indexOf(url) < 0) candidates.push(url);
+    }
+
+    if (/^data:image\//i.test(raw) || /^blob:/i.test(raw)) {
+      add(raw);
+      return candidates;
+    }
+
+    if (/^\/\//.test(raw)) raw = 'https:' + raw;
+
+    if (/^https?:\/\//i.test(raw)) {
+      add(raw);
+      var absoluteTmdb = raw.match(/^https?:\/\/image\.tmdb\.org\/(.+)$/i);
+      if (absoluteTmdb) add('/tmdb/img/' + absoluteTmdb[1].replace(/^\/+/, ''));
+      return candidates;
+    }
+
+    var localProxy = raw.match(/^\/?tmdb\/img\/(.+)$/i);
+    if (localProxy) {
+      var localSuffix = localProxy[1].replace(/^\/+/, '');
+      add('/tmdb/img/' + localSuffix);
+      add('https://image.tmdb.org/' + localSuffix);
+      return candidates;
+    }
+
+    var tmdbPath = raw.match(/^\/?(?:image\.tmdb\.org\/)?(t\/p\/.+)$/i);
+    if (tmdbPath) {
+      var suffix = tmdbPath[1].replace(/^\/+/, '');
+      add('/tmdb/img/' + suffix);
+      add('https://image.tmdb.org/' + suffix);
+      return candidates;
+    }
+
+    var posterPath = raw.charAt(0) === '/' ? raw : '/' + raw;
+    add('/tmdb/img/t/p/w300' + posterPath);
+    add('https://image.tmdb.org/t/p/w300' + posterPath);
+    return candidates;
+  }
   function posterUrl(value) {
-    if (!value) return '';
-    if (/^https?:\/\//i.test(value)) return value;
-    return '/tmdb/img/t/p/w300' + (value.charAt(0) === '/' ? value : '/' + value);
+    var candidates = posterCandidates(value);
+    return candidates.length ? candidates[0] : '';
   }
   function posterNode(value, title) {
-    if (!value) return el('div', 'poster-placeholder', '◇');
+    var candidates = posterCandidates(value);
+    if (!candidates.length) return el('div', 'poster-placeholder', '◇');
+
     var image = el('img', 'poster');
+    var candidateIndex = 0;
     image.loading = 'lazy';
+    image.decoding = 'async';
     image.alt = title || '';
-    image.src = posterUrl(value);
-    image.addEventListener('error', function () { image.replaceWith(el('div', 'poster-placeholder', '◇')); }, { once: true });
+    image.src = candidates[candidateIndex];
+
+    image.addEventListener('error', function () {
+      candidateIndex++;
+      if (candidateIndex < candidates.length) {
+        image.src = candidates[candidateIndex];
+        return;
+      }
+      image.replaceWith(el('div', 'poster-placeholder', '◇'));
+    });
+
     return image;
   }
   function typeLabel(type) { return type === 'tv' ? 'Сериал' : type === 'movie' ? 'Фильм' : ''; }
+  function isTranslationSubDatabase(database) { return String(database || '').indexOf('translationsub-') === 0; }
+  function databaseTitle(database) {
+    if (database === 'timecode') return 'TimeCode';
+    if (database === 'sync') return 'Sync';
+    if (database === 'translationsub') return 'TranslationSub';
+    if (database === 'translationsub-subscriptions') return 'TranslationSub · Подписки';
+    if (database === 'translationsub-settings') return 'TranslationSub · Настройки';
+    if (database === 'translationsub-progress') return 'TranslationSub · Прогресс';
+    return database || 'База';
+  }
+  function databaseBackupName(database) {
+    if (database === 'timecode') return 'TimeCode.sql';
+    if (database === 'sync') return 'Sync.sql';
+    if (database === 'translationsub') return 'translationsub.db';
+    return databaseTitle(database);
+  }
   function fallbackTitle(record) {
     if (record.title) return record.title;
     return typeLabel(record.mediaType) || 'Карточка';
+  }
+  function nonEmpty(value, fallback) {
+    return value === undefined || value === null || String(value).trim() === '' ? (fallback || '—') : String(value);
+  }
+  function translationEpisodeLabel(season, episode) {
+    var parts = [];
+    if (season !== undefined && season !== null && season !== '') parts.push('S' + season);
+    if (episode !== undefined && episode !== null && episode !== '') parts.push('E' + episode);
+    return parts.join(' · ');
+  }
+  function translationInfoCard(label, value) {
+    var card = el('div', 'translation-info-card');
+    card.appendChild(el('div', 'translation-info-label', label));
+    card.appendChild(el('div', 'translation-info-value', nonEmpty(value)));
+    return card;
+  }
+  function translationBadge(text, className) {
+    if (!text) return null;
+    return el('span', 'translation-badge' + (className ? ' ' + className : ''), text);
   }
 
   function loadSummary() {
@@ -152,11 +252,15 @@
   function renderHead() {
     els.head.textContent = '';
     var table = els.head.closest('table');
+    var translationSubscriptions = state.database === 'translationsub-subscriptions';
     table.classList.toggle('timecode-table', state.database === 'timecode');
-    table.classList.toggle('sync-table', state.database === 'sync');
+    table.classList.toggle('translation-table', translationSubscriptions);
+    table.classList.toggle('sync-table', state.database !== 'timecode' && !translationSubscriptions);
     var columns = state.database === 'timecode'
       ? [['ID', 'col-id'], ['Пользователь', 'col-user'], ['Карточка', 'col-media'], ['Позиция', 'col-progress'], ['Обновлено', 'col-date'], ['', 'col-actions']]
-      : [['ID', 'col-id'], ['Пользователь', 'col-user'], ['Обновлено', 'col-date'], ['', 'col-actions']];
+      : translationSubscriptions
+        ? [['ID', 'col-id'], ['UID', 'col-user'], ['Подписка', 'col-media'], ['Перевод / состояние', 'col-progress'], ['Обновлено', 'col-date'], ['', 'col-actions']]
+        : [['ID', 'col-id'], [isTranslationSubDatabase(state.database) ? 'UID' : 'Пользователь', 'col-user'], ['Обновлено', 'col-date'], ['', 'col-actions']];
     columns.forEach(function (column) { els.head.appendChild(el('th', column[1], column[0])); });
   }
 
@@ -208,12 +312,45 @@
         row.appendChild(progressCell);
       }
 
+      if (state.database === 'translationsub-subscriptions') {
+        var subscriptionMediaCell = el('td');
+        var subscriptionMedia = el('div', 'media-cell');
+        var subscriptionTitle = record.title || 'Подписка #' + (record.subscriptionId || record.id);
+        subscriptionMedia.appendChild(posterNode(record.poster, subscriptionTitle));
+        var subscriptionCopy = el('div', 'media-copy');
+        subscriptionCopy.appendChild(el('div', 'media-title', subscriptionTitle));
+        var subscriptionMeta = el('div', 'media-meta');
+        if (record.mediaType) subscriptionMeta.appendChild(el('span', 'type-badge', typeLabel(record.mediaType)));
+        var subscriptionMetaParts = [];
+        if (record.year) subscriptionMetaParts.push(record.year);
+        if (record.subscriptionId) subscriptionMetaParts.push('#' + record.subscriptionId);
+        if (subscriptionMetaParts.length) subscriptionMeta.appendChild(document.createTextNode(subscriptionMetaParts.join(' · ')));
+        subscriptionCopy.appendChild(subscriptionMeta);
+        subscriptionMedia.appendChild(subscriptionCopy);
+        subscriptionMediaCell.appendChild(subscriptionMedia);
+        row.appendChild(subscriptionMediaCell);
+
+        var translationState = el('td');
+        translationState.appendChild(el('div', 'record-user', record.translationName || 'Перевод не указан'));
+        translationState.appendChild(el('div', 'record-sub', [record.source, translationEpisodeLabel(record.season, record.episode)].filter(Boolean).join(' · ') || '—'));
+        var translationFlags = el('div', 'translation-row-flags');
+        if (record.newSeasonAvailable) translationFlags.appendChild(translationBadge('Новый сезон', 'attention'));
+        if (record.scheduleState) translationFlags.appendChild(translationBadge(record.scheduleState));
+        else if (record.tmdbStatus) translationFlags.appendChild(translationBadge(record.tmdbStatus));
+        if (translationFlags.childNodes.length) translationState.appendChild(translationFlags);
+        row.appendChild(translationState);
+      }
+
       row.appendChild(el('td', '', formatDate(record.updated)));
       var actions = el('td', 'row-actions');
       if (state.database === 'sync') {
         var open = el('button', 'mini-btn', 'Открыть');
         open.addEventListener('click', function () { openSyncUser(record.id); });
         actions.appendChild(open);
+      } else if (state.database === 'translationsub-subscriptions') {
+        var openTranslation = el('button', 'mini-btn', 'Открыть');
+        openTranslation.addEventListener('click', function () { openTranslationSubscription(record.id); });
+        actions.appendChild(openTranslation);
       }
       var edit = el('button', 'mini-btn', 'JSON');
       edit.addEventListener('click', function () { openRecord(record.id, state.database); });
@@ -269,6 +406,9 @@
   function switchDatabase(database) {
     if (database === state.database) return;
     state.database = database; state.page = 1;
+    els.translationDetail.hidden = true;
+    state.translationRecord = null;
+    state.translationData = null;
     document.querySelectorAll('.db-tab').forEach(function (tab) { tab.classList.toggle('active', tab.dataset.db === database); });
     els.userFilter.hidden = database !== 'timecode';
     loadRecords();
@@ -296,6 +436,92 @@
       els.syncDetail.hidden = false;
       renderSyncItems();
       window.scrollTo(0, 0);
+    }).catch(showError);
+  }
+
+  function openTranslationSubscription(id) {
+    api('record?database=translationsub-subscriptions&id=' + encodeURIComponent(id)).then(function (data) {
+      var record = data.record;
+      var parsed;
+      try { parsed = JSON.parse(record.data || '{}'); } catch (_) { parsed = {}; }
+      state.translationRecord = record;
+      state.translationData = parsed;
+
+      var title = parsed.title || parsed.original_title || 'Подписка #' + (parsed.id || record.id);
+      els.translationTitle.textContent = title;
+      els.translationMeta.textContent = [
+        typeLabel(Number(parsed.is_serial) ? 'tv' : 'movie'),
+        parsed.year,
+        record.user ? 'UID: ' + record.user : '',
+        parsed.translation_name || parsed.source
+      ].filter(Boolean).join(' · ') || '—';
+
+      els.translationPoster.textContent = '';
+      els.translationPoster.appendChild(posterNode(record.poster || parsed.poster, title));
+
+      els.translationBadges.textContent = '';
+      var primaryTranslation = translationBadge(parsed.translation_name || parsed.source || 'Без перевода');
+      if (primaryTranslation) els.translationBadges.appendChild(primaryTranslation);
+      if (parsed.tmdb_new_season_available) els.translationBadges.appendChild(translationBadge('Доступен новый сезон', 'attention'));
+      if (parsed.schedule_state) els.translationBadges.appendChild(translationBadge(parsed.schedule_state));
+      if (parsed.tmdb_status) els.translationBadges.appendChild(translationBadge('TMDB: ' + parsed.tmdb_status, 'muted'));
+
+      els.translationInfo.textContent = '';
+      var episode = translationEpisodeLabel(parsed.last_season || parsed.current_season, parsed.last_episode);
+      var nextEpisode = translationEpisodeLabel(parsed.tmdb_next_season, parsed.tmdb_next_episode);
+      [
+        ['UID', record.user],
+        ['ID подписки', parsed.id],
+        ['Content ID', parsed.content_id],
+        ['Источник', parsed.source],
+        ['Перевод', parsed.translation_name],
+        ['Текущий сезон', parsed.current_season],
+        ['Последний эпизод', episode],
+        ['Следующий эпизод', nextEpisode],
+        ['Дата следующего', formatDate(parsed.tmdb_next_air_date)],
+        ['TMDB ID', parsed.tmdb_id],
+        ['КП ID', parsed.kp_id],
+        ['IMDb ID', parsed.imdb_id],
+        ['Создано', formatDate(parsed.created_at)],
+        ['Проверено', formatDate(parsed.last_checked_at)],
+        ['TMDB синхронизация', formatDate(parsed.tmdb_last_synced_at)]
+      ].forEach(function (pair) { els.translationInfo.appendChild(translationInfoCard(pair[0], pair[1])); });
+
+      els.translationSources.textContent = '';
+      var sources = Array.isArray(parsed.sources_json) ? parsed.sources_json : [];
+      els.translationSourcesEmpty.hidden = sources.length > 0;
+      sources.forEach(function (source) {
+        var sourceCard = el('div', 'translation-source-card');
+        sourceCard.appendChild(el('div', 'translation-source-name', source.translation_name || source.translationName || source.source || 'Источник'));
+        var sourceId = source.translation_id || source.translationId;
+        sourceCard.appendChild(el('div', 'translation-source-meta', [source.source, sourceId ? 'ID: ' + sourceId : ''].filter(Boolean).join(' · ')));
+        els.translationSources.appendChild(sourceCard);
+      });
+
+      els.listView.hidden = true;
+      els.syncDetail.hidden = true;
+      els.translationDetail.hidden = false;
+      window.scrollTo(0, 0);
+    }).catch(showError);
+  }
+
+  function closeTranslationSubscription() {
+    els.translationDetail.hidden = true;
+    els.listView.hidden = false;
+    state.translationRecord = null;
+    state.translationData = null;
+    loadRecords();
+    loadSummary();
+  }
+
+  function deleteTranslationSubscription() {
+    if (!state.translationRecord) return;
+    var title = state.translationData && (state.translationData.title || state.translationData.original_title || state.translationData.id) || ('#' + state.translationRecord.id);
+    if (!confirm('Удалить подписку «' + title + '»? Связанный прогресс этой подписки также будет удалён.')) return;
+    var id = state.translationRecord.id;
+    api('delete', { method: 'POST', body: JSON.stringify({ database: 'translationsub-subscriptions', id: id }) }).then(function () {
+      toast('Подписка удалена');
+      closeTranslationSubscription();
     }).catch(showError);
   }
 
@@ -428,11 +654,12 @@
   }
   function setRecordDatabase(database) {
     document.querySelectorAll('.timecode-field').forEach(function (node) { node.style.display = database === 'timecode' ? 'flex' : 'none'; });
+    if (els.userLabel) els.userLabel.textContent = isTranslationSubDatabase(database) ? 'UID' : 'Пользователь';
   }
   function openRecord(id, database) {
     api('record?database=' + encodeURIComponent(database) + '&id=' + id).then(function (data) {
       var record = data.record; state.editingId = record.id; state.editingDatabase = database; setRecordDatabase(database);
-      els.recordTitle.textContent = 'Редактирование ' + (database === 'sync' ? 'Sync' : 'TimeCode'); els.recordId.textContent = '#' + record.id;
+      els.recordTitle.textContent = 'Редактирование ' + databaseTitle(database); els.recordId.textContent = '#' + record.id;
       els.user.value = record.user || ''; els.card.value = record.card || ''; els.item.value = record.item || '';
       try { els.data.value = prettyJson(record.data || '{}'); } catch (_) { els.data.value = record.data || ''; }
       els.deleteRecord.hidden = false; validateJson(); openModal('recordModal');
@@ -441,15 +668,17 @@
   function saveRecord() {
     if (!validateJson()) return;
     var payload = { database: state.editingDatabase, id: state.editingId || null, user: els.user.value, card: els.card.value, item: els.item.value, data: els.data.value };
+    var refreshTranslation = state.editingDatabase === 'translationsub-subscriptions' && state.translationRecord && state.translationRecord.id === state.editingId && !els.translationDetail.hidden;
     els.saveRecord.disabled = true;
-    api('save', { method: 'POST', body: JSON.stringify(payload) }).then(function () {
+    api('save', { method: 'POST', body: JSON.stringify(payload) }).then(function (data) {
       toast('Запись сохранена'); closeModal('recordModal'); state.page = 1; loadRecords(); loadSummary();
       if (state.editingDatabase === 'timecode') loadTimeCodeUsers();
       if (state.syncUser && state.editingDatabase === 'sync') openSyncUser(state.syncUser.id);
+      if (refreshTranslation) openTranslationSubscription((data.record && data.record.id) || state.editingId);
     }).catch(showError).finally(function () { els.saveRecord.disabled = false; });
   }
   function deleteRecord(id, database) {
-    if (!confirm('Удалить всю запись #' + id + ' из ' + database + '?')) return;
+    if (!confirm('Удалить всю запись #' + id + ' из «' + databaseTitle(database) + '»?')) return;
     api('delete', { method: 'POST', body: JSON.stringify({ database: database, id: id }) }).then(function () {
       toast('Запись удалена'); closeModal('recordModal'); loadRecords(); loadSummary();
       if (database === 'timecode') loadTimeCodeUsers();
@@ -463,11 +692,11 @@
       els.backupResults.textContent = '';
       backups.forEach(function (backup) {
         var result = el('div', 'backup-result');
-        result.appendChild(el('strong', '', backup.database === 'timecode' ? 'TimeCode.sql' : 'Sync.sql'));
+        result.appendChild(el('strong', '', databaseBackupName(backup.database)));
         result.appendChild(el('div', 'backup-path', backup.path));
         els.backupResults.appendChild(result);
       });
-      openModal('backupModal'); toast(backups.length === 2 ? 'Созданы копии TimeCode и Sync' : 'Резервная копия создана');
+      openModal('backupModal'); toast(backups.length > 1 ? 'Созданы резервные копии баз: ' + backups.map(function (item) { return databaseTitle(item.database); }).join(', ') : 'Резервная копия создана');
     }).catch(showError).finally(function () { $('backupAllBtn').disabled = false; });
   }
   var restoreDatabase = 'sync';
@@ -495,7 +724,7 @@
     }).catch(showError);
   }
   function restoreBackup(backup, button) {
-    var title = backup.database === 'sync' ? 'Sync' : 'TimeCode';
+    var title = databaseTitle(backup.database);
     if (!confirm('Восстановить базу ' + title + ' из файла «' + backup.file + '»?\n\nТекущее состояние сначала будет сохранено автоматически. Данные, записанные после даты этой копии, будут заменены.')) return;
     button.disabled = true;
     api('restore', { method: 'POST', body: JSON.stringify({ database: backup.database, file: backup.file }) }).then(function (data) {
@@ -542,6 +771,109 @@
       showError(error);
     });
   }
+  var mergeTargetTouched = false;
+  function mergeUserSuggestion(value) {
+    return (value || '').replace(/[^a-z0-9\-_\.]+/gi, '');
+  }
+  function suggestMergeTarget() {
+    if (mergeTargetTouched && els.mergeNewUser.value.trim()) return;
+    els.mergeNewUser.value = mergeUserSuggestion(els.mergeOldUser.value.trim());
+  }
+  function openMergeUser() {
+    var selected = state.syncUser ? state.syncUser.user || '' : state.selectedUser || '';
+    mergeTargetTouched = false;
+    els.mergeOldUser.textContent = '';
+    els.mergeUserTargets.textContent = '';
+    var loading = document.createElement('option'); loading.value = ''; loading.textContent = 'Загрузка пользователей…'; els.mergeOldUser.appendChild(loading);
+    els.mergeNewUser.value = '';
+    if (els.mergeConflictPolicy) els.mergeConflictPolicy.value = 'newest';
+    els.confirmMergeUser.disabled = true;
+    openModal('mergeUserModal');
+    Promise.all([api('users?database=sync'), api('users?database=timecode')]).then(function (responses) {
+      var users = new Map();
+      responses.forEach(function (response, databaseIndex) {
+        (response.users || []).forEach(function (entry) {
+          var key = (entry.user || '').toLowerCase();
+          if (!key) return;
+          var current = users.get(key) || { user: entry.user, sync: 0, timecode: 0 };
+          current[databaseIndex === 0 ? 'sync' : 'timecode'] += Number(entry.records || 0);
+          users.set(key, current);
+        });
+      });
+      var list = Array.from(users.values()).sort(function (left, right) { return left.user.localeCompare(right.user, 'ru', { sensitivity: 'base' }); });
+      els.mergeOldUser.textContent = '';
+      els.mergeUserTargets.textContent = '';
+      var placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = list.length ? 'Выберите источник' : 'Пользователей нет';
+      els.mergeOldUser.appendChild(placeholder);
+      list.forEach(function (entry) {
+        var option = document.createElement('option'); option.value = entry.user;
+        option.textContent = entry.user + ' · Sync: ' + entry.sync + ', TimeCode: ' + entry.timecode;
+        els.mergeOldUser.appendChild(option);
+        var target = document.createElement('option'); target.value = entry.user; els.mergeUserTargets.appendChild(target);
+      });
+      var match = list.find(function (entry) { return entry.user.toLowerCase() === selected.toLowerCase(); });
+      if (match) els.mergeOldUser.value = match.user;
+      suggestMergeTarget();
+      els.confirmMergeUser.disabled = !list.length;
+      setTimeout(function () { (els.mergeOldUser.value ? els.mergeNewUser : els.mergeOldUser).focus(); }, 0);
+    }).catch(function (error) {
+      els.mergeOldUser.textContent = '';
+      var failed = document.createElement('option'); failed.value = ''; failed.textContent = 'Не удалось загрузить пользователей'; els.mergeOldUser.appendChild(failed);
+      showError(error);
+    });
+  }
+  function mergeMetric(value) {
+    return value == null || value === '' || isNaN(Number(value)) ? 0 : Number(value);
+  }
+
+  function mergeUser() {
+    var oldUser = els.mergeOldUser.value.trim();
+    var newUser = els.mergeNewUser.value.trim();
+    if (!oldUser) return showError(new Error('old_user_required'));
+    if (!newUser) return showError(new Error('new_user_required'));
+    if (oldUser.toLowerCase() === newUser.toLowerCase()) return showError(new Error('user_name_unchanged'));
+    var conflictPolicy = els.mergeConflictPolicy ? els.mergeConflictPolicy.value : 'newest';
+    var conflictText = conflictPolicy === 'source'
+      ? 'При совпадении будет принудительно взята запись ИСТОЧНИКА и целевая запись будет заменена.'
+      : conflictPolicy === 'target'
+        ? 'При совпадении будет сохранена ЦЕЛЕВАЯ запись, а запись источника будет удалена.'
+        : 'При совпадении останется запись с более свежей клиентской меткой.';
+    if (!confirm('Объединить данные пользователя «' + oldUser + '» с «' + newUser + '»?\n\n' + conflictText + '\n\nПеред миграцией автоматически создаются резервные копии Sync и TimeCode.\n\nПосле операции источник будет удалён.')) return;
+    els.confirmMergeUser.disabled = true;
+    api('merge-user', { method: 'POST', body: JSON.stringify({ oldUser: oldUser, newUser: newUser, conflictPolicy: conflictPolicy }) }).then(function (data) {
+      var result = data.result;
+      closeModal('mergeUserModal');
+      state.selectedUser = '';
+      if (state.syncUser && state.syncUser.user.toLowerCase() === oldUser.toLowerCase()) state.syncUser = null;
+      els.syncDetail.hidden = true; els.listView.hidden = false;
+      loadRecords(); loadSummary(); loadTimeCodeUsers();
+
+      els.backupResults.textContent = '';
+      var summary = el('div', 'backup-result');
+      summary.appendChild(el('strong', '', oldUser + ' → ' + newUser));
+      var policyLabel = (result.conflictPolicy || conflictPolicy) === 'source'
+        ? 'конфликты: источник'
+        : (result.conflictPolicy || conflictPolicy) === 'target'
+          ? 'конфликты: целевая'
+          : 'конфликты: более свежая';
+      summary.appendChild(el('div', 'backup-path', policyLabel));
+      summary.appendChild(el('div', 'backup-path',
+        'Sync: перенесено ' + mergeMetric(result.sync && result.sync.movedRecords) + ' из ' + mergeMetric(result.sync && result.sync.sourceRecords) +
+        ', заменено целевых ' + mergeMetric(result.sync && result.sync.replacedTargetRecords) + ', оставлено целевых ' + mergeMetric(result.sync && result.sync.keptTargetRecords) +
+        ' · TimeCode: перенесено ' + mergeMetric(result.timecode && result.timecode.movedRecords) + ' из ' + mergeMetric(result.timecode && result.timecode.sourceRecords) +
+        ', заменено целевых ' + mergeMetric(result.timecode && result.timecode.replacedTargetRecords) + ', оставлено целевых ' + mergeMetric(result.timecode && result.timecode.keptTargetRecords)));
+      els.backupResults.appendChild(summary);
+      (result.backups || []).forEach(function (backup) {
+        var row = el('div', 'backup-result');
+        row.appendChild(el('strong', '', backup.database === 'timecode' ? 'TimeCode backup' : 'Sync backup'));
+        row.appendChild(el('div', 'backup-path', backup.path));
+        els.backupResults.appendChild(row);
+      });
+      openModal('backupModal');
+      toast('Миграция пользователя завершена');
+    }).catch(showError).finally(function () { els.confirmMergeUser.disabled = false; });
+  }
+
   function openDeleteUser() {
     var selected = state.syncUser ? state.syncUser.user || '' : state.selectedUser || '';
     els.deleteUser.textContent = '';
@@ -609,7 +941,7 @@
     localStorage.setItem('lampac-theme', theme);
   }
 
-  document.querySelectorAll('.db-tab').forEach(function (tab) { tab.addEventListener('click', function () { switchDatabase(tab.dataset.db); }); });
+  document.querySelectorAll('.db-tab[data-db]').forEach(function (tab) { tab.addEventListener('click', function () { switchDatabase(tab.dataset.db); }); });
   var searchTimer;
   els.search.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { state.query = els.search.value.trim(); state.page = 1; loadRecords(); }, 280); });
   els.userFilter.addEventListener('change', function () { state.selectedUser = els.userFilter.value; state.page = 1; loadRecords(); });
@@ -622,11 +954,19 @@
   document.querySelectorAll('[data-restore-db]').forEach(function (tab) { tab.addEventListener('click', function () { restoreDatabase = tab.dataset.restoreDb; document.querySelectorAll('[data-restore-db]').forEach(function (item) { item.classList.toggle('active', item === tab); }); loadBackups(); }); });
   $('renameUserBtn').addEventListener('click', openRenameUser);
   els.confirmRenameUser.addEventListener('click', renameUser);
+  $('mergeUserBtn').addEventListener('click', openMergeUser);
+  els.mergeOldUser.addEventListener('change', function () { mergeTargetTouched = false; suggestMergeTarget(); });
+  els.mergeNewUser.addEventListener('input', function () { mergeTargetTouched = true; });
+  els.confirmMergeUser.addEventListener('click', mergeUser);
   $('deleteUserBtn').addEventListener('click', openDeleteUser);
   els.confirmDeleteUser.addEventListener('click', deleteUser);
   $('backToUsers').addEventListener('click', function () { els.syncDetail.hidden = true; els.listView.hidden = false; state.syncUser = null; loadRecords(); loadSummary(); });
   $('rawSyncBtn').addEventListener('click', function () { if (state.syncUser) openRecord(state.syncUser.id, 'sync'); });
   $('refreshSyncBtn').addEventListener('click', function () { if (state.syncUser) openSyncUser(state.syncUser.id, true); });
+  $('backToTranslation').addEventListener('click', closeTranslationSubscription);
+  $('rawTranslationBtn').addEventListener('click', function () { if (state.translationRecord) openRecord(state.translationRecord.id, 'translationsub-subscriptions'); });
+  $('refreshTranslationBtn').addEventListener('click', function () { if (state.translationRecord) openTranslationSubscription(state.translationRecord.id); });
+  $('deleteTranslationBtn').addEventListener('click', deleteTranslationSubscription);
   els.syncSearch.addEventListener('input', function () { state.syncQuery = els.syncSearch.value.trim(); state.syncPage = 1; renderSyncItems(); });
   els.syncCategory.addEventListener('change', function () { state.syncCategory = els.syncCategory.value; state.syncPage = 1; renderSyncItems(); });
   els.syncPrev.addEventListener('click', function () { if (state.syncPage > 1) { state.syncPage--; renderSyncItems(); window.scrollTo(0, 0); } });
