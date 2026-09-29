@@ -85,18 +85,21 @@ run_quiet() {
   local _log exit_code
   _log="$(mktemp)"
   spinner_start "$label"
-  if ! "$@" >"$_log" 2>&1; then
-    exit_code=$?
-    spinner_stop
-    log_err "$label"
-    printf '\n' >&2
-    tail -20 "$_log" | sed 's/^/    /' >&2
-    printf '\n' >&2
+  if "$@" >"$_log" 2>&1; then
+    spinner_ok "$label"
     rm -f "$_log"
-    exit "$exit_code"
+    return 0
+  else
+    exit_code=$?
   fi
-  spinner_ok "$label"
+
+  spinner_stop
+  log_err "$label"
+  printf '\n' >&2
+  tail -20 "$_log" | sed 's/^/    /' >&2
+  printf '\n' >&2
   rm -f "$_log"
+  exit "$exit_code"
 }
 
 step() {
@@ -351,14 +354,29 @@ require_root() {
 }
 
 pick_libicu_package() {
-  local p
-  for p in libicu78 libicu76 libicu74 libicu72 libicu70 libicu67; do
-    if apt-cache show "$p" &>/dev/null; then
+  local p candidate
+  local -a candidates=()
+
+  # apt-cache show may list packages that have no installable candidate
+  # (for example because of pinning or stale repository metadata).
+  # Discover ICU runtime package names dynamically and accept only packages
+  # for which APT reports a real installation candidate.
+  mapfile -t candidates < <(
+    apt-cache pkgnames \
+      | grep -E '^libicu[0-9]+$' \
+      | sort -Vr
+  )
+
+  for p in "${candidates[@]}"; do
+    candidate="$(LC_ALL=C apt-cache policy "$p" 2>/dev/null \
+      | awk '/Candidate:/ { print $2; exit }')"
+    if [[ -n "$candidate" && "$candidate" != "(none)" ]]; then
       echo "$p"
       return 0
     fi
   done
-  log_err "Could not find a suitable libicu package in apt caches."
+
+  log_err "Could not find an installable libicu runtime package in the configured APT repositories."
   exit 1
 }
 
