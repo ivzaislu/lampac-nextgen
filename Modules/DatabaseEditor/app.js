@@ -457,7 +457,7 @@
       ].filter(Boolean).join(' · ') || '—';
 
       els.translationPoster.textContent = '';
-      els.translationPoster.appendChild(posterNode(parsed.poster, title));
+      els.translationPoster.appendChild(posterNode(record.poster || parsed.poster, title));
 
       els.translationBadges.textContent = '';
       var primaryTranslation = translationBadge(parsed.translation_name || parsed.source || 'Без перевода');

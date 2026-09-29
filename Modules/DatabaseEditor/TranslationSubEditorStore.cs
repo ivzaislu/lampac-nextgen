@@ -23,6 +23,7 @@ static class TranslationSubEditorStore
     public const string ProgressKey = "translationsub-progress";
 
     static readonly string DatabasePath = Path.Combine("database", "translationsub.db");
+    static readonly string SyncDatabasePath = Path.Combine("database", "Sync.sql");
     static readonly string BackupDirectory = Path.Combine("database", "backup", "database-editor");
 
     sealed class TableSpec
@@ -221,13 +222,15 @@ FROM (
         page = Math.Min(page, pages);
         int offset = (page - 1) * pageSize;
         var records = new List<DatabaseRecord>(pageSize);
+        var posterKeys = spec == Subscriptions ? new Dictionary<long, List<string>>() : null;
 
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = spec == Subscriptions
                 ? $"SELECT rowid, uid, length({spec.jsonExpression}), substr({spec.jsonExpression}, 1, 420), {spec.updatedExpression}, " +
                   "COALESCE(NULLIF(title, ''), NULLIF(original_title, '')), poster, year, is_serial, source, translation_name, " +
-                  "COALESCE(current_season, last_season), last_episode, id, schedule_state, tmdb_status, tmdb_new_season_available " +
+                  "COALESCE(current_season, last_season), last_episode, id, schedule_state, tmdb_status, tmdb_new_season_available, " +
+                  "tmdb_id, content_id, kp_id, imdb_id " +
                   $"FROM {spec.table}{where} ORDER BY {spec.updatedExpression} DESC, rowid DESC LIMIT @limit OFFSET @offset;"
                 : $"SELECT rowid, uid, length({spec.jsonExpression}), substr({spec.jsonExpression}, 1, 420), {spec.updatedExpression} " +
                   $"FROM {spec.table}{where} ORDER BY {spec.updatedExpression} DESC, rowid DESC LIMIT @limit OFFSET @offset;";
@@ -262,11 +265,25 @@ FROM (
                     record.scheduleState = ReadString(reader, 14);
                     record.tmdbStatus = ReadString(reader, 15);
                     record.newSeasonAvailable = !reader.IsDBNull(16) && reader.GetInt32(16) != 0;
+
+                    if (string.IsNullOrWhiteSpace(record.poster))
+                    {
+                        var keys = BuildPosterKeys(
+                            ReadString(reader, 17),
+                            ReadString(reader, 18),
+                            ReadString(reader, 19),
+                            ReadString(reader, 20));
+                        if (keys.Count > 0)
+                            posterKeys[record.id] = keys;
+                    }
                 }
 
                 records.Add(record);
             }
         }
+
+        if (posterKeys?.Count > 0)
+            await EnrichSubscriptionPostersAsync(records, posterKeys);
 
         return new RecordsPage
         {
@@ -289,7 +306,9 @@ FROM (
         await EnsureSchemaAsync(connection);
 
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT rowid, uid, {spec.jsonExpression}, {spec.updatedExpression} FROM {spec.table} WHERE rowid = @id LIMIT 1;";
+        command.CommandText = spec == Subscriptions
+            ? $"SELECT rowid, uid, {spec.jsonExpression}, {spec.updatedExpression}, poster, tmdb_id, content_id, kp_id, imdb_id FROM {spec.table} WHERE rowid = @id LIMIT 1;"
+            : $"SELECT rowid, uid, {spec.jsonExpression}, {spec.updatedExpression} FROM {spec.table} WHERE rowid = @id LIMIT 1;";
         command.Parameters.AddWithValue("@id", id);
 
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow);
@@ -297,7 +316,7 @@ FROM (
             return null;
 
         string data = ReadString(reader, 2);
-        return new DatabaseRecord
+        var record = new DatabaseRecord
         {
             id = reader.GetInt64(0),
             user = ReadString(reader, 1),
@@ -306,6 +325,25 @@ FROM (
             preview = BuildPreview(data),
             updated = ReadString(reader, 3)
         };
+
+        List<string> posterFallbackKeys = null;
+        if (spec == Subscriptions)
+        {
+            record.poster = ReadString(reader, 4);
+            if (string.IsNullOrWhiteSpace(record.poster))
+                posterFallbackKeys = BuildPosterKeys(
+                    ReadString(reader, 5),
+                    ReadString(reader, 6),
+                    ReadString(reader, 7),
+                    ReadString(reader, 8));
+        }
+
+        await reader.DisposeAsync();
+
+        if (string.IsNullOrWhiteSpace(record.poster) && posterFallbackKeys?.Count > 0)
+            record.poster = await ResolvePosterFromSyncAsync(posterFallbackKeys);
+
+        return record;
     }
 
     public static async Task<DatabaseRecord> SaveAsync(SaveRecordRequest request)
@@ -826,6 +864,148 @@ WHERE rowid = @rowid;";
         await destination.OpenAsync();
         source.BackupDatabase(destination);
         return destinationPath.Replace('\\', '/');
+    }
+
+    static List<string> BuildPosterKeys(params string[] values)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string value in values ?? Array.Empty<string>())
+        {
+            string key = (value ?? string.Empty).Trim();
+            if (key.Length > 0 && seen.Add(key))
+                result.Add(key);
+        }
+        return result;
+    }
+
+    static async Task EnrichSubscriptionPostersAsync(
+        List<DatabaseRecord> records,
+        Dictionary<long, List<string>> posterKeys)
+    {
+        if (records == null || records.Count == 0 || posterKeys == null || posterKeys.Count == 0)
+            return;
+
+        var allKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (List<string> keys in posterKeys.Values)
+        {
+            foreach (string key in keys)
+                allKeys.Add(key);
+        }
+
+        var posters = await ReadSyncPostersAsync(allKeys);
+        if (posters.Count == 0)
+            return;
+
+        foreach (DatabaseRecord record in records)
+        {
+            if (!string.IsNullOrWhiteSpace(record.poster)
+                || !posterKeys.TryGetValue(record.id, out List<string> keys))
+                continue;
+
+            foreach (string key in keys)
+            {
+                if (!posters.TryGetValue(key, out string poster) || string.IsNullOrWhiteSpace(poster))
+                    continue;
+                record.poster = poster;
+                break;
+            }
+        }
+    }
+
+    static async Task<string> ResolvePosterFromSyncAsync(List<string> keys)
+    {
+        if (keys == null || keys.Count == 0)
+            return null;
+
+        var posters = await ReadSyncPostersAsync(new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase));
+        foreach (string key in keys)
+        {
+            if (posters.TryGetValue(key, out string poster) && !string.IsNullOrWhiteSpace(poster))
+                return poster;
+        }
+        return null;
+    }
+
+    static async Task<Dictionary<string, string>> ReadSyncPostersAsync(HashSet<string> keys)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (keys == null || keys.Count == 0 || !File.Exists(SyncDatabasePath))
+            return result;
+
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = SyncDatabasePath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Shared,
+                Pooling = true,
+                DefaultTimeout = 5
+            };
+            await using var connection = new SqliteConnection(builder.ToString());
+            await connection.OpenAsync();
+
+            await using var command = connection.CreateCommand();
+            var placeholders = new List<string>(keys.Count);
+            int index = 0;
+            foreach (string key in keys)
+            {
+                string parameter = "@posterKey" + index++;
+                placeholders.Add(parameter);
+                command.Parameters.AddWithValue(parameter, key);
+            }
+
+            command.CommandText =
+                $"SELECT card_id, card FROM bookmarks WHERE card_id IN ({string.Join(",", placeholders)}) " +
+                "AND card IS NOT NULL AND TRIM(card) <> '' ORDER BY updated_at DESC;";
+
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                string cardId = ReadString(reader, 0);
+                if (string.IsNullOrWhiteSpace(cardId) || result.ContainsKey(cardId))
+                    continue;
+
+                string poster = ReadPosterFromSyncCard(ReadString(reader, 1));
+                if (!string.IsNullOrWhiteSpace(poster))
+                    result[cardId] = poster;
+            }
+        }
+        catch (SqliteException ex)
+        {
+            Serilog.Log.Debug(ex, "DatabaseEditor could not enrich TranslationSub posters from Sync");
+        }
+        catch (JsonException ex)
+        {
+            Serilog.Log.Debug(ex, "DatabaseEditor ignored invalid Sync card while enriching TranslationSub posters");
+        }
+
+        return result;
+    }
+
+    static string ReadPosterFromSyncCard(string data)
+    {
+        if (string.IsNullOrWhiteSpace(data))
+            return null;
+
+        using var document = JsonDocument.Parse(data);
+        JsonElement root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        foreach (string name in new[] { "img", "poster_path", "poster", "image" })
+        {
+            if (!root.TryGetProperty(name, out JsonElement value)
+                || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                continue;
+
+            string poster = value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+            if (!string.IsNullOrWhiteSpace(poster))
+                return poster.Trim();
+        }
+
+        return null;
     }
 
     static string ValidateKey(string value, string error)
