@@ -208,7 +208,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .workspace, .sync-detail { overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow-md); }
 .toolbar, .detail-toolbar { display: flex; min-height: 58px; align-items: center; gap: var(--sp-3); padding: 10px var(--sp-3); border-bottom: 1px solid var(--border); background: var(--surface); }
-.db-tabs, .restore-tabs { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--r-md); background: var(--surface-2); }
+.db-tabs, .restore-tabs { display: flex; max-width: 100%; gap: 2px; overflow-x: auto; padding: 3px; border: 1px solid var(--border-subtle); border-radius: var(--r-md); background: var(--surface-2); scrollbar-width: thin; }
 .db-tab { padding: 5px 12px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font-size: var(--text-xs); font-weight: 600; white-space: nowrap; transition: all var(--dur) var(--ease); }
 .db-tab:hover { color: var(--text); }
 .db-tab.active { background: var(--surface-3); color: var(--accent); box-shadow: var(--shadow-sm); }
@@ -378,7 +378,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 @media (max-width: 720px) {
   .toolbar .db-tabs { order: 1; flex: 1 0 100%; }
-  .toolbar .db-tab { flex: 1; }
+  .toolbar .db-tab { flex: 0 0 auto; }
   .toolbar .user-filter { order: 2; width: 100%; min-width: 0; flex: 1 0 100%; }
   .toolbar .search { order: 3; flex: 1 0 100%; }
   .toolbar #pageSize { order: 4; flex: 1; }

@@ -26,7 +26,8 @@
     confirmRenameUser: $('confirmRenameUserBtn'), mergeUserModal: $('mergeUserModal'), mergeOldUser: $('mergeOldUserField'),
     mergeNewUser: $('mergeNewUserField'), mergeUserTargets: $('mergeUserTargets'), mergeConflictPolicy: $('mergeConflictPolicyField'), confirmMergeUser: $('confirmMergeUserBtn'),
     deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
-    confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty')
+    confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty'),
+    userLabel: $('userFieldLabel')
   };
   var errorMessages = {
     unauthorized: 'Требуется повторный вход', unknown_database: 'Неизвестная база', database_not_found: 'Файл базы не найден',
@@ -42,7 +43,8 @@
     invalid_merge_conflict_policy: 'Неизвестный режим разрешения конфликтов',
     invalid_backup_file: 'Недопустимое имя файла резервной копии', backup_not_found: 'Резервная копия не найдена',
     backup_integrity_failed: 'Проверка целостности резервной копии не пройдена', backup_schema_mismatch: 'Копия относится к другой базе',
-    invalid_backup_database: 'Файл не является исправной SQLite-базой',
+    invalid_backup_database: 'Файл не является исправной SQLite-базой', database_schema_mismatch: 'Структура базы TranslationSub не соответствует ожидаемой',
+    translation_subscription_id_required: 'В JSON подписки обязательно поле id', translation_progress_subscription_required: 'В JSON прогресса обязательно поле subscription_id',
     internal_error: 'Внутренняя ошибка сервера', invalid_response: 'Сервер вернул неожиданный ответ'
   };
 
@@ -127,6 +129,22 @@
     return image;
   }
   function typeLabel(type) { return type === 'tv' ? 'Сериал' : type === 'movie' ? 'Фильм' : ''; }
+  function isTranslationSubDatabase(database) { return String(database || '').indexOf('translationsub-') === 0; }
+  function databaseTitle(database) {
+    if (database === 'timecode') return 'TimeCode';
+    if (database === 'sync') return 'Sync';
+    if (database === 'translationsub') return 'TranslationSub';
+    if (database === 'translationsub-subscriptions') return 'TranslationSub · Подписки';
+    if (database === 'translationsub-settings') return 'TranslationSub · Настройки';
+    if (database === 'translationsub-progress') return 'TranslationSub · Прогресс';
+    return database || 'База';
+  }
+  function databaseBackupName(database) {
+    if (database === 'timecode') return 'TimeCode.sql';
+    if (database === 'sync') return 'Sync.sql';
+    if (database === 'translationsub') return 'translationsub.db';
+    return databaseTitle(database);
+  }
   function fallbackTitle(record) {
     if (record.title) return record.title;
     return typeLabel(record.mediaType) || 'Карточка';
@@ -157,10 +175,10 @@
     els.head.textContent = '';
     var table = els.head.closest('table');
     table.classList.toggle('timecode-table', state.database === 'timecode');
-    table.classList.toggle('sync-table', state.database === 'sync');
+    table.classList.toggle('sync-table', state.database !== 'timecode');
     var columns = state.database === 'timecode'
       ? [['ID', 'col-id'], ['Пользователь', 'col-user'], ['Карточка', 'col-media'], ['Позиция', 'col-progress'], ['Обновлено', 'col-date'], ['', 'col-actions']]
-      : [['ID', 'col-id'], ['Пользователь', 'col-user'], ['Обновлено', 'col-date'], ['', 'col-actions']];
+      : [['ID', 'col-id'], [isTranslationSubDatabase(state.database) ? 'UID' : 'Пользователь', 'col-user'], ['Обновлено', 'col-date'], ['', 'col-actions']];
     columns.forEach(function (column) { els.head.appendChild(el('th', column[1], column[0])); });
   }
 
@@ -432,11 +450,12 @@
   }
   function setRecordDatabase(database) {
     document.querySelectorAll('.timecode-field').forEach(function (node) { node.style.display = database === 'timecode' ? 'flex' : 'none'; });
+    if (els.userLabel) els.userLabel.textContent = isTranslationSubDatabase(database) ? 'UID' : 'Пользователь';
   }
   function openRecord(id, database) {
     api('record?database=' + encodeURIComponent(database) + '&id=' + id).then(function (data) {
       var record = data.record; state.editingId = record.id; state.editingDatabase = database; setRecordDatabase(database);
-      els.recordTitle.textContent = 'Редактирование ' + (database === 'sync' ? 'Sync' : 'TimeCode'); els.recordId.textContent = '#' + record.id;
+      els.recordTitle.textContent = 'Редактирование ' + databaseTitle(database); els.recordId.textContent = '#' + record.id;
       els.user.value = record.user || ''; els.card.value = record.card || ''; els.item.value = record.item || '';
       try { els.data.value = prettyJson(record.data || '{}'); } catch (_) { els.data.value = record.data || ''; }
       els.deleteRecord.hidden = false; validateJson(); openModal('recordModal');
@@ -453,7 +472,7 @@
     }).catch(showError).finally(function () { els.saveRecord.disabled = false; });
   }
   function deleteRecord(id, database) {
-    if (!confirm('Удалить всю запись #' + id + ' из ' + database + '?')) return;
+    if (!confirm('Удалить всю запись #' + id + ' из «' + databaseTitle(database) + '»?')) return;
     api('delete', { method: 'POST', body: JSON.stringify({ database: database, id: id }) }).then(function () {
       toast('Запись удалена'); closeModal('recordModal'); loadRecords(); loadSummary();
       if (database === 'timecode') loadTimeCodeUsers();
@@ -467,11 +486,11 @@
       els.backupResults.textContent = '';
       backups.forEach(function (backup) {
         var result = el('div', 'backup-result');
-        result.appendChild(el('strong', '', backup.database === 'timecode' ? 'TimeCode.sql' : 'Sync.sql'));
+        result.appendChild(el('strong', '', databaseBackupName(backup.database)));
         result.appendChild(el('div', 'backup-path', backup.path));
         els.backupResults.appendChild(result);
       });
-      openModal('backupModal'); toast(backups.length === 2 ? 'Созданы копии TimeCode и Sync' : 'Резервная копия создана');
+      openModal('backupModal'); toast(backups.length > 1 ? 'Созданы резервные копии баз: ' + backups.map(function (item) { return databaseTitle(item.database); }).join(', ') : 'Резервная копия создана');
     }).catch(showError).finally(function () { $('backupAllBtn').disabled = false; });
   }
   var restoreDatabase = 'sync';
@@ -499,7 +518,7 @@
     }).catch(showError);
   }
   function restoreBackup(backup, button) {
-    var title = backup.database === 'sync' ? 'Sync' : 'TimeCode';
+    var title = databaseTitle(backup.database);
     if (!confirm('Восстановить базу ' + title + ' из файла «' + backup.file + '»?\n\nТекущее состояние сначала будет сохранено автоматически. Данные, записанные после даты этой копии, будут заменены.')) return;
     button.disabled = true;
     api('restore', { method: 'POST', body: JSON.stringify({ database: backup.database, file: backup.file }) }).then(function (data) {
@@ -716,7 +735,7 @@
     localStorage.setItem('lampac-theme', theme);
   }
 
-  document.querySelectorAll('.db-tab').forEach(function (tab) { tab.addEventListener('click', function () { switchDatabase(tab.dataset.db); }); });
+  document.querySelectorAll('.db-tab[data-db]').forEach(function (tab) { tab.addEventListener('click', function () { switchDatabase(tab.dataset.db); }); });
   var searchTimer;
   els.search.addEventListener('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(function () { state.query = els.search.value.trim(); state.page = 1; loadRecords(); }, 280); });
   els.userFilter.addEventListener('change', function () { state.selectedUser = els.userFilter.value; state.page = 1; loadRecords(); });

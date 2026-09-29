@@ -34,15 +34,15 @@
     <main class="main">
       <section id="listView">
         <div class="hero">
-          <div><h1>Редактор TimeCode и Sync</h1><p>Пользователи, карточки, позиции просмотра и безопасные копии SQLite.</p></div>
-          <div class="hero-actions"><button class="btn" id="backupAllBtn">⇩ <span>Backup TimeCode + Sync</span></button><button class="btn" id="restoreBtn">↥ <span>Восстановить</span></button><button class="btn" id="renameUserBtn">Переименовать пользователя</button><button class="btn" id="mergeUserBtn">Миграция пользователя</button><button class="btn danger" id="deleteUserBtn">Удалить пользователя</button></div>
+          <div><h1>Редактор баз Lampac</h1><p>TimeCode, Sync и TranslationSub: записи, подписки, прогресс и безопасные копии SQLite.</p></div>
+          <div class="hero-actions"><button class="btn" id="backupAllBtn">⇩ <span>Backup всех баз</span></button><button class="btn" id="restoreBtn">↥ <span>Восстановить</span></button><button class="btn" id="renameUserBtn">Переименовать пользователя</button><button class="btn" id="mergeUserBtn">Миграция пользователя</button><button class="btn danger" id="deleteUserBtn">Удалить пользователя</button></div>
         </div>
 
         <section class="summary" id="summary"></section>
 
         <section class="workspace">
           <div class="toolbar">
-            <div class="db-tabs" role="tablist"><button class="db-tab active" data-db="timecode" role="tab">TimeCode</button><button class="db-tab" data-db="sync" role="tab">Sync</button></div>
+            <div class="db-tabs" role="tablist"><button class="db-tab active" data-db="timecode" role="tab">TimeCode</button><button class="db-tab" data-db="sync" role="tab">Sync</button><button class="db-tab" data-db="translationsub-subscriptions" role="tab">TS · Подписки</button><button class="db-tab" data-db="translationsub-settings" role="tab">TS · Настройки</button><button class="db-tab" data-db="translationsub-progress" role="tab">TS · Прогресс</button></div>
             <select class="select user-filter" id="timecodeUserFilter" title="Пользователь TimeCode"><option value="">Все пользователи TimeCode</option></select>
             <div class="search"><span>⌕</span><input id="searchInput" type="search" placeholder="ID, пользователь, карточка или JSON…" autocomplete="off"></div>
             <div class="toolbar-spacer"></div>
@@ -80,7 +80,7 @@
     <div class="modal modal-wide">
       <div class="modal-head"><span class="modal-title" id="recordModalTitle">Запись</span><span class="modal-id" id="recordModalId"></span><button class="icon-btn modal-close" data-close="recordModal">×</button></div>
       <div class="modal-body"><div class="form-grid">
-        <div class="field full"><label for="userField">Пользователь</label><input id="userField" maxlength="512" autocomplete="off"></div>
+        <div class="field full"><label for="userField" id="userFieldLabel">Пользователь</label><input id="userField" maxlength="512" autocomplete="off"></div>
         <div class="field timecode-field"><label for="cardField">Карточка</label><input id="cardField" maxlength="512" autocomplete="off"></div>
         <div class="field timecode-field"><label for="itemField">Элемент / hash</label><input id="itemField" maxlength="512" autocomplete="off"></div>
         <div class="field full"><div class="json-tools"><label for="dataField">JSON-данные</label><button class="btn small" type="button" id="formatBtn">Форматировать</button><span class="json-status" id="jsonStatus"></span></div><textarea id="dataField" spellcheck="false"></textarea></div>
@@ -150,7 +150,7 @@
       <div class="modal-head"><span class="modal-title">Восстановление базы</span><button class="icon-btn modal-close" data-close="restoreModal">×</button></div>
       <div class="modal-body">
         <p class="modal-hint restore-warning">Выберите резервную копию. Перед восстановлением текущая база будет автоматически сохранена в отдельный файл <code>before-restore</code>.</p>
-        <div class="restore-tabs"><button class="db-tab active" data-restore-db="sync">Sync</button><button class="db-tab" data-restore-db="timecode">TimeCode</button></div>
+        <div class="restore-tabs"><button class="db-tab active" data-restore-db="sync">Sync</button><button class="db-tab" data-restore-db="timecode">TimeCode</button><button class="db-tab" data-restore-db="translationsub">TranslationSub</button></div>
         <div class="backup-results restore-results" id="restoreResults"></div>
         <div class="empty restore-empty" id="restoreEmpty"><div><strong>Резервных копий нет</strong></div></div>
       </div>

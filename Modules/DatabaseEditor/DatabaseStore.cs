@@ -317,14 +317,18 @@ static class DatabaseStore
 
     public static async Task<List<DatabaseSummary>> GetSummaryAsync()
     {
-        var result = new List<DatabaseSummary>(2);
+        var result = new List<DatabaseSummary>(3);
         result.Add(await ReadSummaryAsync(TimeCode));
         result.Add(await ReadSummaryAsync(Sync));
+        result.Add(await TranslationSubEditorStore.GetSummaryAsync());
         return result;
     }
 
     public static async Task<List<DatabaseUserOption>> GetUsersAsync(string database)
     {
+        if (TranslationSubEditorStore.IsRecordDatabase(database))
+            return await TranslationSubEditorStore.GetUsersAsync(database);
+
         DatabaseSpec spec = GetSpec(database);
         await using var connection = await OpenAsync(spec);
         await using var command = connection.CreateCommand();
@@ -345,6 +349,9 @@ static class DatabaseStore
 
     public static async Task<RecordsPage> GetRecordsAsync(string database, string query, int page, int pageSize, string user = null)
     {
+        if (TranslationSubEditorStore.IsRecordDatabase(database))
+            return await TranslationSubEditorStore.GetRecordsAsync(database, query, page, pageSize, user);
+
         DatabaseSpec spec = GetSpec(database);
         page = Math.Max(1, page);
         pageSize = pageSize is 25 or 50 or 100 ? pageSize : 25;
@@ -426,6 +433,9 @@ static class DatabaseStore
 
     public static async Task<DatabaseRecord> GetRecordAsync(string database, long id)
     {
+        if (TranslationSubEditorStore.IsRecordDatabase(database))
+            return await TranslationSubEditorStore.GetRecordAsync(database, id);
+
         DatabaseSpec spec = GetSpec(database);
         if (id <= 0)
             throw new DatabaseEditorValidationException("invalid_id");
@@ -563,6 +573,9 @@ static class DatabaseStore
         if (request == null)
             throw new DatabaseEditorValidationException("request_required");
 
+        if (TranslationSubEditorStore.IsRecordDatabase(request.database))
+            return await TranslationSubEditorStore.SaveAsync(request);
+
         DatabaseSpec spec = GetSpec(request.database);
         if (spec.sync)
             return await SaveSyncRecordAsync(request);
@@ -647,6 +660,9 @@ static class DatabaseStore
 
     public static async Task<bool> DeleteAsync(string database, long id)
     {
+        if (TranslationSubEditorStore.IsRecordDatabase(database))
+            return await TranslationSubEditorStore.DeleteAsync(database, id);
+
         DatabaseSpec spec = GetSpec(database);
         if (id <= 0)
             throw new DatabaseEditorValidationException("invalid_id");
@@ -1163,6 +1179,9 @@ static class DatabaseStore
 
     public static async Task<string> BackupAsync(string database)
     {
+        if (TranslationSubEditorStore.IsBackupDatabase(database))
+            return await TranslationSubEditorStore.BackupAsync();
+
         DatabaseSpec spec = GetSpec(database);
         var semaphore = new SemaphorManager(spec.semaphore, TimeSpan.FromSeconds(20));
         bool acquired = await semaphore.WaitAsync();
@@ -1199,16 +1218,21 @@ static class DatabaseStore
 
     public static async Task<List<DatabaseBackupResult>> BackupAllAsync()
     {
-        var result = new List<DatabaseBackupResult>(2)
+        var result = new List<DatabaseBackupResult>(3)
         {
             new() { database = TimeCode.key, path = await BackupAsync(TimeCode.key) },
             new() { database = Sync.key, path = await BackupAsync(Sync.key) }
         };
+        if (TranslationSubEditorStore.Available)
+            result.Add(new DatabaseBackupResult { database = TranslationSubEditorStore.DatabaseKey, path = await TranslationSubEditorStore.BackupAsync() });
         return result;
     }
 
     public static List<DatabaseBackupFile> GetBackups(string database)
     {
+        if (TranslationSubEditorStore.IsBackupDatabase(database))
+            return TranslationSubEditorStore.GetBackups();
+
         DatabaseSpec spec = GetSpec(database);
         string directory = Path.Combine("database", "backup", "database-editor");
         var result = new List<DatabaseBackupFile>();
@@ -1236,6 +1260,9 @@ static class DatabaseStore
     {
         if (request == null)
             throw new DatabaseEditorValidationException("request_required");
+
+        if (TranslationSubEditorStore.IsBackupDatabase(request.database))
+            return await TranslationSubEditorStore.RestoreAsync(request);
 
         DatabaseSpec spec = GetSpec(request.database);
         string fileName = Path.GetFileName((request.file ?? string.Empty).Trim());

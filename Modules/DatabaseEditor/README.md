@@ -1,7 +1,8 @@
 # DatabaseEditor
 
-Защищённый root-паролем WebLog редактор баз `database/TimeCode.sql` и
-`database/Sync.sql`.
+Защищённый root-паролем WebLog редактор баз `database/TimeCode.sql`,
+`database/Sync.sql` и `database/translationsub.db` (если установлен и
+инициализирован модуль TranslationSub).
 
 ## Маршруты
 
@@ -20,6 +21,14 @@
   `database: "all"` в `database/backup/database-editor`.
 - `/database-editor/api/backups` — список доступных резервных копий выбранной базы.
 - `/database-editor/api/restore` — проверка и восстановление выбранной SQLite-копии; перед заменой автоматически создаётся страховочная копия текущей базы с маркером `before-restore`.
+
+Для TranslationSub редактор предоставляет три логических раздела одной физической базы:
+`translationsub-subscriptions` → `subscriptions`, `translationsub-settings` → `settings`,
+`translationsub-progress` → `profile_progress`. Идентификатор строки в API — SQLite `rowid`,
+поле «UID» соответствует колонке `uid`. Поля `sources_json` показываются в JSON как массивы,
+а при сохранении снова записываются как JSON-текст. Удаление подписки и смена её `id`/`uid`
+также удаляют связанный старый `profile_progress`, как это делает штатный `SubscriptionStore`.
+Backup/restore выполняется для файла `translationsub.db` целиком.
 
 Изменяющие запросы требуют заголовок `X-Database-Editor: 1`. Все SQL-запросы
 параметризованы; запись синхронизируется штатными семафорами `TimeCode` и
