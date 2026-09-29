@@ -224,9 +224,13 @@ FROM (
 
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText =
-                $"SELECT rowid, uid, length({spec.jsonExpression}), substr({spec.jsonExpression}, 1, 420), {spec.updatedExpression} " +
-                $"FROM {spec.table}{where} ORDER BY {spec.updatedExpression} DESC, rowid DESC LIMIT @limit OFFSET @offset;";
+            command.CommandText = spec == Subscriptions
+                ? $"SELECT rowid, uid, length({spec.jsonExpression}), substr({spec.jsonExpression}, 1, 420), {spec.updatedExpression}, " +
+                  "COALESCE(NULLIF(title, ''), NULLIF(original_title, '')), poster, year, is_serial, source, translation_name, " +
+                  "COALESCE(current_season, last_season), last_episode, id, schedule_state, tmdb_status, tmdb_new_season_available " +
+                  $"FROM {spec.table}{where} ORDER BY {spec.updatedExpression} DESC, rowid DESC LIMIT @limit OFFSET @offset;"
+                : $"SELECT rowid, uid, length({spec.jsonExpression}), substr({spec.jsonExpression}, 1, 420), {spec.updatedExpression} " +
+                  $"FROM {spec.table}{where} ORDER BY {spec.updatedExpression} DESC, rowid DESC LIMIT @limit OFFSET @offset;";
             AddFilters(command, searchValue, selectedUser);
             command.Parameters.AddWithValue("@limit", pageSize);
             command.Parameters.AddWithValue("@offset", offset);
@@ -235,14 +239,32 @@ FROM (
             while (await reader.ReadAsync())
             {
                 string preview = ReadString(reader, 3);
-                records.Add(new DatabaseRecord
+                var record = new DatabaseRecord
                 {
                     id = reader.GetInt64(0),
                     user = ReadString(reader, 1),
                     dataLength = reader.IsDBNull(2) ? 0 : reader.GetInt64(2),
                     preview = BuildPreview(preview),
                     updated = ReadString(reader, 4)
-                });
+                };
+
+                if (spec == Subscriptions)
+                {
+                    record.title = ReadString(reader, 5);
+                    record.poster = ReadString(reader, 6);
+                    record.year = reader.IsDBNull(7) ? null : Convert.ToString(reader.GetInt32(7), CultureInfo.InvariantCulture);
+                    record.mediaType = !reader.IsDBNull(8) && reader.GetInt32(8) != 0 ? "tv" : "movie";
+                    record.source = ReadString(reader, 9);
+                    record.translationName = ReadString(reader, 10);
+                    record.season = reader.IsDBNull(11) ? null : reader.GetInt32(11);
+                    record.episode = reader.IsDBNull(12) ? null : reader.GetInt32(12);
+                    record.subscriptionId = ReadString(reader, 13);
+                    record.scheduleState = ReadString(reader, 14);
+                    record.tmdbStatus = ReadString(reader, 15);
+                    record.newSeasonAvailable = !reader.IsDBNull(16) && reader.GetInt32(16) != 0;
+                }
+
+                records.Add(record);
             }
         }
 

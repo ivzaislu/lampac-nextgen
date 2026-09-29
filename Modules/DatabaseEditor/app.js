@@ -9,7 +9,8 @@
   var state = {
     database: 'timecode', page: 1, pageSize: 25, pages: 1, total: 0, query: '', selectedUser: '', loading: false,
     editingId: 0, editingDatabase: 'timecode', syncUser: null, syncItems: [], syncCategories: [], syncStatuses: [],
-    syncPage: 1, syncPageSize: 48, syncQuery: '', syncCategory: '', syncItem: null
+    syncPage: 1, syncPageSize: 48, syncQuery: '', syncCategory: '', syncItem: null,
+    translationRecord: null, translationData: null
   };
   var $ = function (id) { return document.getElementById(id); };
   var els = {
@@ -27,7 +28,9 @@
     mergeNewUser: $('mergeNewUserField'), mergeUserTargets: $('mergeUserTargets'), mergeConflictPolicy: $('mergeConflictPolicyField'), confirmMergeUser: $('confirmMergeUserBtn'),
     deleteUserModal: $('deleteUserModal'), deleteUser: $('deleteUserField'),
     confirmDeleteUser: $('confirmDeleteUserBtn'), restoreModal: $('restoreModal'), restoreResults: $('restoreResults'), restoreEmpty: $('restoreEmpty'),
-    userLabel: $('userFieldLabel')
+    userLabel: $('userFieldLabel'), translationDetail: $('translationDetail'), translationTitle: $('translationTitle'),
+    translationMeta: $('translationMeta'), translationPoster: $('translationPoster'), translationBadges: $('translationBadges'),
+    translationInfo: $('translationInfo'), translationSources: $('translationSources'), translationSourcesEmpty: $('translationSourcesEmpty')
   };
   var errorMessages = {
     unauthorized: 'Требуется повторный вход', unknown_database: 'Неизвестная база', database_not_found: 'Файл базы не найден',
@@ -149,6 +152,25 @@
     if (record.title) return record.title;
     return typeLabel(record.mediaType) || 'Карточка';
   }
+  function nonEmpty(value, fallback) {
+    return value === undefined || value === null || String(value).trim() === '' ? (fallback || '—') : String(value);
+  }
+  function translationEpisodeLabel(season, episode) {
+    var parts = [];
+    if (season !== undefined && season !== null && season !== '') parts.push('S' + season);
+    if (episode !== undefined && episode !== null && episode !== '') parts.push('E' + episode);
+    return parts.join(' · ');
+  }
+  function translationInfoCard(label, value) {
+    var card = el('div', 'translation-info-card');
+    card.appendChild(el('div', 'translation-info-label', label));
+    card.appendChild(el('div', 'translation-info-value', nonEmpty(value)));
+    return card;
+  }
+  function translationBadge(text, className) {
+    if (!text) return null;
+    return el('span', 'translation-badge' + (className ? ' ' + className : ''), text);
+  }
 
   function loadSummary() {
     return api('summary').then(function (data) {
@@ -174,11 +196,15 @@
   function renderHead() {
     els.head.textContent = '';
     var table = els.head.closest('table');
+    var translationSubscriptions = state.database === 'translationsub-subscriptions';
     table.classList.toggle('timecode-table', state.database === 'timecode');
-    table.classList.toggle('sync-table', state.database !== 'timecode');
+    table.classList.toggle('translation-table', translationSubscriptions);
+    table.classList.toggle('sync-table', state.database !== 'timecode' && !translationSubscriptions);
     var columns = state.database === 'timecode'
       ? [['ID', 'col-id'], ['Пользователь', 'col-user'], ['Карточка', 'col-media'], ['Позиция', 'col-progress'], ['Обновлено', 'col-date'], ['', 'col-actions']]
-      : [['ID', 'col-id'], [isTranslationSubDatabase(state.database) ? 'UID' : 'Пользователь', 'col-user'], ['Обновлено', 'col-date'], ['', 'col-actions']];
+      : translationSubscriptions
+        ? [['ID', 'col-id'], ['UID', 'col-user'], ['Подписка', 'col-media'], ['Перевод / состояние', 'col-progress'], ['Обновлено', 'col-date'], ['', 'col-actions']]
+        : [['ID', 'col-id'], [isTranslationSubDatabase(state.database) ? 'UID' : 'Пользователь', 'col-user'], ['Обновлено', 'col-date'], ['', 'col-actions']];
     columns.forEach(function (column) { els.head.appendChild(el('th', column[1], column[0])); });
   }
 
@@ -230,12 +256,45 @@
         row.appendChild(progressCell);
       }
 
+      if (state.database === 'translationsub-subscriptions') {
+        var subscriptionMediaCell = el('td');
+        var subscriptionMedia = el('div', 'media-cell');
+        var subscriptionTitle = record.title || 'Подписка #' + (record.subscriptionId || record.id);
+        subscriptionMedia.appendChild(posterNode(record.poster, subscriptionTitle));
+        var subscriptionCopy = el('div', 'media-copy');
+        subscriptionCopy.appendChild(el('div', 'media-title', subscriptionTitle));
+        var subscriptionMeta = el('div', 'media-meta');
+        if (record.mediaType) subscriptionMeta.appendChild(el('span', 'type-badge', typeLabel(record.mediaType)));
+        var subscriptionMetaParts = [];
+        if (record.year) subscriptionMetaParts.push(record.year);
+        if (record.subscriptionId) subscriptionMetaParts.push('#' + record.subscriptionId);
+        if (subscriptionMetaParts.length) subscriptionMeta.appendChild(document.createTextNode(subscriptionMetaParts.join(' · ')));
+        subscriptionCopy.appendChild(subscriptionMeta);
+        subscriptionMedia.appendChild(subscriptionCopy);
+        subscriptionMediaCell.appendChild(subscriptionMedia);
+        row.appendChild(subscriptionMediaCell);
+
+        var translationState = el('td');
+        translationState.appendChild(el('div', 'record-user', record.translationName || 'Перевод не указан'));
+        translationState.appendChild(el('div', 'record-sub', [record.source, translationEpisodeLabel(record.season, record.episode)].filter(Boolean).join(' · ') || '—'));
+        var translationFlags = el('div', 'translation-row-flags');
+        if (record.newSeasonAvailable) translationFlags.appendChild(translationBadge('Новый сезон', 'attention'));
+        if (record.scheduleState) translationFlags.appendChild(translationBadge(record.scheduleState));
+        else if (record.tmdbStatus) translationFlags.appendChild(translationBadge(record.tmdbStatus));
+        if (translationFlags.childNodes.length) translationState.appendChild(translationFlags);
+        row.appendChild(translationState);
+      }
+
       row.appendChild(el('td', '', formatDate(record.updated)));
       var actions = el('td', 'row-actions');
       if (state.database === 'sync') {
         var open = el('button', 'mini-btn', 'Открыть');
         open.addEventListener('click', function () { openSyncUser(record.id); });
         actions.appendChild(open);
+      } else if (state.database === 'translationsub-subscriptions') {
+        var openTranslation = el('button', 'mini-btn', 'Открыть');
+        openTranslation.addEventListener('click', function () { openTranslationSubscription(record.id); });
+        actions.appendChild(openTranslation);
       }
       var edit = el('button', 'mini-btn', 'JSON');
       edit.addEventListener('click', function () { openRecord(record.id, state.database); });
@@ -291,6 +350,9 @@
   function switchDatabase(database) {
     if (database === state.database) return;
     state.database = database; state.page = 1;
+    els.translationDetail.hidden = true;
+    state.translationRecord = null;
+    state.translationData = null;
     document.querySelectorAll('.db-tab').forEach(function (tab) { tab.classList.toggle('active', tab.dataset.db === database); });
     els.userFilter.hidden = database !== 'timecode';
     loadRecords();
@@ -318,6 +380,92 @@
       els.syncDetail.hidden = false;
       renderSyncItems();
       window.scrollTo(0, 0);
+    }).catch(showError);
+  }
+
+  function openTranslationSubscription(id) {
+    api('record?database=translationsub-subscriptions&id=' + encodeURIComponent(id)).then(function (data) {
+      var record = data.record;
+      var parsed;
+      try { parsed = JSON.parse(record.data || '{}'); } catch (_) { parsed = {}; }
+      state.translationRecord = record;
+      state.translationData = parsed;
+
+      var title = parsed.title || parsed.original_title || 'Подписка #' + (parsed.id || record.id);
+      els.translationTitle.textContent = title;
+      els.translationMeta.textContent = [
+        typeLabel(Number(parsed.is_serial) ? 'tv' : 'movie'),
+        parsed.year,
+        record.user ? 'UID: ' + record.user : '',
+        parsed.translation_name || parsed.source
+      ].filter(Boolean).join(' · ') || '—';
+
+      els.translationPoster.textContent = '';
+      els.translationPoster.appendChild(posterNode(parsed.poster, title));
+
+      els.translationBadges.textContent = '';
+      var primaryTranslation = translationBadge(parsed.translation_name || parsed.source || 'Без перевода');
+      if (primaryTranslation) els.translationBadges.appendChild(primaryTranslation);
+      if (parsed.tmdb_new_season_available) els.translationBadges.appendChild(translationBadge('Доступен новый сезон', 'attention'));
+      if (parsed.schedule_state) els.translationBadges.appendChild(translationBadge(parsed.schedule_state));
+      if (parsed.tmdb_status) els.translationBadges.appendChild(translationBadge('TMDB: ' + parsed.tmdb_status, 'muted'));
+
+      els.translationInfo.textContent = '';
+      var episode = translationEpisodeLabel(parsed.last_season || parsed.current_season, parsed.last_episode);
+      var nextEpisode = translationEpisodeLabel(parsed.tmdb_next_season, parsed.tmdb_next_episode);
+      [
+        ['UID', record.user],
+        ['ID подписки', parsed.id],
+        ['Content ID', parsed.content_id],
+        ['Источник', parsed.source],
+        ['Перевод', parsed.translation_name],
+        ['Текущий сезон', parsed.current_season],
+        ['Последний эпизод', episode],
+        ['Следующий эпизод', nextEpisode],
+        ['Дата следующего', formatDate(parsed.tmdb_next_air_date)],
+        ['TMDB ID', parsed.tmdb_id],
+        ['КП ID', parsed.kp_id],
+        ['IMDb ID', parsed.imdb_id],
+        ['Создано', formatDate(parsed.created_at)],
+        ['Проверено', formatDate(parsed.last_checked_at)],
+        ['TMDB синхронизация', formatDate(parsed.tmdb_last_synced_at)]
+      ].forEach(function (pair) { els.translationInfo.appendChild(translationInfoCard(pair[0], pair[1])); });
+
+      els.translationSources.textContent = '';
+      var sources = Array.isArray(parsed.sources_json) ? parsed.sources_json : [];
+      els.translationSourcesEmpty.hidden = sources.length > 0;
+      sources.forEach(function (source) {
+        var sourceCard = el('div', 'translation-source-card');
+        sourceCard.appendChild(el('div', 'translation-source-name', source.translation_name || source.translationName || source.source || 'Источник'));
+        var sourceId = source.translation_id || source.translationId;
+        sourceCard.appendChild(el('div', 'translation-source-meta', [source.source, sourceId ? 'ID: ' + sourceId : ''].filter(Boolean).join(' · ')));
+        els.translationSources.appendChild(sourceCard);
+      });
+
+      els.listView.hidden = true;
+      els.syncDetail.hidden = true;
+      els.translationDetail.hidden = false;
+      window.scrollTo(0, 0);
+    }).catch(showError);
+  }
+
+  function closeTranslationSubscription() {
+    els.translationDetail.hidden = true;
+    els.listView.hidden = false;
+    state.translationRecord = null;
+    state.translationData = null;
+    loadRecords();
+    loadSummary();
+  }
+
+  function deleteTranslationSubscription() {
+    if (!state.translationRecord) return;
+    var title = state.translationData && (state.translationData.title || state.translationData.original_title || state.translationData.id) || ('#' + state.translationRecord.id);
+    if (!confirm('Удалить подписку «' + title + '»? Связанный прогресс этой подписки также будет удалён.')) return;
+    var id = state.translationRecord.id;
+    api('delete', { method: 'POST', body: JSON.stringify({ database: 'translationsub-subscriptions', id: id }) }).then(function () {
+      toast('Подписка удалена');
+      closeTranslationSubscription();
     }).catch(showError);
   }
 
@@ -464,11 +612,13 @@
   function saveRecord() {
     if (!validateJson()) return;
     var payload = { database: state.editingDatabase, id: state.editingId || null, user: els.user.value, card: els.card.value, item: els.item.value, data: els.data.value };
+    var refreshTranslation = state.editingDatabase === 'translationsub-subscriptions' && state.translationRecord && state.translationRecord.id === state.editingId && !els.translationDetail.hidden;
     els.saveRecord.disabled = true;
-    api('save', { method: 'POST', body: JSON.stringify(payload) }).then(function () {
+    api('save', { method: 'POST', body: JSON.stringify(payload) }).then(function (data) {
       toast('Запись сохранена'); closeModal('recordModal'); state.page = 1; loadRecords(); loadSummary();
       if (state.editingDatabase === 'timecode') loadTimeCodeUsers();
       if (state.syncUser && state.editingDatabase === 'sync') openSyncUser(state.syncUser.id);
+      if (refreshTranslation) openTranslationSubscription((data.record && data.record.id) || state.editingId);
     }).catch(showError).finally(function () { els.saveRecord.disabled = false; });
   }
   function deleteRecord(id, database) {
@@ -757,6 +907,10 @@
   $('backToUsers').addEventListener('click', function () { els.syncDetail.hidden = true; els.listView.hidden = false; state.syncUser = null; loadRecords(); loadSummary(); });
   $('rawSyncBtn').addEventListener('click', function () { if (state.syncUser) openRecord(state.syncUser.id, 'sync'); });
   $('refreshSyncBtn').addEventListener('click', function () { if (state.syncUser) openSyncUser(state.syncUser.id, true); });
+  $('backToTranslation').addEventListener('click', closeTranslationSubscription);
+  $('rawTranslationBtn').addEventListener('click', function () { if (state.translationRecord) openRecord(state.translationRecord.id, 'translationsub-subscriptions'); });
+  $('refreshTranslationBtn').addEventListener('click', function () { if (state.translationRecord) openTranslationSubscription(state.translationRecord.id); });
+  $('deleteTranslationBtn').addEventListener('click', deleteTranslationSubscription);
   els.syncSearch.addEventListener('input', function () { state.syncQuery = els.syncSearch.value.trim(); state.syncPage = 1; renderSyncItems(); });
   els.syncCategory.addEventListener('change', function () { state.syncCategory = els.syncCategory.value; state.syncPage = 1; renderSyncItems(); });
   els.syncPrev.addEventListener('click', function () { if (state.syncPage > 1) { state.syncPage--; renderSyncItems(); window.scrollTo(0, 0); } });

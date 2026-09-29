@@ -73,6 +73,28 @@
         <div class="empty sync-empty" id="syncEmpty"><div><div class="empty-icon">□</div><strong>Карточек не найдено</strong></div></div>
         <div class="detail-pager"><button class="btn" id="syncPrev">← Назад</button><span id="syncPageLabel">1 / 1</span><button class="btn" id="syncNext">Вперёд →</button></div>
       </section>
+
+      <section class="translation-detail" id="translationDetail" hidden>
+        <div class="detail-head">
+          <button class="btn" id="backToTranslation">← Подписки</button>
+          <div class="detail-identity"><div class="eyebrow">TranslationSub-подписка</div><h1 id="translationTitle">—</h1><div class="muted" id="translationMeta">—</div></div>
+          <div class="detail-actions"><button class="btn" id="rawTranslationBtn">JSON</button><button class="btn danger" id="deleteTranslationBtn">Удалить</button><button class="btn" id="refreshTranslationBtn">↻ Обновить</button></div>
+        </div>
+        <div class="translation-detail-body">
+          <div class="translation-hero">
+            <div class="translation-poster" id="translationPoster"></div>
+            <div class="translation-overview">
+              <div class="translation-badges" id="translationBadges"></div>
+              <div class="translation-info-grid" id="translationInfo"></div>
+            </div>
+          </div>
+          <section class="translation-panel">
+            <div class="translation-panel-head"><div><div class="eyebrow">Источники</div><h2>Доступные переводы</h2></div></div>
+            <div class="translation-sources" id="translationSources"></div>
+            <div class="muted translation-sources-empty" id="translationSourcesEmpty">Дополнительных источников в подписке нет.</div>
+          </section>
+        </div>
+      </section>
     </main>
   </div>
 

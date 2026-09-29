@@ -139,6 +139,14 @@ public sealed class DatabaseRecord
     public double? position { get; set; }
     public double? duration { get; set; }
     public double? percent { get; set; }
+
+    // TranslationSub subscription metadata used by the visual editor list.
+    public string subscriptionId { get; set; }
+    public string source { get; set; }
+    public string translationName { get; set; }
+    public string scheduleState { get; set; }
+    public string tmdbStatus { get; set; }
+    public bool newSeasonAvailable { get; set; }
 }
 
 public sealed class SyncUserItem
