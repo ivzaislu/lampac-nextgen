@@ -117,18 +117,74 @@
     var rest = seconds % 60;
     return (hours ? hours + ':' + String(minutes).padStart(2, '0') : minutes) + ':' + String(rest).padStart(2, '0');
   }
+  function posterCandidates(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return [];
+
+    var candidates = [];
+    function add(url) {
+      if (url && candidates.indexOf(url) < 0) candidates.push(url);
+    }
+
+    if (/^data:image\//i.test(raw) || /^blob:/i.test(raw)) {
+      add(raw);
+      return candidates;
+    }
+
+    if (/^\/\//.test(raw)) raw = 'https:' + raw;
+
+    if (/^https?:\/\//i.test(raw)) {
+      add(raw);
+      var absoluteTmdb = raw.match(/^https?:\/\/image\.tmdb\.org\/(.+)$/i);
+      if (absoluteTmdb) add('/tmdb/img/' + absoluteTmdb[1].replace(/^\/+/, ''));
+      return candidates;
+    }
+
+    var localProxy = raw.match(/^\/?tmdb\/img\/(.+)$/i);
+    if (localProxy) {
+      var localSuffix = localProxy[1].replace(/^\/+/, '');
+      add('/tmdb/img/' + localSuffix);
+      add('https://image.tmdb.org/' + localSuffix);
+      return candidates;
+    }
+
+    var tmdbPath = raw.match(/^\/?(?:image\.tmdb\.org\/)?(t\/p\/.+)$/i);
+    if (tmdbPath) {
+      var suffix = tmdbPath[1].replace(/^\/+/, '');
+      add('/tmdb/img/' + suffix);
+      add('https://image.tmdb.org/' + suffix);
+      return candidates;
+    }
+
+    var posterPath = raw.charAt(0) === '/' ? raw : '/' + raw;
+    add('/tmdb/img/t/p/w300' + posterPath);
+    add('https://image.tmdb.org/t/p/w300' + posterPath);
+    return candidates;
+  }
   function posterUrl(value) {
-    if (!value) return '';
-    if (/^https?:\/\//i.test(value)) return value;
-    return '/tmdb/img/t/p/w300' + (value.charAt(0) === '/' ? value : '/' + value);
+    var candidates = posterCandidates(value);
+    return candidates.length ? candidates[0] : '';
   }
   function posterNode(value, title) {
-    if (!value) return el('div', 'poster-placeholder', '◇');
+    var candidates = posterCandidates(value);
+    if (!candidates.length) return el('div', 'poster-placeholder', '◇');
+
     var image = el('img', 'poster');
+    var candidateIndex = 0;
     image.loading = 'lazy';
+    image.decoding = 'async';
     image.alt = title || '';
-    image.src = posterUrl(value);
-    image.addEventListener('error', function () { image.replaceWith(el('div', 'poster-placeholder', '◇')); }, { once: true });
+    image.src = candidates[candidateIndex];
+
+    image.addEventListener('error', function () {
+      candidateIndex++;
+      if (candidateIndex < candidates.length) {
+        image.src = candidates[candidateIndex];
+        return;
+      }
+      image.replaceWith(el('div', 'poster-placeholder', '◇'));
+    });
+
     return image;
   }
   function typeLabel(type) { return type === 'tv' ? 'Сериал' : type === 'movie' ? 'Фильм' : ''; }
