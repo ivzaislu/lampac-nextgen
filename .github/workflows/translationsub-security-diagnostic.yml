@@ -6,6 +6,7 @@ on:
       - TranslationSub-release
     paths:
       - 'Modules/TranslationSub/**'
+      - '!Modules/TranslationSub/README.md'
       - '.github/workflows/translationsub-security-diagnostic.yml'
   workflow_dispatch:
 
