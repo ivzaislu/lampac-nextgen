@@ -23,7 +23,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/screenshots/subscriptions.png" width="1200" alt="Страница подписок TranslationSub в Lampa">
+  <img src="[https://raw.githubusercontent.com/ivzaislu/TranslationSub/refs/heads/main/docs/screenshots/subscriptions.png]" width="1200" alt="Страница подписок TranslationSub в Lampa">
   <br>
   <sub>Подписки на озвучки: сезон, просмотренная серия, доступная серия, источник и состояние TMDB</sub>
 </p>
@@ -58,7 +58,7 @@
 ### 🔔 Уведомления
 
 <p align="center">
-  <img src="docs/screenshots/notifications.png" width="1100" alt="Окно уведомлений TranslationSub о новых сериях">
+  <img src="https://raw.githubusercontent.com/ivzaislu/TranslationSub/refs/heads/main/docs/screenshots/notifications.png" width="1100" alt="Окно уведомлений TranslationSub о новых сериях">
   <br>
   <sub>Новые серии собираются в одном окне; оттуда можно перейти к подпискам или открыть нужный сериал</sub>
 </p>
