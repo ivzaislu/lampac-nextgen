@@ -11,7 +11,8 @@
 ![Dynamic module](https://img.shields.io/badge/module-dynamic-2ea44f?style=flat-square)
 [![TMDB](https://img.shields.io/badge/TMDB-schedule-01B4E4?style=flat-square&logo=themoviedatabase&logoColor=white)](https://www.themoviedb.org/)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
-![Realtime](https://img.shields.io/badge/realtime-NWS-E67E22?style=flat-square)\n[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+![Realtime](https://img.shields.io/badge/realtime-NWS-E67E22?style=flat-square)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](../../LICENSE)
 
 [Быстрый старт](#quick-start) •
 [Возможности](#features) •
@@ -322,7 +323,7 @@ TranslationSub/
 
 ## 📄 Лицензия
 
-Проект распространяется по лицензии **MIT**. См. файл [`LICENSE`](LICENSE).
+Проект распространяется по лицензии **MIT**. См. корневой файл [`LICENSE`](../../LICENSE).
 
 ---
 
