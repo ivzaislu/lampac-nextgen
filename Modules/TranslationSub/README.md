@@ -23,7 +23,7 @@
 </div>
 
 <p align="center">
-  <img src="[https://raw.githubusercontent.com/ivzaislu/TranslationSub/refs/heads/main/docs/screenshots/subscriptions.png]" width="1200" alt="Страница подписок TranslationSub в Lampa">
+  <img src="https://raw.githubusercontent.com/ivzaislu/TranslationSub/refs/heads/main/docs/screenshots/subscriptions.png" width="1200" alt="Страница подписок TranslationSub в Lampa">
   <br>
   <sub>Подписки на озвучки: сезон, просмотренная серия, доступная серия, источник и состояние TMDB</sub>
 </p>
@@ -71,11 +71,11 @@
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="docs/screenshots/settings.png" alt="Настройки TranslationSub">
+      <img src="https://raw.githubusercontent.com/ivzaislu/TranslationSub/refs/heads/main/docs/screenshots/settings.png" alt="Настройки TranslationSub">
       <br><sub>Интервалы, TMDB, новые сезоны и перепроверка</sub>
     </td>
     <td width="50%" align="center">
-      <img src="docs/screenshots/balancers.png" alt="Выбор балансеров TranslationSub">
+      <img src="https://raw.githubusercontent.com/ivzaislu/TranslationSub/refs/heads/main/docs/screenshots/balancers.png" alt="Выбор балансеров TranslationSub">
       <br><sub>Online-балансеры Lampac, участвующие в поиске озвучек</sub>
     </td>
   </tr>
