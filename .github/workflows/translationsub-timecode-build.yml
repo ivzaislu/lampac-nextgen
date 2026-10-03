@@ -1,0 +1,115 @@
+name: TranslationSub TimeCode Main Compatibility
+
+on:
+  push:
+    branches:
+      - TranslationSub-TimeCode
+    paths:
+      - 'Modules/TranslationSub/**'
+      - 'Modules/Sync/TimeCode/**'
+      - 'Shared/Services/DataArea.cs'
+      - '.github/workflows/translationsub-timecode-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: translationsub-timecode-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Load TranslationSub with main TimeCode
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish Lampac
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/lampac-translationsub-timecode
+          dotnet publish Core/Core.csproj \
+            --configuration Release \
+            --output /tmp/lampac-translationsub-timecode \
+            --verbosity minimal \
+            -p:PlaywrightPlatform=linux-x64
+
+          test -f /tmp/lampac-translationsub-timecode/Core.dll
+          test -f /tmp/lampac-translationsub-timecode/module/TranslationSub/manifest.json
+          test -f /tmp/lampac-translationsub-timecode/module/Sync/TimeCode/manifest.json
+
+      - name: Verify TimeCode compatibility contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=Modules/TranslationSub/Services/TimeCodeProgressService.cs
+          grep -Fq 'DataArea.Compose' "$file"
+          grep -Fq 'SELECT card, item, identity, percent, deleted FROM timecodes' "$file"
+          grep -Fq 'rows.ByIdentity.TryGetValue' "$file"
+          ! grep -Fq 'SELECT card, item, data FROM timecodes WHERE user = $user' "$file"
+
+      - name: Start Lampac with TranslationSub and TimeCode
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/lampac-translationsub-timecode/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - TimeCode
+              - TranslationSub
+          listen:
+            port: 9118
+          YAML
+
+          (cd /tmp/lampac-translationsub-timecode && exec dotnet Core.dll > /tmp/lampac-translationsub-timecode.log 2>&1) &
+          echo $! > /tmp/lampac-translationsub-timecode.pid
+
+          ready=0
+          for _ in $(seq 1 180); do
+            if curl -fsS --max-time 2 'http://127.0.0.1:9118/translationsub.js' >/tmp/translationsub.js 2>/dev/null \
+              && curl -fsS --max-time 2 'http://127.0.0.1:9118/translationsub/v2/settings?uid=timecode-smoke' >/tmp/translationsub-settings.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-translationsub-timecode.pid)" 2>/dev/null; then
+              tail -n 500 /tmp/lampac-translationsub-timecode.log || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          test "$ready" = 1
+          node --check /tmp/translationsub.js
+          grep -Fq '"success":true' /tmp/translationsub-settings.json
+
+      - name: Diagnostic tail
+        if: failure()
+        shell: bash
+        run: tail -n 500 /tmp/lampac-translationsub-timecode.log 2>/dev/null || true
+
+      - name: Stop Lampac
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          [ -f /tmp/lampac-translationsub-timecode.pid ] && kill "$(cat /tmp/lampac-translationsub-timecode.pid)" 2>/dev/null || true
