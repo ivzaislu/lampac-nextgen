@@ -102,6 +102,68 @@ jobs:
           node --check /tmp/translationsub.js
           grep -Fq '"success":true' /tmp/translationsub-settings.json
 
+      - name: Verify typed TimeCode progress reaches TranslationSub snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sqlite3
+          from datetime import datetime, timezone
+
+          root = '/tmp/lampac-translationsub-timecode/database'
+          uid = 'timecode-smoke'
+          profile = '7'
+          area = uid + ':' + profile
+          sub_id = 'timecode-main-schema-smoke'
+
+          with sqlite3.connect(root + '/TimeCode.sql', timeout=10) as db:
+              db.execute('DELETE FROM timecodes WHERE user = ?', (area,))
+              db.execute(
+                  '''
+                  INSERT INTO timecodes
+                      (user, identity, card, item, position, duration, percent, profile,
+                       deleted, watched_at, updated_at, extra)
+                  VALUES (?, ?, ?, NULL, 0, 0, 85, 0, 0, 1, 1, NULL)
+                  ''',
+                  (area, 'tv-123-s1e3', '123_tv'),
+              )
+              db.commit()
+
+          with sqlite3.connect(root + '/translationsub.db', timeout=10) as db:
+              db.execute('DELETE FROM profile_progress WHERE uid = ?', (uid,))
+              db.execute('DELETE FROM subscriptions WHERE uid = ?', (uid,))
+              db.execute(
+                  '''
+                  INSERT INTO subscriptions
+                      (id, uid, content_id, title, original_title, tmdb_id, is_serial,
+                       current_season, last_season, last_episode, sources_json, created_at,
+                       tmdb_new_season_available)
+                  VALUES (?, ?, ?, ?, ?, ?, 1, 1, 1, 5, '[]', ?, 0)
+                  ''',
+                  (
+                      sub_id, uid, '123', 'TimeCode Smoke', 'TimeCode Smoke', '123',
+                      datetime.now(timezone.utc).isoformat(),
+                  ),
+              )
+              db.commit()
+          PY
+
+          curl -fsS --max-time 10 \
+            'http://127.0.0.1:9118/translationsub/v2/snapshot?uid=timecode-smoke&profile_id=7' \
+            -o /tmp/translationsub-snapshot.json
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          snapshot = json.loads(Path('/tmp/translationsub-snapshot.json').read_text())
+          rows = snapshot.get('subscriptions') or []
+          sub = next((row for row in rows if row.get('id') == 'timecode-main-schema-smoke'), None)
+          assert sub is not None, snapshot
+          assert sub.get('watchedEpisode') == 3, sub
+          print('TranslationSub typed TimeCode sync passed; watchedEpisode=3')
+          PY
+
       - name: Diagnostic tail
         if: failure()
         shell: bash
