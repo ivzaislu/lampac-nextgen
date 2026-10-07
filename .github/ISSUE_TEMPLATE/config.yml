@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions / help
+    url: https://github.com/lampac-nextgen/lampac/discussions
+    about: Usage questions, setup help, and general discussion (not bugs or features).
+  - name: Documentation
+    url: https://github.com/lampac-nextgen/lampac#readme
+    about: Install, Docker, and configuration docs before opening an issue.

@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose a new capability or improvement (not a bug).
+title: "feat: short description"
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RU or EN is fine. Explain the **problem** first, then the proposal (see #185, #241).
+        For usage questions use [Discussions](https://github.com/lampac-nextgen/lampac/discussions).
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Online / Adult modules
+        - Torrents / JacRed / TorrServer
+        - GStreamer / playback
+        - Sync / auth / QRAuth / OIDC
+        - install / Docker / packaging
+        - Admin / config / docs
+        - Lampa client plugins
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What is painful or missing today? Who hits it?
+      placeholder: e.g. install.sh --update has no backup or health check, so a bad release leaves the service down.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Concrete behavior you want. Sketch API/config/UI if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Workarounds, other designs, or why those are worse.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Extra context (optional)
+      description: Screenshots, links, related issues/PRs.
