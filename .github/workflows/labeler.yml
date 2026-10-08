@@ -1,5 +1,8 @@
 name: Labeler
 
+# pull_request_target needed for fork PR labels (base GITHUB_TOKEN).
+# After 2026-11-02 GitHub blocks PRT by default on public repos; allowed by
+# Actions policy allow-labeler-pull-request-target (this workflow only).
 on:
   pull_request_target:
     types: [opened, reopened, synchronize]
