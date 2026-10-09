@@ -120,6 +120,40 @@ jobs:
           test -f /tmp/lampac-translationsub-timecode/database/translationsub/settings.json
           grep -Fq '"legacy":"keep"' /tmp/lampac-translationsub-timecode/database/translationsub/settings.json
 
+      - name: Verify settings persistence and API error handling
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 10 -X POST \
+            'http://127.0.0.1:9118/translationsub/v2/settings?uid=timecode-smoke' \
+            -H 'Content-Type: application/json' \
+            --data '{"uid":"timecode-smoke","checkIntervalHours":3,"sources":[],"useTmdbSchedule":false}' \
+            -o /tmp/translationsub-settings-write.json
+
+          curl -fsS --max-time 10 \
+            'http://127.0.0.1:9118/translationsub/v2/settings?uid=timecode-smoke' \
+            -o /tmp/translationsub-settings-read.json
+
+          curl -fsS --max-time 10 -X POST \
+            'http://127.0.0.1:9118/translationsub/v2/subscriptions?uid=timecode-smoke' \
+            -o /tmp/translationsub-empty-command.json
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          for name in ('write', 'read'):
+              response = json.loads(Path(f'/tmp/translationsub-settings-{name}.json').read_text())
+              assert response.get('success') is True, response
+              settings = response.get('settings') or {}
+              assert settings.get('CheckIntervalHours') == 3, settings
+              assert settings.get('UseTmdbSchedule') is False, settings
+
+          error = json.loads(Path('/tmp/translationsub-empty-command.json').read_text())
+          assert error.get('Success') is False and error.get('Error') == 'empty_body', error
+          print('TranslationSub settings persisted, empty command handled safely')
+          PY
+
       - name: Verify typed TimeCode progress reaches TranslationSub snapshot
         shell: bash
         run: |
