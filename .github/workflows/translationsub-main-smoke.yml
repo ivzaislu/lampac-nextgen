@@ -88,7 +88,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/lampac-translationsub-timecode/init.yaml <<'YAML'
+          # Lampac treats loopback absolute URLs as its own /lite route.
+          # Use the runner interface IP for separate mock-balancer origins.
+          mock_ip="$(hostname -I | awk '{print $1}')"
+          test -n "$mock_ip"
+          export NO_PROXY="${NO_PROXY:-},$mock_ip"
+          cat > /tmp/lampac-translationsub-timecode/init.yaml <<YAML
           chromium:
             enable: false
           firefox:
@@ -111,10 +116,10 @@ jobs:
             tmdb_apikey: smoke-test-key
           Collaps:
             enable: true
-            overridehost: http://127.0.0.1:9130/balancer/one
+            overridehost: http://${mock_ip}:9130/balancer/one
           HDVB:
             enable: false
-            overridehost: http://127.0.0.1:9130/balancer/two
+            overridehost: http://${mock_ip}:9130/balancer/two
           listen:
             port: 9118
           YAML
