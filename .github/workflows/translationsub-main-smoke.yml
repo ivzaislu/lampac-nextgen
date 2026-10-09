@@ -182,12 +182,6 @@ jobs:
           print('TranslationSub settings persisted, empty command handled safely')
           PY
 
-      - name: Verify TMDB scheduling, voice aggregation and balancer fallback
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 tests/translationsub/external_integration.py
-
       - name: Verify typed TimeCode progress reaches TranslationSub snapshot
         shell: bash
         run: |
@@ -255,6 +249,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/translationsub/nws_integration.py
+
+      - name: Verify TMDB scheduling, voice aggregation and balancer fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/translationsub/external_integration.py
 
       - name: Diagnostic tail
         if: failure()
