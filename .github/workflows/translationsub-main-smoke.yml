@@ -9,6 +9,7 @@ on:
       - 'Modules/Sync/TimeCode/**'
       - 'Shared/Services/DataArea.cs'
       - '.github/workflows/translationsub-main-smoke.yml'
+      - 'tests/translationsub/**'
   pull_request:
     branches:
       - main
@@ -17,6 +18,7 @@ on:
       - 'Modules/Sync/TimeCode/**'
       - 'Shared/Services/DataArea.cs'
       - '.github/workflows/translationsub-main-smoke.yml'
+      - 'tests/translationsub/**'
   workflow_dispatch:
 
 permissions:
@@ -66,6 +68,22 @@ jobs:
           grep -Fq 'rows.ByIdentity.TryGetValue' "$file"
           ! grep -Fq 'SELECT card, item, data FROM timecodes WHERE user = $user' "$file"
 
+      - name: Start deterministic TMDB and Online mocks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/translationsub/mock_http.py > /tmp/translationsub-mock.log 2>&1 &
+          echo $! > /tmp/translationsub-mock.pid
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 1 http://127.0.0.1:9130/__stats > /dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.2
+          done
+          test "$ready" = 1
+
       - name: Start Lampac with TranslationSub and TimeCode
         shell: bash
         run: |
@@ -85,6 +103,18 @@ jobs:
             LoadModules:
               - TimeCode
               - TranslationSub
+              - Collaps
+              - FlixCDN
+          TranslationSub:
+            enable: true
+            tmdb_apihost: http://127.0.0.1:9130/tmdb
+            tmdb_apikey: smoke-test-key
+          Collaps:
+            enable: true
+            overridehost: http://127.0.0.1:9130/balancer/one
+          FlixCDN:
+            enable: false
+            overridehost: http://127.0.0.1:9130/balancer/two
           listen:
             port: 9118
           YAML
@@ -146,6 +176,12 @@ jobs:
           assert error.get('success') is False and error.get('error') == 'empty_body', error
           print('TranslationSub settings persisted, empty command handled safely')
           PY
+
+      - name: Verify TMDB scheduling, voice aggregation and balancer fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/translationsub/external_integration.py
 
       - name: Verify typed TimeCode progress reaches TranslationSub snapshot
         shell: bash
@@ -209,10 +245,18 @@ jobs:
           print('TranslationSub typed TimeCode sync passed; watchedEpisode=3')
           PY
 
+      - name: Verify NWS profile isolation, fanout and reconnect
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/translationsub/nws_integration.py
+
       - name: Diagnostic tail
         if: failure()
         shell: bash
-        run: tail -n 500 /tmp/lampac-translationsub-timecode.log 2>/dev/null || true
+        run: |
+          tail -n 500 /tmp/lampac-translationsub-timecode.log 2>/dev/null || true
+          tail -n 100 /tmp/translationsub-mock.log 2>/dev/null || true
 
       - name: Stop Lampac
         if: always()
@@ -220,3 +264,4 @@ jobs:
         run: |
           set +e
           [ -f /tmp/lampac-translationsub-timecode.pid ] && kill "$(cat /tmp/lampac-translationsub-timecode.pid)" 2>/dev/null || true
+          [ -f /tmp/translationsub-mock.pid ] && kill "$(cat /tmp/translationsub-mock.pid)" 2>/dev/null || true
