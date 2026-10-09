@@ -110,19 +110,29 @@ jobs:
               - TranslationSub
               - Collaps
               - HDVB
-          TranslationSub:
-            enable: true
-            tmdb_apihost: http://127.0.0.1:9130/tmdb
-            tmdb_apikey: smoke-test-key
-          Collaps:
-            enable: true
-            overridehost: http://${mock_ip}:9130/balancer/one
-          HDVB:
-            enable: false
-            overridehost: http://${mock_ip}:9130/balancer/two
           listen:
             port: 9118
           YAML
+
+          # ModuleInvoke.Init reads module-specific settings from init.conf.
+          # Keep the global Lampac runtime configuration in init.yaml.
+          cat > /tmp/lampac-translationsub-timecode/init.conf <<JSON
+          {
+            "TranslationSub": {
+              "enable": true,
+              "tmdb_apihost": "http://127.0.0.1:9130/tmdb",
+              "tmdb_apikey": "smoke-test-key"
+            },
+            "Collaps": {
+              "enable": true,
+              "overridehost": "http://${mock_ip}:9130/balancer/one"
+            },
+            "HDVB": {
+              "enable": false,
+              "overridehost": "http://${mock_ip}:9130/balancer/two"
+            }
+          }
+          JSON
 
           (cd /tmp/lampac-translationsub-timecode && exec dotnet Core.dll > /tmp/lampac-translationsub-timecode.log 2>&1) &
           echo $! > /tmp/lampac-translationsub-timecode.pid
