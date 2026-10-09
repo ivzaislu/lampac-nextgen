@@ -143,7 +143,7 @@ jobs:
               assert settings.get('UseTmdbSchedule') is False, settings
 
           error = json.loads(Path('/tmp/translationsub-empty-command.json').read_text())
-          assert error.get('Success') is False and error.get('Error') == 'empty_body', error
+          assert error.get('success') is False and error.get('error') == 'empty_body', error
           print('TranslationSub settings persisted, empty command handled safely')
           PY
 
