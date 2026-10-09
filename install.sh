@@ -783,7 +783,8 @@ build_rsync_excludes() {
     ".aspnet/"
     ".claude/"
     ".config/"
-    ".playwright/"
+    # .playwright/package and .playwright/node are managed by the release.
+    # Other .playwright paths remain protected by rsync rules below.
 
     # Пользовательские данные приложения
     "users.json"
@@ -923,6 +924,14 @@ do_update() {
     exit 1
   fi
 
+  # The Playwright JS driver and Node executable must be from the same release
+  # as Microsoft.Playwright.dll. Abort before stopping the service if absent.
+  if [[ ! -f "${staging_dir}/.playwright/package/index.js" || ! -d "${staging_dir}/.playwright/node" ]]; then
+    log_err "Release is missing Playwright driver files (.playwright/package or .playwright/node)."
+    log_err "Update aborted; installed service has not been stopped."
+    exit 1
+  fi
+
   # Копируем сам скрипт и excludes.conf в staging, чтобы rsync --delete их не удалил
   [[ -f "${INSTALL_ROOT}/${UPDATE_SCRIPT_NAME}" ]] && \
     cp -a "${INSTALL_ROOT}/${UPDATE_SCRIPT_NAME}" "${staging_dir}/${UPDATE_SCRIPT_NAME}"
@@ -936,6 +945,16 @@ do_update() {
   for excl in "${RSYNC_EXCLUDES[@]}"; do
     rsync_exclude_args+=(--exclude="$excl")
   done
+
+  # Keep release-managed Playwright files in sync with the .NET assembly.
+  # Protect browser downloads and any other local content under .playwright/.
+  # User-provided excludes.conf entries take precedence over these rules.
+  rsync_exclude_args+=(
+    --include='/.playwright/'
+    --include='/.playwright/package/***'
+    --include='/.playwright/node/***'
+    --exclude='/.playwright/***'
+  )
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '\n  %s┌─ DRY-RUN — no changes will be applied ─────────────────┐%s\n' "$C_YELLOW" "$C_RESET"
