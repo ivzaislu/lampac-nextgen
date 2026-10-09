@@ -545,6 +545,13 @@ confirm_same_version_or_exit() {
     exit 0
   fi
 
+  # --update is commonly used in cron: skip an unchanged release without
+  # prompting, downloading the release zip, or restarting the service.
+  if [[ "$UPDATE" -eq 1 ]]; then
+    log_ok "Version ${desired} is already installed — no update needed."
+    exit 0
+  fi
+
   printf '\n  %sVersion %s is already installed.%s\n' "$C_YELLOW" "$desired" "$C_RESET"
   printf '  Continue anyway? [y/N]: '
 
@@ -899,6 +906,30 @@ _update_restart_service_if_needed() {
   fi
 }
 
+# Compare the bundled Playwright driver by file content, not timestamps.
+# A matching driver must not be recopied on repeated forced updates.
+playwright_sync_required() {
+  local staging_dir="$1"
+  local installed="${INSTALL_ROOT}/.playwright/"
+  local changes
+
+  # Missing local driver: restore it from the release.
+  [[ -d "$installed" ]] || return 0
+
+  # Only package/ and node/ are release-managed; everything else is local data.
+  if ! changes=$(rsync -rcln --delete \
+      --include='/package/***' \
+      --include='/node/***' \
+      --exclude='*' \
+      --out-format='%i %n' \
+      "${staging_dir}/.playwright/" "$installed"); then
+    log_err "Failed to compare installed and release Playwright drivers."
+    exit 1
+  fi
+
+  [[ -n "$changes" ]]
+}
+
 do_update() {
   local new_version="$1"
 
@@ -946,21 +977,31 @@ do_update() {
     rsync_exclude_args+=(--exclude="$excl")
   done
 
-  # Keep release-managed Playwright files in sync with the .NET assembly.
-  # Protect browser downloads and any other local content under .playwright/.
-  # User-provided excludes.conf entries take precedence over these rules.
-  rsync_exclude_args+=(
-    --include='/.playwright/'
-    --include='/.playwright/package/***'
-    --include='/.playwright/node/***'
-    --exclude='/.playwright/***'
-  )
+  # Sync the Playwright JS driver and Node only if their contents differ,
+  # or if they are missing. Preserve browser downloads and other local data.
+  # Custom excludes.conf entries continue to take precedence.
+  local rsync_compare_args=()
+  if playwright_sync_required "$staging_dir"; then
+    log_info "Playwright driver changed or missing — updating from release."
+    rsync_exclude_args+=(
+      --include='/.playwright/'
+      --include='/.playwright/package/***'
+      --include='/.playwright/node/***'
+      --exclude='/.playwright/***'
+    )
+    # Ensure changed contents are copied even if size and timestamps match.
+    rsync_compare_args+=(--checksum)
+  else
+    log_skip "Playwright driver unchanged — keeping installed files."
+    rsync_exclude_args+=(--exclude='/.playwright/')
+  fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     printf '\n  %s┌─ DRY-RUN — no changes will be applied ─────────────────┐%s\n' "$C_YELLOW" "$C_RESET"
 
     local rsync_output
     rsync_output=$(rsync -a --delete --dry-run --itemize-changes \
+      "${rsync_compare_args[@]}" \
       "${rsync_exclude_args[@]}" \
       "${staging_dir}/" \
       "${INSTALL_ROOT}/" \
@@ -1001,6 +1042,7 @@ do_update() {
   spinner_ok "Service stopped"
 
   if ! rsync -a --delete \
+      "${rsync_compare_args[@]}" \
       "${rsync_exclude_args[@]}" \
       "${staging_dir}/" \
       "${INSTALL_ROOT}/"; then
