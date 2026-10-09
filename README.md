@@ -257,7 +257,7 @@ journalctl -u lampac -f
 | `*.db`, `*.db-shm`, `*.db-wal` | SQLite (Sync, SISI, TimeCode) |
 | `logs/`, `cache/` | Логи и кеш |
 | `TorrServer`, `torrserver/`, `data/ts/` | TorrServer и его данные |
-| `.local/`, `.aspnet/`, `.claude/`, `.config/`, `.playwright/` | Домашние директории пользователя |
+| `.local/`, `.aspnet/`, `.claude/`, `.config/` | Домашние директории пользователя (`.playwright/` обновляется вместе с релизом) |
 | `users.json`, `passwd`, `current.conf`, `database/` | Пользовательские данные |
 | `wwwroot/` | Пользовательская статика и кеш Lampa UI |
 | `plugins/override/` | Переопределения плагинов |
