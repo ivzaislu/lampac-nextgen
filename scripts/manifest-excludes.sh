@@ -18,13 +18,14 @@ usage() {
 Manage protected module manifests without editing install.sh.
 
 Usage:
-  manifest-excludes.sh add MODULE [MODULE ...]     Protect manifests
-  manifest-excludes.sh remove MODULE [MODULE ...]  Stop protecting manifests
+  manifest-excludes.sh add MODULE_PATH [MODULE_PATH ...]     Protect manifests
+  manifest-excludes.sh remove MODULE_PATH [MODULE_PATH ...]  Stop protecting manifests
   manifest-excludes.sh list                         List protected manifests
 
-Only module/NAME/manifest.json is excluded, not the whole module directory.
-The module must already exist when adding a rule. Its current "enable" value
-is preserved during later updates; this script does not change that value.
+Only module/MODULE_PATH/manifest.json is excluded, not the whole module folder.
+The path is relative to the 'module' directory (e.g. AdminPanel or
+OnlineRUS/FlixCDN). The manifest must exist when adding a rule. Its current
+'enable' value is preserved during updates; this script does not change it.
 
 Set LAMPAC_INSTALL_ROOT to override /opt/lampac.
 EOF
@@ -32,9 +33,15 @@ EOF
 
 fail() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 
-valid_name() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] &&
-    [[ "$1" != "." && "$1" != ".." ]]
+valid_module_path() {
+  local path="$1" part
+  local -a parts
+  [[ -n "$path" && "$path" != /* && "$path" != */ && "$path" != *'//'* ]] || return 1
+  IFS='/' read -r -a parts <<< "$path"
+  for part in "${parts[@]}"; do
+    [[ "$part" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ &&
+       "$part" != "." && "$part" != ".." ]] || return 1
+  done
 }
 
 [[ $# -ge 1 ]] || { usage; exit 2; }
@@ -79,9 +86,9 @@ if [[ -f "$EXCLUDES" ]]; then
       end_count=$((end_count + 1))
       inside=0
     elif (( inside )); then
-      if [[ "$line" =~ ^/module/([A-Za-z0-9][A-Za-z0-9._-]*)/manifest[.]json$ ]]; then
+      if [[ "$line" =~ ^/module/(.+)/manifest[.]json$ ]]; then
         name="${BASH_REMATCH[1]}"
-        valid_name "$name" || fail "invalid module name inside managed block: $name"
+        valid_module_path "$name" || fail "invalid module path inside managed block: $name"
         protected["$name"]=1
       else
         fail "unknown entry inside managed block: $line"
@@ -106,7 +113,7 @@ if [[ "$command" == list ]]; then
 fi
 
 for name in "${@:2}"; do
-  valid_name "$name" || fail "invalid module name: $name"
+  valid_module_path "$name" || fail "invalid module path: $name"
   if [[ "$command" == add ]]; then
     [[ -f "$ROOT/module/$name/manifest.json" ]] ||
       fail "manifest not found: $ROOT/module/$name/manifest.json"
