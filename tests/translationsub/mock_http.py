@@ -86,6 +86,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Mock TMDB and Online balancers on 127.0.0.1:{PORT}", flush=True)
     server.serve_forever(poll_interval=0.2)
