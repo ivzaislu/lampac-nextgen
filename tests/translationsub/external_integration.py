@@ -48,10 +48,10 @@ def sources(state):
 base = f"{LAMPAC}/translationsub/v2"
 settings = json_request(f"{base}/settings?uid={UID}")
 available = {s["id"].lower() for s in settings["availableSourceItems"]}
-assert {"collaps", "flixcdn"}.issubset(available), available
+assert {"collaps", "hdvb"}.issubset(available), available
 json_request(
     f"{base}/settings?uid={UID}",
-    {"uid": UID, "sources": ["collaps", "flixcdn"], "checkIntervalHours": 1,
+    {"uid": UID, "sources": ["collaps", "hdvb"], "checkIntervalHours": 1,
      "useTmdbSchedule": True},
 )
 print("PASS: registered local and override Online sources")
@@ -61,7 +61,7 @@ state = json_request(f"{base}/content-state?uid={UID}", payload)
 assert state.get("eligible") is True, state
 assert len(state.get("voices", [])) == 1, state
 eq(state["voices"][0]["latestEpisode"], 3, "highest available episode")
-assert {"collaps", "flixcdn"} == sources(state), state
+assert {"collaps", "hdvb"} == sources(state), state
 assert state["content"]["tmdbId"] == "123", state
 print("PASS: both mock balancers merge the same voice; mock TMDB resolves content")
 
