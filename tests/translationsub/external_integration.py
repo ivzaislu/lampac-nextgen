@@ -58,6 +58,8 @@ print("PASS: registered local and override Online sources")
 
 payload = {"uid": UID, "card": CARD, "includeVoices": True}
 state = json_request(f"{base}/content-state?uid={UID}", payload)
+print("Mock request counters after content-state:",
+      json_request(f"{MOCK}/__stats")["counts"], flush=True)
 assert state.get("eligible") is True, state
 assert len(state.get("voices", [])) == 1, state
 eq(state["voices"][0]["latestEpisode"], 3, "highest available episode")
