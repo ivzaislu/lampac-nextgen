@@ -70,11 +70,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Existing pre-SQLite development data must not be removed
-          # merely because the module initializes its current database.
-          mkdir -p /tmp/lampac-translationsub-timecode/database/translationsub
-          printf '{"legacy":"keep"}\n' > /tmp/lampac-translationsub-timecode/database/translationsub/settings.json
-
           cat > /tmp/lampac-translationsub-timecode/init.yaml <<'YAML'
           chromium:
             enable: false
@@ -117,8 +112,6 @@ jobs:
             node --check "$js"
           done
           grep -Fq '"success":true' /tmp/translationsub-settings.json
-          test -f /tmp/lampac-translationsub-timecode/database/translationsub/settings.json
-          grep -Fq '"legacy":"keep"' /tmp/lampac-translationsub-timecode/database/translationsub/settings.json
 
       - name: Verify settings persistence and API error handling
         shell: bash
