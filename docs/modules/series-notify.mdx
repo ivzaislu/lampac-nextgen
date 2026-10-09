@@ -1,20 +1,22 @@
 ---
-title: "Tg-notify.bot: Telegram-уведомления о новых сериях"
-sidebarTitle: "Tg-notify"
-description: "Tg-notify.bot отслеживает выход новых серий через Trakt/TMDB и доступность озвучек через Mirage/Collaps и шлёт уведомления в Telegram."
-keywords: ["Tg-notify", "Telegram bot", "уведомления", "Trakt", "TMDB"]
+title: "SeriesNotify: Telegram-уведомления о новых сериях и озвучках"
+sidebarTitle: "SeriesNotify"
+description: "Telegram-уведомления о новых сериях и озвучках: Trakt/TMDB для эпизодов, Mirage/Collaps/VideoHub для озвучек, плагин Lampa для подписок."
+keywords: ["SeriesNotify", "Telegram", "уведомления", "серии", "озвучки", "Trakt", "TMDB"]
 ---
 
-**Tg-notify.bot** — это фоновый Telegram-бот для Lampac NextGen, который уведомляет пользователей о выходе новых серий любимых сериалов и появлении выбранной озвучки. Бот объединяет три подсистемы: трекер эпизодов через Trakt и TMDB, трекер озвучек через балансеры Mirage и Collaps, а также клиентский плагин Lampa для управления подписками.
+**SeriesNotify** — фоновый Telegram-бот для Lampac NextGen: уведомления о выходе новых серий и появлении выбранной озвучки. Три подсистемы: трекер эпизодов (Trakt/TMDB), трекер озвучек (Mirage, Collaps, VideoHub), клиентский плагин Lampa для подписок.
+
+Секция `init.conf` пока называется **`TelegramBot`** (ключ не мигрирован). Папка модуля и `SkipModules` — **`SeriesNotify`**.
 
 ## Включение модуля
 
 <Steps>
   <Step title="Проверьте SkipModules">
-    Убедитесь, что `Tg-notify.bot` или `TelegramBot` не добавлены в `BaseModule.SkipModules` в `init.conf`. Если имя есть в списке — удалите его.
+    Убедитесь, что `SeriesNotify` не добавлен в `BaseModule.SkipModules` в `init.conf`. Если имя есть в списке — удалите его.
   </Step>
   <Step title="Включите в manifest.json">
-    В файле `Modules/Tg-notify.bot/manifest.json` установите `"enable": true`. По умолчанию в репозитории стоит `false`.
+    В файле `Modules/SeriesNotify/manifest.json` установите `"enable": true`. По умолчанию в репозитории стоит `false`.
   </Step>
   <Step title="Добавьте секцию TelegramBot в init.conf">
     Скопируйте пример конфигурации ниже в `init.conf` и заполните свои токены.

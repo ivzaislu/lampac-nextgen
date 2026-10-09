@@ -1,8 +1,8 @@
-# Tg-notify.bot
+# SeriesNotify
 
-Фоновый **Telegram-бот уведомлений о новых сериях и озвучках** (long polling). Пользователь подписывается на сериал прямо из карточки Lampa, а бот сам отслеживает выход новых эпизодов и появление выбранной озвучки и шлёт уведомление в Telegram с обложкой, номером серии и описанием из TMDB.
+Telegram-уведомления о новых сериях и озвучках (long polling). Пользователь подписывается на сериал прямо из карточки Lampa, а бот сам отслеживает выход новых эпизодов и появление выбранной озвучки и шлёт уведомление в Telegram с обложкой, номером серии и описанием из TMDB.
 
-Проект: **`Modules/Tg-notify.bot/`**. C#-namespace модуля — `TelegramBot`.
+Проект: **`Modules/SeriesNotify/`**. Assembly — `SeriesNotify`. C#-namespace / секция `init.conf` — **`TelegramBot`** (пока без миграции ключа).
 
 Бот объединяет три подсистемы:
 
@@ -14,7 +14,7 @@
 
 ## Включение
 
-1. В шаблоне [`config/base.conf`](../../../config/base.conf) при необходимости проверьте, что **`TelegramBot`** не попал в **`BaseModule.SkipModules`** (если попал — уберите имя из списка, иначе модуль не загрузится).
+1. В шаблоне [`config/base.conf`](../../../config/base.conf) при необходимости проверьте, что **`SeriesNotify`** не попал в **`BaseModule.SkipModules`** (если попал — уберите имя из списка, иначе модуль не загрузится).
 2. [`manifest.json`](manifest.json): выставьте **`"enable": true`** (в репозитории по умолчанию `false`).
 3. `init.conf`: добавьте секцию **`TelegramBot`**. Пример — [`init.merge.example.json`](init.merge.example.json).
 4. Перезапустите сервис: `systemctl restart lampac` (или имя вашего systemd-юнита).
@@ -67,9 +67,9 @@
 ## Структура модуля
 
 ```
-Tg-notify.bot/
+SeriesNotify/
 ├── manifest.json              # dynamic:true, references+tree
-├── Tg-notify.bot.csproj       # только для локальной сборки; на сервере не используется
+├── SeriesNotify.csproj        # только для локальной сборки; на сервере не используется
 ├── init.merge.example.json    # пример секции init.conf
 ├── ModInit.cs                 # ядро: polling, трекинг серий, парсеры озвучек, HTTP API
 ├── Models/
