@@ -104,7 +104,7 @@ jobs:
               - TimeCode
               - TranslationSub
               - Collaps
-              - FlixCDN
+              - HDVB
           TranslationSub:
             enable: true
             tmdb_apihost: http://127.0.0.1:9130/tmdb
@@ -112,7 +112,7 @@ jobs:
           Collaps:
             enable: true
             overridehost: http://127.0.0.1:9130/balancer/one
-          FlixCDN:
+          HDVB:
             enable: false
             overridehost: http://127.0.0.1:9130/balancer/two
           listen:
