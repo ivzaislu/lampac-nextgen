@@ -130,6 +130,28 @@ config/local.conf
 *.custom
 ```
 
+## Защита manifest.json выбранных модулей
+
+Вместо ручного редактирования `excludes.conf` используйте отдельный скрипт [`scripts/manifest-excludes.sh`](https://github.com/ivzaislu/lampac-nextgen/blob/install/scripts/manifest-excludes.sh) из ветки `install`. Установщик менять не нужно — он уже учитывает `excludes.conf`.
+
+```bash
+# Защитить манифесты (включая вложенные модули)
+curl -fsSL https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/install/scripts/manifest-excludes.sh \
+  | sudo bash -s -- add AdminPanel OnlineRUS/FlixCDN
+
+# Посмотреть список
+curl -fsSL https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/install/scripts/manifest-excludes.sh \
+  | sudo bash -s -- list
+
+# Снять защиту с одного модуля
+curl -fsSL https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/install/scripts/manifest-excludes.sh \
+  | sudo bash -s -- remove OnlineRUS/FlixCDN
+```
+
+Скрипт добавляет в `/opt/lampac/excludes.conf` отдельный управляемый блок, сохраняя остальные пользовательские правила. Исключается только файл `module/ИМЯ/manifest.json`; исходники модуля продолжат обновляться.
+
+Перед добавлением проверьте, что в нужном манифесте выставлено `"enable": true`. Скрипт **не меняет** флаг, а сохраняет весь файл манифеста при будущих обновлениях. Если обновление изменит параметры или структуру манифеста, защищённый файл **не получит** эти изменения. После изменения списка модулей перезапуск Lampac не требуется — правила действуют при следующем обновлении.
+
 <Tip>
   Используйте флаг `--dry-run` при обновлении через `install.sh`, чтобы увидеть, какие файлы будут изменены, удалены или сохранены, без фактических изменений:
 
