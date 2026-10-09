@@ -201,6 +201,10 @@ curl -fsSL https://raw.githubusercontent.com/lampac-nextgen/lampac/main/install.
 # Повторная установка той же версии (без интерактивного подтверждения)
 curl -fsSL https://raw.githubusercontent.com/lampac-nextgen/lampac/main/install.sh | sudo bash -s -- --update --force
 
+# Для cron используйте --update без --force: при совпадении версий архив не скачивается,
+# а сервис не перезапускается. --force принудительно скачивает релиз повторно.
+# Драйвер Playwright синхронизируется только при изменении его файлов или их отсутствии.
+
 # Проверка обновления без изменений
 curl -fsSL https://raw.githubusercontent.com/lampac-nextgen/lampac/main/install.sh | sudo bash -s -- --update --dry-run
 
