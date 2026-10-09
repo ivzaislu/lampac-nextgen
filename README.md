@@ -282,6 +282,15 @@ config/local.conf
 
 Пути относительно `LAMPAC_INSTALL_ROOT`, для папок — trailing slash, поддерживаются glob-паттерны.
 
+Чтобы сохранить вручную включённые модули (`"enable": true`) при обновлениях, используйте [отдельный скрипт](scripts/manifest-excludes.sh) для добавления **только** их `manifest.json` в `excludes.conf`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/install/scripts/manifest-excludes.sh \
+  | sudo bash -s -- add AdminPanel OnlineRUS/FlixCDN
+```
+
+Управление: `add`, `remove`, `list`. Сохраняется весь манифест, поэтому новые поля манифеста из релизов не будут обновляться для защищённых модулей.
+
 </details>
 
 ---
