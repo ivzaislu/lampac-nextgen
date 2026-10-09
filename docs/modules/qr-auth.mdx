@@ -34,7 +34,7 @@ keywords: ["QRAuth", "QRAuthBot", "DenyPage", "QR-вход", "Telegram bot", "ac
 
 <Steps>
   <Step title="Включите модуль в manifest.json">
-    В файле `Modules/Community/QRAuth/manifest.json` установите `"enable": true`. По умолчанию в репозитории стоит `false`. Также проверьте, что `QRAuth` нет в `BaseModule.SkipModules`.
+    В файле `Modules/Community/QRAuth/manifest.json` установите `"enable": true`. По умолчанию в репозитории стоит `false`. Уберите `QRAuth` из `BaseModule.SkipModules` (в `base.conf` модуль в SkipModules по умолчанию).
   </Step>
   <Step title="Включите accsdb">
     Задайте `accsdb.enable: true` и длинный `shared_passwd`. Модуль работает только поверх `accsdb`.
@@ -132,7 +132,7 @@ keywords: ["QRAuth", "QRAuthBot", "DenyPage", "QR-вход", "Telegram bot", "ac
 ## Отдельный бот для QRAuth
 
 <Warning>
-  QRAuth нужен **отдельный бот**. Если рядом стоит [SeriesNotify](/modules/series-notify) (секция `TelegramBot`), у `QRAuthBot` и `TelegramBot` должны быть разные `bot_token`.
+  QRAuth нужен **отдельный бот**. Если рядом стоит [SeriesNotify](/modules/series-notify) (секция `SeriesNotify`), у `QRAuthBot` и `SeriesNotify` должны быть разные `bot_token`.
 </Warning>
 
 <AccordionGroup>
@@ -146,7 +146,7 @@ keywords: ["QRAuth", "QRAuthBot", "DenyPage", "QR-вход", "Telegram bot", "ac
     Создайте в [@BotFather](https://t.me/BotFather) два бота: один для QRAuth, другой для SeriesNotify.
   </Accordion>
   <Accordion title="Обновление со старой версии">
-    До переименования QRAuth читал секцию `TelegramBot`, ту же, что и SeriesNotify. Переименуйте секцию QRAuth в `init.conf` в `QRAuthBot`. Иначе бот QRAuth не запустится.
+    До переименования QRAuth читал секцию `TelegramBot`. Переименуйте секцию QRAuth в `init.conf` в `QRAuthBot`. Уведомления о сериях — секция `SeriesNotify` (старый ключ `TelegramBot` больше не читается).
   </Accordion>
 </AccordionGroup>
 
@@ -296,7 +296,7 @@ curl http://localhost:9118/tgbot/qr/posters
 | Симптом | Что проверить |
 | --- | --- |
 | В логе нет `loaded module: QRAuth` | `"enable": true` в `manifest.json`, `QRAuth` нет в `SkipModules`. Модуль с `"enable": false` пропускается молча. |
-| `bot_token пустой — проверьте секцию QRAuthBot` | Секция называется `QRAuthBot`, а не `TelegramBot`. |
+| `bot_token пустой — проверьте секцию QRAuthBot` | Секция называется `QRAuthBot`, а не `SeriesNotify`. |
 | `409 Conflict` в `tgbot.log` | Этот токен опрашивает второй процесс: другой Lampac или SeriesNotify. |
 | Заявки никому не приходят | `admin_ids` задан массивом и содержит ваш Telegram ID. |
 | QR открывает не тот бот | `DenyPage.tg_target` указывает на бот из `QRAuthBot`. |

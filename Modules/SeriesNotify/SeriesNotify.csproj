@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>library</OutputType>
     <IsPackable>true</IsPackable>
-    <RootNamespace>TelegramBot</RootNamespace>
+    <RootNamespace>SeriesNotify</RootNamespace>
     <AssemblyName>SeriesNotify</AssemblyName>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>

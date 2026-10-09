@@ -5,7 +5,7 @@ using Shared;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace TelegramBot.Controllers
+namespace SeriesNotify.Controllers
 {
     public class TgNotifyController : BaseController
     {

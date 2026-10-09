@@ -54,7 +54,7 @@
 
 ## 🚀 Быстрый старт
 
-**1. Включите модуль** - в `Modules/Community/QRAuth/manifest.json` поставьте `"enable": true` (по умолчанию модуль выключен).
+**1. Включите модуль** - в `Modules/Community/QRAuth/manifest.json` поставьте `"enable": true` и уберите `QRAuth` из `BaseModule.SkipModules` (в `base.conf` модуль в SkipModules по умолчанию).
 
 Собирать ничего не нужно: Roslyn компилирует `.cs` на лету, а `Telegram.Bot.dll` уже лежит в `references/`.
 
@@ -90,7 +90,7 @@
 > Токен бота выдаёт [@BotFather](https://t.me/BotFather) (`/newbot`), свой Telegram ID для `admin_ids` покажет [@userinfobot](https://t.me/userinfobot).
 
 > [!WARNING]
-> **Для QRAuth нужен отдельный бот.** Если рядом стоит модуль [SeriesNotify](../../SeriesNotify) (секция `TelegramBot`), у `QRAuthBot` и `TelegramBot` должны быть **разные** `bot_token`. `DenyPage.tg_target` должен указывать на бот из `QRAuthBot`.
+> **Для QRAuth нужен отдельный бот.** Если рядом стоит модуль [SeriesNotify](../../SeriesNotify) (секция `SeriesNotify`), у `QRAuthBot` и `SeriesNotify` должны быть **разные** `bot_token`. `DenyPage.tg_target` должен указывать на бот из `QRAuthBot`.
 
 <details>
 <summary>❓ <b>Почему нельзя один токен на оба модуля</b></summary>
