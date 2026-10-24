@@ -118,6 +118,15 @@ The test sends real external requests through Lampac, follows up to six
 stream. On this low-powered VPS do just ONE test at a time; do not run
 parallel browser tests.
 
+In a real HDVB smoke check, Lampac returned movie -> play and two HLS
+manifests, then 65,536 bytes of video/mp2t; FFprobe did not confirm a
+codec from that partial sample. The next CLI version reports MPEG-TS packet
+framing (`mpegts_sync_detected`, `mpegts_packet_count`,
+`mpegts_pat_seen`) and FFprobe's **numeric exit code / sanitized issue
+category**, so users can distinguish valid stream transport from
+inconclusive codec detection. No raw ffprobe stderr (potentially containing
+tokenized URLs) is printed.
+
 Exit codes: 0 passed with codec, 1 failed, 2 inconclusive, 3 blocked,
 4 unknown status. In particular `inconclusive` can mean provider outage,
 RCH/auth requirement, geo restrictions, an unreadable partial segment or
