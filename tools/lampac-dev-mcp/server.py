@@ -453,7 +453,14 @@ def run_live_online_test(task_id: str, provider: str, params: dict[str, str], br
         # Browser is started by Lampac itself, not by the MCP test process.
         # This is advisory only; the Lampac test instance may be containerized.
         preflight = vps_browser_preflight(browser_mode)
-        report = run_online(provider, params)
+        # FlixCDN starts a separate headed Chromium + Xvfb during the
+        # /lite/flixcdn/stream navigation call, so it needs a larger
+        # bounded timeout on low-memory VPS hosts.
+        browser_navigation_timeout = (
+            90 if browser_mode == "headed" or provider.lower() == "flixcdn" else 12
+        )
+        report = run_online(
+            provider, params, navigation_timeout=browser_navigation_timeout)
         report["browser_preflight"] = preflight
         report["tested_sha"] = sha
         state["validation"] = report["status"]
