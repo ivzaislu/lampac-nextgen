@@ -274,13 +274,24 @@ def task_diff(task_id: str) -> str:
 
 
 @mcp.tool()
+def task_status(task_id: str) -> dict:
+    """Return branch, current changes, and latest build log tail."""
+    worktree, state = _task(task_id)
+    changes = _git(["status", "--short"], cwd=worktree).stdout
+    log = ROOT / "tasks" / (task_id + "-build.log")
+    return {**state, "changed_files": changes.splitlines()[:100],
+            "build_log_tail": log.read_text(encoding="utf-8")[-8000:] if log.exists() else None}
+
+
+@mcp.tool()
 def publish_branch(task_id: str, message: str) -> dict:
     """Commit and push ONLY this task branch. No PR, no merge, never main."""
     if not 8 <= len(message) <= 180 or "\n" in message:
         raise ValueError("Commit message must be 8..180 chars on one line")
     with _lock():
         worktree, state = _task(task_id)
-        _git(["add", "--", *FOLDERS, *ALLOWED_ROOT_FILES], cwd=worktree)
+        editable = [name for name in (*FOLDERS, *ALLOWED_ROOT_FILES) if (worktree / name).exists()]
+        _git(["add", "--", *editable], cwd=worktree)
         if _git(["diff", "--cached", "--quiet"], cwd=worktree, check=False).returncode == 0:
             return {"status": "unchanged", "branch": state["branch"]}
         _git(["-c", "user.name=Lampac Dev MCP",
