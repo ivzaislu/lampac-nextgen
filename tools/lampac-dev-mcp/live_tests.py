@@ -4,6 +4,7 @@ Never pass arbitrary URLs to this runner. Discovery happens through the Lampac A
 and external CDN egress requires explicit hostname allowlisting.
 """
 import ipaddress
+import http.client
 import json
 import os
 import resource
@@ -32,8 +33,9 @@ HOSTS = tuple(
 
 
 class TestIssue(Exception):
-    def __init__(self, status, reason):
+    def __init__(self, status, reason, details=None):
         self.status, self.reason = status, reason
+        self.details = details or {}
         super().__init__(reason)
 
 
@@ -98,7 +100,32 @@ def _authorize(url):
     return url
 
 
-def _fetch(url, headers=None):
+def _network_error_kind(exc):
+    """Classify network exceptions without exposing credentials or tokenized URLs."""
+    root = exc.reason if isinstance(exc, URLError) else exc
+    if isinstance(root, socket.gaierror):
+        return "dns"
+    if isinstance(root, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(root, ConnectionResetError):
+        return "connection-reset"
+    if isinstance(root, ConnectionRefusedError):
+        return "connection-refused"
+    if isinstance(root, http.client.IncompleteRead):
+        return "truncated-response"
+    # Some TLS/proxy stacks wrap timeout as a string, not a TimeoutError.
+    if isinstance(root, str) and "timed out" in root.lower():
+        return "timeout"
+    return "transport-error"
+
+
+def _fetch(url, headers=None, timeout=12, retry_network=False,
+           phase="provider", metrics=None):
+    """Range-limited GET, manually checked redirects, at most one transient retry.
+
+    Retry applies only to transport failure, never authorization, HTTP status,
+    redirects or malformed stream data. No user-supplied URL is trusted.
+    """
     request_headers = {"User-Agent": "LampacDevMCP/0.1", "Accept-Encoding": "identity",
                        "Range": f"bytes=0-{READ_LIMIT - 1}"}
     if headers:
@@ -107,28 +134,46 @@ def _fetch(url, headers=None):
                 request_headers[key] = value
     for _ in range(4):
         safe_url = _authorize(url)
-        req = Request(safe_url, headers=request_headers, method="GET")
-        try:
-            resp = _opener.open(req, timeout=12)
-        except HTTPError as exc:
-            if exc.code in (301, 302, 303, 307, 308):
-                loc = exc.headers.get("Location")
-                if not loc:
-                    raise TestIssue("failed", "Redirect missing Location")
-                url = urljoin(safe_url, loc)
-                continue
-            status = "inconclusive" if exc.code in (401, 403, 407, 408, 429, 451, 500, 502, 503, 504) else "failed"
-            raise TestIssue(status, f"HTTP {exc.code} from test endpoint") from None
-        except (URLError, TimeoutError, OSError) as exc:
-            raise TestIssue("inconclusive", "Network error or timeout") from exc
-        with resp:
-            kind = resp.headers.get("Content-Type", "").lower().split(";")[0]
-            data = resp.read(READ_LIMIT)
-        if not data:
-            raise TestIssue("failed", "Empty response")
-        return data, kind
+        destination = ("lampac-loopback" if _origin(safe_url) == _origin(_base())
+                       else "allowlisted-https")
+        redirect = None
+        for attempt in range(2 if retry_network else 1):
+            req = Request(safe_url, headers=request_headers, method="GET")
+            try:
+                with _opener.open(req, timeout=timeout) as resp:
+                    kind = resp.headers.get("Content-Type", "").lower().split(";")[0]
+                    data = resp.read(READ_LIMIT)
+            except HTTPError as exc:
+                if exc.code in (301, 302, 303, 307, 308):
+                    loc = exc.headers.get("Location")
+                    if not loc:
+                        raise TestIssue("failed", "Redirect missing Location")
+                    redirect = urljoin(safe_url, loc)
+                    break
+                status = ("inconclusive" if exc.code in
+                          (401, 403, 407, 408, 429, 451, 500, 502, 503, 504) else "failed")
+                raise TestIssue(status, f"HTTP {exc.code} from test endpoint",
+                                {"phase": phase, "endpoint": destination}) from None
+            except (URLError, TimeoutError, OSError, http.client.IncompleteRead) as exc:
+                issue = _network_error_kind(exc)
+                if attempt == 0 and retry_network:
+                    if metrics is not None:
+                        metrics["network_retries"] = metrics.get("network_retries", 0) + 1
+                    continue
+                raise TestIssue("inconclusive", "Network failure during " + phase,
+                                {"phase": phase, "endpoint": destination,
+                                 "network_error": issue,
+                                 "attempts": attempt + 1,
+                                 "timeout_seconds": timeout}) from None
+            if not data:
+                raise TestIssue("failed", "Empty response",
+                                {"phase": phase, "endpoint": destination})
+            return data, kind
+        if redirect is None:
+            raise TestIssue("inconclusive", "No response after network attempts",
+                            {"phase": phase, "endpoint": destination})
+        url = redirect
     raise TestIssue("failed", "Too many HTTP redirects")
-
 
 def _load_json(payload):
     try:
@@ -206,8 +251,19 @@ def _ffprobe_issue(stderr):
 def _media_probe(url, headers):
     """For HLS follow at most 3 manifests, then sample ONE segment; never download full video."""
     hls_count = 0
+    metrics = {"network_retries": 0}
     while hls_count < 4:
-        data, kind = _fetch(url, headers=headers)
+        # URL extensions are not trustworthy indicators: HLS can be served by
+        # generic proxy endpoints. Report what step failed without exposing URLs.
+        phase = ("initial-playback" if hls_count == 0 else
+                 "hls-followup-{}".format(hls_count))
+        try:
+            data, kind = _fetch(url, headers=headers, timeout=20,
+                                retry_network=True, phase=phase, metrics=metrics)
+        except TestIssue as exc:
+            exc.details.setdefault("hls_manifests_completed", hls_count)
+            exc.details.setdefault("network_retries", metrics["network_retries"])
+            raise
         preview = data[:1024].lstrip()
         if preview.startswith(b"#EXTM3U"):
             hls_count += 1
@@ -226,7 +282,8 @@ def _media_probe(url, headers):
         # This is real stream I/O, not a codec proof. Optional ffprobe verifies a codec.
         summary = {"bytes_sampled": len(data), "media_type": kind or "unknown",
                    "hls_manifests": hls_count, "sample_retrieved": True,
-                   "codec_confirmed": False, "codec_status": "inconclusive"}
+                   "codec_confirmed": False, "codec_status": "inconclusive",
+                   "network_retries": metrics["network_retries"]}
         ts = _ts_packet_profile(data)
         if ts:
             summary.update(ts)
@@ -321,5 +378,6 @@ def run_online(provider, params):
                     raise TestIssue("blocked", "Provider navigation URL is not Lampac test instance")
         raise TestIssue("inconclusive", "Reached navigation step limit")
     except TestIssue as exc:
-        steps.append({"stage": "test_stop", "status": exc.status, "reason": exc.reason})
+        steps.append({"stage": "test_stop", "status": exc.status,
+                      "reason": exc.reason, **exc.details})
         return {"status": exc.status, "provider": provider, "steps": steps}
