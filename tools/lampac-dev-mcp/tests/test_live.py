@@ -63,6 +63,22 @@ class TestLive(unittest.TestCase):
                 live_tests._authorize("http://127.0.0.1:29118/admin/delete")
         self.assertEqual(cm.exception.status, "blocked")
 
+    def test_mpegts_framing_profile(self):
+        sample = (b"\\x47\\x40\\x00" + b"\\x10" + b"\\xff" * 184) * 8
+        profile = live_tests._ts_packet_profile(sample)
+        self.assertTrue(profile["mpegts_sync_detected"])
+        self.assertEqual(profile["mpegts_packet_count"], 8)
+        self.assertTrue(profile["mpegts_pat_seen"])
+
+    def test_reject_false_mpegts(self):
+        sample = b"not a transport stream" * 80
+        self.assertIsNone(live_tests._ts_packet_profile(sample))
+
+    def test_ffprobe_error_redaction(self):
+        raw = b"secret=abc and Invalid data found when processing input"
+        self.assertEqual(live_tests._ffprobe_issue(raw),
+                         "fragment-insufficient-or-invalid")
+
     def test_disallow_internal_cdns(self):
         with self.assertRaises(live_tests.TestIssue) as cm:
             live_tests._authorize("http://169.254.169.254/latest/meta-data/")
