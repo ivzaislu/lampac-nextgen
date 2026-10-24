@@ -134,6 +134,18 @@ a 2 GB physical RAM allocation or a per-process RSS guarantee.
 Check `ffprobe -version` under the same VPS account if exit 127 recurs.
 No raw ffprobe stderr (potentially containing tokenized URLs) is printed.
 
+An intermittent HDVB repeat reached the `play` URL but the stream fetch
+timed out. Streaming requests now use a 20-second connection/read timeout and
+one additional attempt **only after a transport error**. It does not retry
+HTTP errors, permission failures or provider search calls. The output includes
+`phase` (initial playback or HLS follow-up), `endpoint`
+(`lampac-loopback` or allowlisted HTTPS), `network_error` (timeout,
+DNS, connection reset etc.), `attempts` and `network_retries`.
+When the endpoint is `lampac-loopback`, the upstream CDN can still be the
+root cause because Lampac may act as an HTTP proxy. These diagnostic labels
+never include signed URLs, stream tokens or raw response bodies. The timeout
+still cannot prove that a remote provider is generally broken.
+
 Exit codes: 0 passed with codec, 1 failed, 2 inconclusive, 3 blocked,
 4 unknown status. In particular `inconclusive` can mean provider outage,
 RCH/auth requirement, geo restrictions, an unreadable partial segment or
