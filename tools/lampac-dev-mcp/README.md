@@ -202,10 +202,28 @@ Run one test; FlixCDN launches its own headed Chromium and Xvfb on
 the streaming step (separate from Lampac's headless Chromium):
 
     timeout 180s sudo -u ubuntu python3 probe_online.py --provider flixcdn \
+      --navigation-timeout 90 \
       --param "kinopoisk_id=258687" --param "title=Интерстеллар"
     echo "exit code: $?"
     docker inspect lampac-mcp-test --format 'OOM={{.State.OOMKilled}} Status={{.State.Status}}'
     docker stats --no-stream lampac-mcp-test
+
+First live FlixCDN attempt: the provider returned `movie`, but its next
+`/lite/flixcdn/stream` navigation hit the runner's 12-second read timeout.
+A following `docker stats` showed `0B / 0B` despite an earlier inspect
+reporting `running`, so that snapshot should **not** be read as genuine zero
+memory use. Evidence is saved in
+`reports/flixcdn-vps-inconclusive-2026-10-24.json`. The next attempt
+sets `--navigation-timeout 90` for browser-backed navigation, without
+retrying a heavy headed Chromium launch. The first provider lookup still
+times out after 12 seconds. The MCP also uses the 90-second bound when
+testing a provider in `headed` mode or specifically FlixCDN.
+
+Before that attempt check the container process and HTTP readiness:
+`docker inspect lampac-mcp-test --format 'PID={{.State.Pid}} Running={{.State.Running}} OOM={{.State.OOMKilled}}'`;
+`docker top lampac-mcp-test -eo pid,comm,rss`; and
+`curl -fsS --max-time 8 http://127.0.0.1:29118/api/chromium/ping`.
+Do not run another Lampac/Chromium container in parallel.
 
 Provider access limitations, proxy requirements, or a missing film may
 yield an inconclusive test; those outcomes are not evidence that the
