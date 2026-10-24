@@ -54,14 +54,49 @@ Git operations use the service account's external Git credentials.
 Use a GitHub App or a managed credential helper with minimal repository
 permissions. Never put tokens in repository URL, module source or task prompt.
 
+## 1 vCPU / 1 GB RAM: recommended backend
+
+The VPS is the **MCP controller** only. Do NOT build .NET 10 locally by default:
+`build_project` returns `disabled-on-vps`. Lampac development builds are
+delegated to the fork's **existing** `.github/workflows/build.yml` workflow
+(which already supports `workflow_dispatch` on feature branches).
+
+Configure a GitHub token with **Actions: read and write** on this fork;
+it must be secret and should be short-lived. For pushing branches Git
+also needs **Contents: write**, preferably through separate credentials.
+Do not expose these tokens to test containers.
+
+    export LAMPAC_GH_TOKEN="YOUR_SECRET_FROM_VAULT"
+
+After editing source, call `publish_branch`; once the branch commit exists
+on GitHub, call `request_ci_build(task_id)`. Read the result via
+`get_ci_build_status(task_id)`. GitHub Actions might need enabling on
+a new fork, and workflow runs can be delayed or fail for reasons other
+than source compilation. Only the user can merge changes; the MCP cannot
+create PRs or change main.
+
+The fork's existing `build.yml` builds more than one project (including
+a Docker image job with publish disabled on feature branches), so it will
+use GitHub runner resources, **not** the small VPS.
+
+A local experiment is possible with `LAMPAC_ENABLE_LOCAL_BUILD=1`; then
+`build_project` uses Docker with 1 CPU, 640 MB RAM, no swap inside the
+container, and a 10-minute timeout. On a 1 GB VPS it can still fail due to
+RAM pressure. An out-of-memory/restore failure is **inconclusive**, not
+proof that the module is broken. Do not run local builds alongside Lampac.
+
+For actual runtime smoke tests on VPS, a separate test-only Lampac process
+and per-module profiles still need implementing and RAM benchmarking. Avoid
+starting a full instance, Chromium, GStreamer, and transcoding together.
+
 ## Example workflow
 
 1. start_task("fix provider X", "fix") -> task_id + branch dev/fix/...
 2. list_modules(task_id), inspect_module(task_id, "Modules/OnlineRUS/HDVB")
 3. read_source then write_source in the same task.
-4. build_project(task_id, "Modules/OnlineRUS/HDVB/HDVB.csproj")
-5. task_diff and task_status, review changes.
-6. publish_branch(task_id, "fix: repair provider response parsing").
+4. task_diff and task_status, review changes.
+5. publish_branch(task_id, "fix: repair provider response parsing").
+6. request_ci_build(task_id) and get_ci_build_status(task_id).
 
 No Pull Request is created. Nothing is merged. The user alone decides
 what to do with this branch.
