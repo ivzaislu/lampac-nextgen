@@ -169,6 +169,37 @@ hostname is listed via `--stream-hosts example.cdn.com`. Review the reported
 hostname before adding it; do not broadly allow arbitrary domains.
 Do NOT bypass access controls or DRM.
 
+## Repeated FlixCDN OOM: stop condition
+
+A further headed-FlixCDN retry with the minimal two-module profile also
+produced Xvfb `xkbcomp` warnings followed by `Out of memory.`.
+Do **not** classify this as FlixCDN provider logic failing, as the
+streaming browser has not been proven to complete launch. The warnings
+are non-fatal and not the OOM cause. The most recent container exit
+code has not been observed yet; a prior attempt ended with code 139
+(SIGSEGV), Docker `OOMKilled=false`.
+
+Reviewing current source explains the memory pressure:
+`Shared/PlaywrightCore/Chromium.cs` launches global headless Chromium
+and creates a default blank page when `chromium.context.keepopen=true`.
+`Modules/OnlineRUS/FlixCDN/BrowserResolver.cs` independently launches
+headed Chromium + Xvfb, allows two concurrent resolutions, retains the
+headed browser for five minutes, and starts Xvfb at 1280x720x24.
+The latest test-only `flixcdn-vps-low-memory.init.conf` changes
+`chromium.context.keepopen` to `false`, removing the idle blank page
+**without disabling global Playwright**; this has NOT been deployed or
+tested on the VPS. The global headless process still launches at startup.
+
+Do not reattempt FlixCDN under the same 700 MiB container memory limit
+without a new mitigation plan; 5 GiB host swap is not guaranteed inside
+the container, especially where Docker swap accounting was unsupported.
+Potential provider source changes (headless/held context lifecycle,
+headed-browser concurrency, shorter idle lifetime) must be reviewed in
+a **separate task branch from main**, built via GitHub Actions, and
+verified against a branch-specific test image. Merely changing the MCP
+runner timeout cannot cure an OOM. The observed results in this
+section came from the stock ghcr.io image, not a branch-specific build.
+
 ## Memory-limited FlixCDN test after a .NET OutOfMemory exit
 
 A follow-up VPS check recorded prior container `ExitCode=139` (SIGSEGV),
