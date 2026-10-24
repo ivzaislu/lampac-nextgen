@@ -89,6 +89,48 @@ For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
 
+## Browser-required providers on a 1 vCPU / 1 GB RAM VPS
+
+**Do not disable Playwright or Chromium globally.** Some Lampac providers
+need browser execution to obtain a playable URL. The live test tool calls
+Lampac's real provider HTTP endpoints; **Lampac itself** launches any
+required browser. The MCP runner must **not** launch a second Chromium.
+
+Use \`vps_browser_preflight("headless")\` or
+\`vps_browser_preflight("headed")\` to inspect \`/proc/meminfo\`, active
+swap, available RAM, Chromium installation, Xvfb availability and cgroup
+limits. Preflight reports resource observations, not proof that browser
+startup will work. To confirm swap directly on Linux, run
+\`swapon --show\` and \`free -h\`.
+
+Two distinct cases exist **in this fork's current source code**:
+
+- **Standard Playwright integration**: in \`Shared/CoreInit.cs\`,
+  \`chromium.enable = true\`, \`Headless = true\`, and the default
+  \`chromium.context\` uses \`keepopen = true\`, \`min = 0\`,
+  \`max = 4\`, \`keepalive = 20\` minutes. For this small VPS,
+  experimentally reduce retained contexts (e.g. max = 1) and use
+  strictly sequential requests. Do not disable \`keepopen\` if the
+  provider relies on persistent browser state.
+- **FlixCDN**: \`Modules/OnlineRUS/FlixCDN/BrowserResolver.cs\`
+  manages a separate **headed** Chromium and, on Linux, spawns
+  \`/usr/bin/Xvfb\`. Its current resolver can run two concurrent
+  browser operations; for a 1 GB VPS this may need explicit source
+  changes to cap it at one. Do not assume the headless Playwright
+  setting controls this resolver.
+
+**5 GB swap can help survival but does not turn 1 GB RAM into 6 GB RAM.**
+If Chromium pages are swapped, checks may become extremely slow and
+timeouts may occur. One browser-requiring module at a time, no separate
+Playwright browser launched by MCP, and no concurrent transcoding.
+A browser readiness failure is \`inconclusive\` / infrastructure failure,
+**not proof that the provider itself is broken**.
+
+These profiles are a planned improvement, not implemented automatic
+per-module browser selection yet. Before every test ensure the
+**isolated Lampac test instance** was deployed from the task branch
+SHA; never run provider tests against production or main.
+
 ## LIVE Online tests on VPS (real internet, NOT offline)
 
 The VPS runs a **test-only** Lampac process built from the current task branch.
