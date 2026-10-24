@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse, urlencode
 
 from mcp.server.fastmcp import FastMCP
+from live_tests import run_online
 
 ROOT = Path(os.environ.get("LAMPAC_MCP_DATA", "/srv/lampac-dev-mcp")).resolve()
 REMOTE = os.environ.get("LAMPAC_REPO", "https://github.com/ivzaislu/lampac-nextgen.git")
@@ -356,6 +357,37 @@ def get_ci_build_status(task_id: str) -> dict:
                 "note": "Build workflow status; this is not functional validation"}
     return {"status": "awaiting-run", "branch": state["branch"],
             "sha": sha, "note": "GitHub has not listed the dispatched run yet"}
+
+
+@mcp.tool()
+def run_live_online_test(task_id: str, provider: str, params: dict[str, str]) -> dict:
+    """Live network test: Lampac JSON navigation -> playback link -> HLS/media -> codec.
+
+    Requires an already deployed test-only Lampac instance at EXACT task commit.
+    LAMPAC_TEST_DEPLOYED_SHA_FILE is written by a trusted deployment script;
+    this MCP does NOT change, deploy, or merge main.
+    """
+    with _lock():
+        worktree, state = _task(task_id)
+        sha = _git(["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+        if state.get("published_sha") != sha:
+            return {"status": "not-ready", "reason": "Publish this branch commit first"}
+        if _git(["status", "--porcelain"], cwd=worktree).stdout.strip():
+            return {"status": "not-ready", "reason": "Task branch has unpublished edits"}
+        sha_file = Path(os.environ.get(
+            "LAMPAC_TEST_DEPLOYED_SHA_FILE",
+            str(ROOT / "test-instance" / "commit.sha")))
+        if not sha_file.is_file():
+            return {"status": "not-ready", "reason": "No deployed test-instance commit marker"}
+        deployed_sha = sha_file.read_text(encoding="ascii").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", deployed_sha) or deployed_sha != sha:
+            return {"status": "not-ready", "reason": "Running test instance does not match task commit"}
+        report = run_online(provider, params)
+        report["tested_sha"] = sha
+        state["validation"] = report["status"]
+        state["last_live_report"] = report
+        _save_state(task_id, state)
+        return report
 
 
 @mcp.tool()
