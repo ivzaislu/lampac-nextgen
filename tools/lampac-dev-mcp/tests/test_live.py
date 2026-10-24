@@ -57,6 +57,12 @@ class TestLive(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_reject_local_admin_path(self):
+        with patch.object(live_tests, "BASE", "http://127.0.0.1:29118"):
+            with self.assertRaises(live_tests.TestIssue) as cm:
+                live_tests._authorize("http://127.0.0.1:29118/admin/delete")
+        self.assertEqual(cm.exception.status, "blocked")
+
     def test_disallow_internal_cdns(self):
         with self.assertRaises(live_tests.TestIssue) as cm:
             live_tests._authorize("http://169.254.169.254/latest/meta-data/")
