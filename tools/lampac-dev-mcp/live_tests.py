@@ -73,6 +73,12 @@ def _authorize(url: str) -> str:
             url = urlunsplit((b.scheme, b.netloc, u.path, u.query, ""))
     scheme, host, port = _origin(url)
     if (scheme, host, port) == _origin(base):
+        path = urlsplit(url).path
+        # Never let an upstream template steer this tester to admin/config endpoints.
+        safe_prefixes = ("/lite/", "/proxy/", "/proxy-dash/", "/gst/", "/transcoding/", "/ts/")
+        if (not path.startswith(safe_prefixes) or
+                re.search(r"%(?:2e|2f|5c)", path, flags=re.IGNORECASE)):
+            raise TestIssue("blocked", "Non-playback path on Lampac test instance")
         return url
     if scheme != "https" or port != 443:
         raise TestIssue("blocked", "External playback must use HTTPS on port 443")
