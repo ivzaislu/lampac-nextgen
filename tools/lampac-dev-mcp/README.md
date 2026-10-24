@@ -14,10 +14,12 @@ This is NOT a Lampac module: it is an independent MCP process kept in this fork 
 
 ## Limitations
 
-THIS IS AN MVP, NOT COMPLETE MODULE TESTING. A passing build/manifest check
-does not prove module functionality. Running a Lampac instance, validating HTTP
-routes and media/provider behavior, background services, and regressions are NOT
-implemented. No VPS tests have been run yet.
+THIS IS AN MVP, NOT COMPLETE MODULE TESTING. Build/manifest checks do
+not prove module functionality. A bounded live Online provider-to-stream probe
+is now implemented, but automated per-task deployment, browser life-cycle
+supervision, complete playback validation, SISI, background services and
+other module-specific profiles remain unfinished. No actual VPS live-test
+result has been obtained from this code yet.
 
 Each MCP instance serves ONE trusted user and ONE GitHub fork. Use separate
 instances, credentials, data directories, and sandbox isolation for different
@@ -89,6 +91,40 @@ For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
 
+## First live test on an existing test-only Lampac container
+
+This step exercises the image already running at `127.0.0.1:29118`.
+It is **infrastructure smoke testing**, NOT validation of changes in a
+branch-specific build. Existing module code is not edited, and no
+production container is touched.
+
+Run as an unprivileged user on the VPS (not as root):
+
+    mkdir -p ~/lampac-online-test && cd ~/lampac-online-test
+    BASE_RAW="https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/dev/feature/lampac-dev-mcp-20261024/tools/lampac-dev-mcp"
+    curl --fail --show-error --location --output live_tests.py "$BASE_RAW/live_tests.py"
+    curl --fail --show-error --location --output probe_online.py "$BASE_RAW/probe_online.py"
+    python3 probe_online.py --provider hdvb \
+      --param "kinopoisk_id=258687" --param "title=Интерстеллар"
+
+The test sends real external requests through Lampac, follows up to six
+`/lite/` JSON navigation steps and probes a tiny part of the final media
+stream. On this low-powered VPS do just ONE test at a time; do not run
+parallel browser tests.
+
+Exit codes: 0 passed with codec, 1 failed, 2 inconclusive, 3 blocked,
+4 unknown status. In particular `inconclusive` can mean provider outage,
+RCH/auth requirement, geo restrictions, an unreadable partial segment or
+a new CDN requiring explicit allowlisting. The code never prints complete
+media URLs, tokens or captured source content. Test with
+`python3 -m unittest discover -s tests -v` after retrieving
+the test files if you wish to exercise the fake Lampac fixture.
+
+A playback URL at a non-Lampac HTTPS hostname is rejected unless its exact
+hostname is listed via `--stream-hosts example.cdn.com`. Review the reported
+hostname before adding it; do not broadly allow arbitrary domains.
+Do NOT bypass access controls or DRM.
+
 ## Browser-required providers on a 1 vCPU / 1 GB RAM VPS
 
 **Do not disable Playwright or Chromium globally.** Some Lampac providers
@@ -96,25 +132,25 @@ need browser execution to obtain a playable URL. The live test tool calls
 Lampac's real provider HTTP endpoints; **Lampac itself** launches any
 required browser. The MCP runner must **not** launch a second Chromium.
 
-Use \`vps_browser_preflight("headless")\` or
-\`vps_browser_preflight("headed")\` to inspect \`/proc/meminfo\`, active
+Use `vps_browser_preflight("headless")` or
+`vps_browser_preflight("headed")` to inspect `/proc/meminfo`, active
 swap, available RAM, Chromium installation, Xvfb availability and cgroup
 limits. Preflight reports resource observations, not proof that browser
 startup will work. To confirm swap directly on Linux, run
-\`swapon --show\` and \`free -h\`.
+`swapon --show` and `free -h`.
 
 Two distinct cases exist **in this fork's current source code**:
 
-- **Standard Playwright integration**: in \`Shared/CoreInit.cs\`,
-  \`chromium.enable = true\`, \`Headless = true\`, and the default
-  \`chromium.context\` uses \`keepopen = true\`, \`min = 0\`,
-  \`max = 4\`, \`keepalive = 20\` minutes. For this small VPS,
+- **Standard Playwright integration**: in `Shared/CoreInit.cs`,
+  `chromium.enable = true`, `Headless = true`, and the default
+  `chromium.context` uses `keepopen = true`, `min = 0`,
+  `max = 4`, `keepalive = 20` minutes. For this small VPS,
   experimentally reduce retained contexts (e.g. max = 1) and use
-  strictly sequential requests. Do not disable \`keepopen\` if the
+  strictly sequential requests. Do not disable `keepopen` if the
   provider relies on persistent browser state.
-- **FlixCDN**: \`Modules/OnlineRUS/FlixCDN/BrowserResolver.cs\`
+- **FlixCDN**: `Modules/OnlineRUS/FlixCDN/BrowserResolver.cs`
   manages a separate **headed** Chromium and, on Linux, spawns
-  \`/usr/bin/Xvfb\`. Its current resolver can run two concurrent
+  `/usr/bin/Xvfb`. Its current resolver can run two concurrent
   browser operations; for a 1 GB VPS this may need explicit source
   changes to cap it at one. Do not assume the headless Playwright
   setting controls this resolver.
@@ -123,7 +159,7 @@ Two distinct cases exist **in this fork's current source code**:
 If Chromium pages are swapped, checks may become extremely slow and
 timeouts may occur. One browser-requiring module at a time, no separate
 Playwright browser launched by MCP, and no concurrent transcoding.
-A browser readiness failure is \`inconclusive\` / infrastructure failure,
+A browser readiness failure is `inconclusive` / infrastructure failure,
 **not proof that the provider itself is broken**.
 
 These profiles are a planned improvement, not implemented automatic
@@ -137,7 +173,7 @@ The VPS runs a **test-only** Lampac process built from the current task branch.
 The workflow is: compile on GitHub Actions -> manually deploy that exact branch
 commit to the isolated test instance -> run end-to-end checks on the VPS.
 
-New MCP tool: \`run_live_online_test(task_id, provider, params, browser_mode)\`. Set \`browser_mode\` to \`none\`, \`headless\` or \`headed\`; the mode is for resource diagnostics, not for launching an extra browser.
+New MCP tool: `run_live_online_test(task_id, provider, params, browser_mode)`. Set `browser_mode` to `none`, `headless` or `headed`; the mode is for resource diagnostics, not for launching an extra browser.
 
 For example, after deploying the task branch, test a provider whose API accepts
 a KinoPoisk identifier:
@@ -148,14 +184,14 @@ a KinoPoisk identifier:
       params={"kinopoisk_id":"A_VALID_TEST_ID", "title":"A_TEST_TITLE"}
     )
 
-The runner uses \`rjson=true\` and follows Lampac template responses:
-\`similar\` -> \`movie\` or \`season\` -> \`episode\` -> \`VideoTpl\`
+The runner uses `rjson=true` and follows Lampac template responses:
+`similar` -> `movie` or `season` -> `episode` -> `VideoTpl`
 (playback URL). It then really fetches the HLS playlist or a direct media URL,
 fetches one short media fragment (max 256 KiB per request), and optionally
-asks \`ffprobe\` to identify an audio/video codec from that sample. This checks
+asks `ffprobe` to identify an audio/video codec from that sample. This checks
 **network availability and stream bytes**, not complete film playback; limited
 fragments might be too short to decode, so a stream can be marked
-\`inconclusive\` even when it actually works.
+`inconclusive` even when it actually works.
 
 **Required on VPS:**
 
@@ -166,34 +202,34 @@ fragments might be too short to decode, so a stream can be marked
    this test on a 1 GB VPS.
 3. After verifying the deployed process, have the *trusted deployment script*
    write the exact 40-character **task commit SHA** to
-   \`LAMPAC_TEST_DATA/test-instance/commit.sha\`, where
-   \`LAMPAC_TEST_DATA\` here denotes the same location as
-   \`LAMPAC_MCP_DATA\` (by default \`/srv/lampac-dev-mcp\`).
-   The runner reads \`LAMPAC_TEST_DEPLOYED_SHA_FILE\` when overridden.
+   `LAMPAC_TEST_DATA/test-instance/commit.sha`, where
+   `LAMPAC_TEST_DATA` here denotes the same location as
+   `LAMPAC_MCP_DATA` (by default `/srv/lampac-dev-mcp`).
+   The runner reads `LAMPAC_TEST_DEPLOYED_SHA_FILE` when overridden.
    This marker is **a deployment attestation set by the operator**, not
    verified against a remote running process. Never copy an arbitrary SHA
    without checking the running test instance.
-4. Set \`LAMPAC_TEST_BASE_URL=http://127.0.0.1:29118\`. If Lampac generates
+4. Set `LAMPAC_TEST_BASE_URL=http://127.0.0.1:29118`. If Lampac generates
    playback links using its own public domain rather than loopback, set
-   \`LAMPAC_TEST_PUBLIC_BASE_URL\` to that exact public base so the runner
+   `LAMPAC_TEST_PUBLIC_BASE_URL` to that exact public base so the runner
    can rewrite *only* that origin to the local test instance.
-5. If the playback URL bypasses Lampac's \`/proxy\` and targets an external
+5. If the playback URL bypasses Lampac's `/proxy` and targets an external
    CDN directly, its hostname must be explicitly allowed with
-   \`LAMPAC_TEST_STREAM_HOSTS=cdn.example.org,*.other.example.org\`.
+   `LAMPAC_TEST_STREAM_HOSTS=cdn.example.org,*.other.example.org`.
    The runner refuses arbitrary internal addresses and HTTP external URLs.
    Stream hosts and redirects must pass allowlist checks.
-6. Install \`ffprobe\` if you need codec identification. Without it, a
+6. Install `ffprobe` if you need codec identification. Without it, a
    successful HTTP fragment fetch is still reported, but the full test
-   returns \`inconclusive\`, not \`passed\`.
+   returns `inconclusive`, not `passed`.
 
 Testing makes **real outgoing connections** from your VPS to external
 providers/CDNs, under their normal authentication, geographic and rate
 restrictions. Outcomes are:
-- \`passed\`: media bytes received and codec identified from the sample.
-- \`failed\`: a definite error in the tested response or route.
-- \`inconclusive\`: blocked source, missing allowlist, network failure,
+- `passed`: media bytes received and codec identified from the sample.
+- `failed`: a definite error in the tested response or route.
+- `inconclusive`: blocked source, missing allowlist, network failure,
   DRM/geo/access restrictions, or insufficient codec data.
-- \`not-ready\`: test instance is not marked as the task's exact commit.
+- `not-ready`: test instance is not marked as the task's exact commit.
 
 Secrets, complete stream URLs and response bodies are not included in
 reports. Never use arbitrary sites, user-supplied URLs or untrusted
