@@ -27,10 +27,11 @@
     "docker_stats_snapshot": "0B/0B and PIDS=0 (unreliable/missing snapshot, contradicts inspect)"
   },
   "next_actions": [
-    "Verify container's actual process and local /api/chromium/ping endpoint",
-    "Retry only once using configurable navigation timeout (90 seconds) for headed browser startup",
-    "Check warnings for FlixCDN headed browser / Xvfb without exposing signed URLs",
-    "Do not infer error in FlixCDN from infrastructure timeout alone"
+    "Inspect latest ExitCode/State and (if available) relevant Docker OOM events; do not infer from historical exit 139",
+    "Do not re-run FlixCDN headed browser under 700MiB configuration: repeated Out of memory",
+    "FlixCDN BrowserResolver source has resolveSlots=2, Xvfb at 1280x720x24, five-minute headed browser idle lifetime; global Playwright launches another headless browser, including a keepopen context when configured",
+    "Use FlixCDN-only profile with keepopen=false as an unverified memory optimization; it preserves chromium.enable=true",
+    "Source-level changes should be in a separate provider task branch from main, then compiled through GitHub Actions, not on VPS"
   ],
   "limitations": [
     "Report reconstructed from user's VPS terminal output, not signed telemetry or CI attestation",
@@ -54,5 +55,11 @@
       "host_memory": "970 MiB total, 213 MiB available, 199 MiB swap used out of 5 GiB"
     },
     "needed_before_next_test": "Verify API /api/chromium/ping responds 200/pong while container running; then optionally apply ResponseCancelAfter=120 seconds in isolated profile for slow headed-browser request"
+  },
+  "latest_browser_retry": {
+    "observation": "Repeated xkbcomp startup warnings followed by 'Out of memory.'",
+    "result": "resource-failure, stream not established",
+    "note": "Xvfb startup observed; successful headed Chromium initialization NOT verified. The latest container exit code and OOMKilled flag were not supplied.",
+    "action": "Do not repeat browser test at 700 MiB without further memory evidence or isolated code-level mitigation."
   }
 }
