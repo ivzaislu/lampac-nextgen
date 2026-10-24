@@ -24,6 +24,17 @@ class SafetyGuards(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server._path(root, "Modules/outside.txt")
 
+    def test_main_task_is_rejected(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root / "tasks").mkdir()
+            (root / "worktrees" / "abcdef012345").mkdir(parents=True)
+            (root / "tasks" / "abcdef012345.json").write_text(
+                '{"branch": "main"}', encoding="utf-8")
+            with patch.object(server, "ROOT", root):
+                with self.assertRaises(RuntimeError):
+                    server._task("abcdef012345")
+
     def test_remote_requires_no_credentials(self):
         with patch.object(server, "REMOTE", "https://github.com/user/fork.git"):
             server._check_remote()
