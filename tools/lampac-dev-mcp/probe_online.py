@@ -4,16 +4,14 @@
 Use this for VPS bring-up before MCP and pinned-branch deployment are connected.
 Calls the existing live_tests module; it does NOT create, replace or configure containers.
 """
-from __future__ import annotations
-
 import argparse
 import json
 import os
 import sys
 
 
-def _params(raw: list[str]) -> dict[str, str]:
-    out: dict[str, str] = {}
+def _params(raw):
+    out = {}
     for item in raw:
         if "=" not in item:
             raise ValueError("Parameters must use KEY=VALUE")
@@ -24,7 +22,7 @@ def _params(raw: list[str]) -> dict[str, str]:
     return out
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Online Lampac: provider -> movie/episode -> playback -> first stream bytes")
     parser.add_argument("--provider", required=True,
