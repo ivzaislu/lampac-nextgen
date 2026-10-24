@@ -5,6 +5,9 @@ Tests are NOT production safety guarantees. Do not expose this MCP to untrusted 
 from __future__ import annotations
 
 import fcntl
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 import json
 import os
 import re
@@ -12,7 +15,7 @@ import subprocess
 import uuid
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
 from mcp.server.fastmcp import FastMCP
 
@@ -23,6 +26,7 @@ FOLDERS = ("Core", "Shared", "Online", "SISI", "Modules", "TestModules")
 ALLOWED_ROOT_FILES = ("NextGen.slnx",)
 MAX_SOURCE = 250_000
 BUILD_TIMEOUT = 600
+# On 1 GB VPS, SDK builds are off by default. Prefer GitHub Actions.
 
 mcp = FastMCP("Lampac Dev MCP")
 
@@ -104,6 +108,34 @@ def _module_dir(worktree: Path, module_path: str) -> Path:
     if not p.is_dir() or p.relative_to(worktree).parts[0] not in (*FOLDERS[2:],):
         raise ValueError("Not a module directory")
     return p
+
+
+def _github_api(path: str, method: str = "GET", payload: dict | None = None) -> dict:
+    """Call the GitHub API for this fork, using a token held only in server env."""
+    _check_remote()
+    token = os.environ.get("LAMPAC_GH_TOKEN")
+    if not token:
+        raise RuntimeError("Set LAMPAC_GH_TOKEN (Actions: write/read for this fork)")
+    repo_slug = urlparse(REMOTE).path.lstrip("/").removesuffix(".git")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "lampac-dev-mcp",
+    }
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = Request(f"https://api.github.com/repos/{repo_slug}{path}",
+                      data=body, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=25) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        raise RuntimeError(f"GitHub Actions API returned HTTP {exc.code}") from None
+    except URLError as exc:
+        raise RuntimeError("Could not reach GitHub Actions API") from exc
 
 
 @mcp.tool()
@@ -229,13 +261,18 @@ def build_project(task_id: str, project_path: str) -> dict:
         project = _path(worktree, project_path)
         if project.suffix != ".csproj" or not project.is_file():
             raise ValueError("project_path must name an existing .csproj")
+        if os.environ.get("LAMPAC_ENABLE_LOCAL_BUILD") != "1":
+            return {"status": "disabled-on-vps", "branch": state["branch"],
+                    "project": project_path,
+                    "next": "publish_branch, then request_ci_build",
+                    "note": "SDK compilation is disabled by default on 1 GB VPS."}
         cache = ROOT / "nuget-cache"
         cache.mkdir(exist_ok=True)
         command = [
             "docker", "run", "--rm", "--network=none", "--read-only",
             "--cap-drop=ALL", "--security-opt=no-new-privileges",
-            "--pids-limit=128", "--cpus=1", "--memory=1536m",
-            "--memory-swap=1536m", "--tmpfs=/tmp:rw,nosuid,nodev,size=256m",
+            "--pids-limit=64", "--cpus=1", "--memory=640m",
+            "--memory-swap=640m", "--tmpfs=/tmp:rw,nosuid,nodev,size=128m",
             "--user", f"{os.getuid()}:{os.getgid()}",
             "-e", "HOME=/tmp", "-e", "DOTNET_CLI_HOME=/tmp",
             "-e", "NUGET_PACKAGES=/nuget",
@@ -248,6 +285,8 @@ def build_project(task_id: str, project_path: str) -> dict:
             result = _run(command, timeout=BUILD_TIMEOUT, check=False)
             output = result.stdout + "\n" + result.stderr
             status = "passed" if result.returncode == 0 else "failed"
+            if result.returncode == 137 or any(x in output for x in ("NU1101", "NU1301")):
+                status = "inconclusive"
             exit_code = result.returncode
         except subprocess.TimeoutExpired:
             status, exit_code, output = "timeout", None, "Docker build timed out"
@@ -261,6 +300,62 @@ def build_project(task_id: str, project_path: str) -> dict:
         return {"status": status, "exit_code": exit_code,
                 "log_tail": output[-10000:],
                 "note": "Offline build; missing NuGet cache may make result inconclusive"}
+
+
+@mcp.tool()
+def request_ci_build(task_id: str) -> dict:
+    """Request the EXISTING build.yml workflow on a published feature/fix branch.
+
+    GitHub Actions does the compilation, not the 1 GB VPS. No PR, merge, or main writes.
+    """
+    with _lock():
+        worktree, state = _task(task_id)
+        sha = _git(["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
+        if sha != state.get("published_sha"):
+            raise RuntimeError("First publish the current task branch")
+        if _git(["status", "--porcelain"], cwd=worktree).stdout.strip():
+            raise RuntimeError("Uncommitted changes: publish the task branch first")
+        remote_sha = _git(["ls-remote", "origin",
+                           f"refs/heads/{state['branch']}"], cwd=worktree).stdout.split()
+        if not remote_sha or remote_sha[0] != sha:
+            raise RuntimeError("Remote branch SHA differs from task; refusing CI dispatch")
+        requested_at = datetime.now(timezone.utc).isoformat()
+        _github_api("/actions/workflows/build.yml/dispatches", method="POST",
+                    payload={"ref": state["branch"]})
+        state["ci_dispatch_sha"] = sha
+        state["ci_dispatch_at"] = requested_at
+        _save_state(task_id, state)
+        return {"status": "requested", "branch": state["branch"], "sha": sha,
+                "workflow": "build.yml",
+                "note": "Workflow runs asynchronously on GitHub, not on VPS; full project build, not functional module tests."}
+
+
+@mcp.tool()
+def get_ci_build_status(task_id: str) -> dict:
+    """Fetch the latest matching GitHub Actions build result for this task branch."""
+    _, state = _task(task_id)
+    sha = state.get("ci_dispatch_sha")
+    if not sha:
+        return {"status": "not-requested"}
+    branch_query = urlencode({"branch": state["branch"],
+                              "event": "workflow_dispatch", "per_page": 20})
+    payload = _github_api(f"/actions/workflows/build.yml/runs?{branch_query}")
+    requested = datetime.fromisoformat(state["ci_dispatch_at"])
+    for run in payload.get("workflow_runs", []):
+        if run.get("head_sha") != sha:
+            continue
+        created_at = run.get("created_at")
+        if not created_at:
+            continue
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        if created < requested - timedelta(minutes=2):
+            continue
+        return {"status": run.get("status"), "conclusion": run.get("conclusion"),
+                "url": run.get("html_url"), "run_id": run.get("id"),
+                "sha": sha, "branch": state["branch"],
+                "note": "Build workflow status; this is not functional validation"}
+    return {"status": "awaiting-run", "branch": state["branch"],
+            "sha": sha, "note": "GitHub has not listed the dispatched run yet"}
 
 
 @mcp.tool()
