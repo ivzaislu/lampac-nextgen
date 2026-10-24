@@ -169,6 +169,53 @@ hostname is listed via `--stream-hosts example.cdn.com`. Review the reported
 hostname before adding it; do not broadly allow arbitrary domains.
 Do NOT bypass access controls or DRM.
 
+## Memory-limited FlixCDN test after a .NET OutOfMemory exit
+
+On the 970 MiB RAM / 5 GiB swap VPS, the FlixCDN headed-browser attempt
+reached Xvfb initialization (`xkbcomp` warnings, non-fatal) and later
+the Lampac log ended with `Out of memory.` at 2026-10-24 18:28:12 UTC.
+The container was subsequently `exited`, `PID=0`, `OOMKilled=false`.
+Kernel `journalctl` did not show a global OOM-killer entry for the
+checked period. A .NET/native memory-allocation failure can therefore
+stop the process without Docker setting `OOMKilled=true`. The initial
+headless Chromium may also coexist with FlixCDN's separate headed
+Chromium. We should NOT run another browser test under the old
+unfiltered module configuration.
+
+Use `examples/flixcdn-vps-low-memory.init.conf` to limit the loaded
+dynamic modules to `Online` and `FlixCDN`. Preserve `base.conf`
+inheritance, keep `lowMemoryMode` and Playwright enabled, and reduce
+global browser retained contexts to one with two minutes' keepalive.
+This reduces startup compilation and idle retention; it does NOT prove
+the two browser processes together will fit in 700 MiB.
+
+Because `BaseModule.LoadModules` is applied on startup, replacing an
+`init.conf` inside an exited test container is followed by
+`docker start`. Keep the same isolated container, its 127.0.0.1-only
+published port and its 700 MiB memory limit. Avoid starting a second
+container at the same time. Retrieve the immutable GitHub commit version
+of this file before copying it to the container, e.g.:
+
+    cd /home/ubuntu/lampac-online-test
+    RAW="https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/41a40be3205f6b05eebb382169ddfc8586e2cc8a/tools/lampac-dev-mcp"
+    sudo -u ubuntu curl -fLsS "$RAW/examples/flixcdn-vps-low-memory.init.conf" -o flixcdn-vps-low-memory.init.conf
+    sudo -u ubuntu python3 -m json.tool flixcdn-vps-low-memory.init.conf >/dev/null
+    docker inspect lampac-mcp-test --format 'PreviousExit={{.State.ExitCode}} OOM={{.State.OOMKilled}}'
+    docker cp flixcdn-vps-low-memory.init.conf lampac-mcp-test:/lampac/init.conf
+    docker start lampac-mcp-test
+
+After it reports HTTP 200 on `/api/chromium/ping`, check the
+startup logs list `loaded module: Online` and
+`loaded module: FlixCDN` but NOT dozens of other dynamic modules.
+Only then execute a single FlixCDN test with a 90-second
+navigation timeout. Inspect process RSS and the container exit status
+afterward. If `Out of memory.` recurs, stop: report a resource issue,
+not a provider-source-code bug. For truly browser-heavy testing the
+VPS may need more physical RAM or further separated global/browser
+lifecycles. Do not use `--memory-swap` on this host as a relied-upon
+per-container control: Docker previously warned swap limit accounting
+was unsupported.
+
 ## Headed Chrome + Xvfb live smoke: FlixCDN
 
 The previous VPS observation confirmed `/usr/bin/chromium` and
