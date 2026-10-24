@@ -89,7 +89,7 @@ def _authorize(url: str) -> str:
         for item in HOSTS
     )
     if not matched:
-        raise TestIssue("inconclusive", "Stream CDN host is not in the configured allowlist")
+        raise TestIssue("inconclusive", f"Streaming host not allowlisted: {host}")
     try:
         ips = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
