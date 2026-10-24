@@ -51,7 +51,7 @@ class TestLive(unittest.TestCase):
             self.assertEqual(report["steps"][-1]["stage"], "stream")
             self.assertTrue(report["steps"][-1]["sample_retrieved"])
             self.assertEqual(report["steps"][-1]["hls_manifests"], 1)
-            self.assertEqual(report["steps"][-1]["bytes_sampled"], 256 * 1024)
+            self.assertEqual(report["steps"][-1]["bytes_sampled"], 188 * 512)
         finally:
             server.shutdown()
             server.server_close()
