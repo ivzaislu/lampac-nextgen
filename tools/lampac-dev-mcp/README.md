@@ -171,6 +171,20 @@ Do NOT bypass access controls or DRM.
 
 ## Memory-limited FlixCDN test after a .NET OutOfMemory exit
 
+A follow-up VPS check recorded prior container `ExitCode=139` (SIGSEGV),
+`OOMKilled=false`, and an earlier terminal log line `Out of memory.`.
+After copying the initial lean profile and restarting, only
+`loaded module: FlixCDN` and `loaded module: Online` appeared and
+`Configure complete` completed. Memory was 381.1 MiB / 700 MiB and
+130 PIDs; host available memory ~213 MiB. The immediate host HTTP
+request returned connection reset, likely a startup race but requiring
+a fresh readiness check before browser stress.
+The isolated profile now also sets `listen.ResponseCancelAfter=120`
+seconds because the base.conf sets this response limit to 10 seconds
+and FlixCDN browser navigation can exceed it. This is a
+test-only override; changing a file while the process is running
+normally triggers a config reload, but re-check readiness and logs.
+
 On the 970 MiB RAM / 5 GiB swap VPS, the FlixCDN headed-browser attempt
 reached Xvfb initialization (`xkbcomp` warnings, non-fatal) and later
 the Lampac log ended with `Out of memory.` at 2026-10-24 18:28:12 UTC.
