@@ -79,6 +79,12 @@ class TestLive(unittest.TestCase):
         self.assertEqual(live_tests._ffprobe_issue(raw),
                          "fragment-insufficient-or-invalid")
 
+    def test_dynamic_loader_failure_is_not_bad_video(self):
+        self.assertEqual(
+            live_tests._ffprobe_issue(
+                b"error while loading shared libraries: cannot map segment"),
+            "ffprobe-shared-library-loader")
+
     def test_disallow_internal_cdns(self):
         with self.assertRaises(live_tests.TestIssue) as cm:
             live_tests._authorize("http://169.254.169.254/latest/meta-data/")
