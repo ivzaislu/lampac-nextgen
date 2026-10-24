@@ -58,6 +58,33 @@ class TestLive(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_headed_browser_navigation_gets_longer_timeout(self):
+        seen = []
+
+        def fake_fetch(url, **kwargs):
+            seen.append((url, kwargs["timeout"], kwargs["phase"]))
+            if url.endswith("/lite/example/video"):
+                return b'{"method":"play","url":"/proxy/test.ts"}', "application/json"
+            return (b'{"type":"movie","data":['
+                    b'{"method":"call","url":"/lite/example/video"}]}',
+                    "application/json")
+
+        with patch.object(live_tests, "BASE", "http://127.0.0.1:29118"), \
+             patch.object(live_tests, "PUBLIC_BASE", ""), \
+             patch.object(live_tests, "_fetch", side_effect=fake_fetch), \
+             patch.object(live_tests, "_media_probe",
+                          return_value={"status": "inconclusive"}):
+            report = live_tests.run_online(
+                "example", {"title": "Test"}, navigation_timeout=90)
+        self.assertEqual(report["status"], "inconclusive")
+        self.assertEqual(seen[0][1:], (12, "provider"))
+        self.assertEqual(seen[1][1:], (90, "navigation-1"))
+
+    def test_reject_unbounded_navigation_timeout(self):
+        with self.assertRaises(ValueError):
+            live_tests.run_online("example", {"title": "Test"},
+                                  navigation_timeout=900)
+
     def test_reject_local_admin_path(self):
         with patch.object(live_tests, "BASE", "http://127.0.0.1:29118"):
             with self.assertRaises(live_tests.TestIssue) as cm:
