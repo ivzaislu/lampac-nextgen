@@ -337,7 +337,7 @@ def _media_probe(url, headers):
     raise TestIssue("inconclusive", "HLS nested manifest depth exceeded")
 
 
-def run_online(provider, params):
+def run_online(provider, params, navigation_timeout=12):
     """Run actual network flow on this VPS; one provider, bounded requests/bytes/time."""
     if not re.fullmatch(r"[a-zA-Z0-9_-]{2,48}", provider):
         raise ValueError("Invalid provider")
@@ -346,6 +346,8 @@ def run_online(provider, params):
         for k, v in params.items()
     ):
         raise ValueError("Use a small, non-secret provider query fixture")
+    if type(navigation_timeout) is not int or not (5 <= navigation_timeout <= 120):
+        raise ValueError("navigation_timeout must be an integer from 5 to 120 seconds")
     steps = []
     try:
         url = f"{_base()}/lite/{provider}?{urlencode({**params, 'rjson': 'true'})}"
@@ -357,7 +359,12 @@ def run_online(provider, params):
             # Only Lampac URLs can be control/call endpoints; external URLs only for playback.
             if _origin(_authorize(url)) != _origin(_base()):
                 raise TestIssue("blocked", "Non-Lampac URL in provider navigation")
-            payload, _ = _fetch(url)
+            # Initial provider lookup stays short. Navigation may start
+            # a browser inside Lampac, especially FlixCDN with headed
+            # Chromium + Xvfb. Do not duplicate expensive browser calls.
+            phase = "provider" if n == 0 else "navigation-{}".format(n)
+            request_timeout = 12 if n == 0 else navigation_timeout
+            payload, _ = _fetch(url, timeout=request_timeout, phase=phase)
             obj = _load_json(payload)
             action, next_url, headers = _next(obj)
             steps.append({"stage": "provider" if n == 0 else "navigation",
