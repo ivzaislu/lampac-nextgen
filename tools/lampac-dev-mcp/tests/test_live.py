@@ -64,7 +64,7 @@ class TestLive(unittest.TestCase):
         self.assertEqual(cm.exception.status, "blocked")
 
     def test_mpegts_framing_profile(self):
-        sample = (b"\\x47\\x40\\x00" + b"\\x10" + b"\\xff" * 184) * 8
+        sample = (bytes([0x47, 0x40, 0x00, 0x10]) + bytes([0xff]) * 184) * 8
         profile = live_tests._ts_packet_profile(sample)
         self.assertTrue(profile["mpegts_sync_detected"])
         self.assertEqual(profile["mpegts_packet_count"], 8)
