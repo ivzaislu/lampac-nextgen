@@ -35,6 +35,20 @@ class SafetyGuards(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     server._task("abcdef012345")
 
+    def test_meminfo_snapshot(self):
+        sample = ("MemTotal:         1024000 kB\n"
+                  "MemAvailable:     204800 kB\n"
+                  "SwapTotal:       5242880 kB\n"
+                  "SwapFree:        4096000 kB\n")
+        self.assertEqual(server._memory_snapshot(sample), {
+            "MemTotal_MiB": 1000, "MemAvailable_MiB": 200,
+            "SwapTotal_MiB": 5120, "SwapFree_MiB": 4000,
+        })
+
+    def test_browser_mode_validation(self):
+        with self.assertRaises(ValueError):
+            server.vps_browser_preflight(mode="arbitrary")
+
     def test_remote_requires_no_credentials(self):
         with patch.object(server, "REMOTE", "https://github.com/user/fork.git"):
             server._check_remote()
