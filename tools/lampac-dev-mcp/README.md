@@ -93,6 +93,12 @@ starting a full instance, Chromium, GStreamer, and transcoding together.
 
 ## First live test on an existing test-only Lampac container
 
+The standalone `probe_online.py` and `live_tests.py` tools support **Python 3.6+**
+without installing extra Python packages. The full MCP server remains a
+**Python 3.11+** application because it uses FastMCP and newer runtime features.
+Before running the probe, inspect `python3 --version`. On legacy Python 3.6
+there is no need to replace system Python for this standalone network test.
+
 This step exercises the image already running at `127.0.0.1:29118`.
 It is **infrastructure smoke testing**, NOT validation of changes in a
 branch-specific build. Existing module code is not edited, and no
