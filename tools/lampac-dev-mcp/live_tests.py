@@ -157,6 +157,47 @@ def _next(response):
     return "call", item["url"], item.get("headers") or {}
 
 
+
+def _ts_packet_profile(sample):
+    """Detect MPEG-TS framing without claiming the stream is decodable."""
+    if len(sample) < 3 * 188:
+        return None
+    max_offset = min(188, len(sample) - 2 * 188)
+    for offset in range(max_offset):
+        if not all(sample[offset + index * 188] == 0x47 for index in range(3)):
+            continue
+        count = (len(sample) - offset) // 188
+        good = sum(sample[offset + index * 188] == 0x47 for index in range(count))
+        if good < max(3, int(count * 0.95)):
+            continue
+        pat = False
+        for i in range(count):
+            start = offset + i * 188
+            pid = ((sample[start + 1] & 0x1f) << 8) | sample[start + 2]
+            if pid == 0:
+                pat = True
+                break
+        return {"mpegts_sync_detected": True,
+                "mpegts_packet_count": good,
+                "mpegts_pat_seen": pat}
+    return None
+
+
+def _ffprobe_issue(stderr):
+    """Do not put raw diagnostic text (possibly private URLs) into test reports."""
+    message = stderr.decode("utf-8", errors="replace").lower()
+    if any(key in message for key in ("cannot allocate memory", "out of memory",
+                                      "error allocating", "memory allocation")):
+        return "resource-limit"
+    if any(key in message for key in ("protocol not found", "not on whitelist",
+                                      "unknown protocol")):
+        return "protocol-restriction"
+    if any(key in message for key in ("invalid data found", "could not find codec",
+                                      "could not find stream", "end of file")):
+        return "fragment-insufficient-or-invalid"
+    return "codec-not-recognized-in-sample"
+
+
 def _media_probe(url, headers):
     """For HLS follow at most 3 manifests, then sample ONE segment; never download full video."""
     hls_count = 0
@@ -180,7 +221,13 @@ def _media_probe(url, headers):
         # This is real stream I/O, not a codec proof. Optional ffprobe verifies a codec.
         summary = {"bytes_sampled": len(data), "media_type": kind or "unknown",
                    "hls_manifests": hls_count, "sample_retrieved": True,
-                   "codec_confirmed": False}
+                   "codec_confirmed": False, "codec_status": "inconclusive"}
+        ts = _ts_packet_profile(data)
+        if ts:
+            summary.update(ts)
+            summary["stream_format_status"] = "mpegts-framing-valid"
+        else:
+            summary["stream_format_status"] = "unverified"
         ffprobe = shutil.which("ffprobe")
         if not ffprobe:
             summary.update(status="inconclusive",
@@ -192,24 +239,34 @@ def _media_probe(url, headers):
                 resource.setrlimit(resource.RLIMIT_AS, (384 * 1024**2, 384 * 1024**2))
                 resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
 
+            command = [ffprobe, "-v", "error", "-probesize", "262144",
+                       "-analyzeduration", "3000000",
+                       "-protocol_whitelist", "pipe,fd"]
+            if ts:
+                command.extend(["-f", "mpegts"])
+            command.extend(["-show_entries", "stream=codec_name,codec_type",
+                            "-of", "json", "-i", "pipe:0"])
             p = subprocess.run(
-                [ffprobe, "-v", "error", "-probesize", "131072",
-                 "-analyzeduration", "1500000", "-protocol_whitelist", "pipe,fd",
-                 "-show_entries", "stream=codec_name,codec_type",
-                 "-of", "json", "-i", "pipe:0"],
+                command,
                 input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=False,
                 env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
                 preexec_fn=limit_probe)
+            summary["ffprobe_exit_code"] = p.returncode
             info = json.loads(p.stdout or b"{}")
             streams = [x for x in info.get("streams", [])
                        if x.get("codec_type") in ("video", "audio") and x.get("codec_name")]
             if streams:
-                summary.update(status="passed", codec_confirmed=True,
+                summary.update(status="passed", codec_status="passed",
+                               codec_confirmed=True,
                                codecs=sorted({x["codec_name"] for x in streams}))
                 return summary
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            pass
-        summary.update(status="inconclusive", reason="Media bytes received, but sampled fragment has no recognized codec")
+            summary["codec_issue"] = _ffprobe_issue(p.stderr)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            summary["codec_issue"] = "probe-execution-failed"
+        except ValueError:
+            summary["codec_issue"] = "unexpected-probe-output"
+        summary.update(status="inconclusive",
+                       reason="Media fragment received; codec is not yet confirmed")
         return summary
     raise TestIssue("inconclusive", "HLS nested manifest depth exceeded")
 
