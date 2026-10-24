@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-24",
+  "test_kind": "live-online-infrastructure-smoke",
+  "tested_instance": "ghcr.io/lampac-nextgen/lampac (running on VPS, NOT branch-specific build)",
+  "provider": "hdvb",
+  "fixture": {
+    "kinopoisk_id": "258687",
+    "title": "Интерстеллар"
+  },
+  "status": "passed",
+  "cli_exit_code": 0,
+  "observed": {
+    "provider_response_type": "movie",
+    "navigation_response_type": "play",
+    "playback_link_received": true,
+    "hls_manifests": 2,
+    "stream_bytes_sampled": 65536,
+    "content_type": "video/mp2t",
+    "mpegts_sync_detected": true,
+    "mpegts_packet_count": 348,
+    "mpegts_pat_seen": true,
+    "stream_format_status": "mpegts-framing-valid",
+    "ffprobe_exit_code": 0,
+    "codec_confirmed": true,
+    "codecs": [
+      "aac",
+      "h264"
+    ],
+    "network_retries": 0
+  },
+  "limitations": [
+    "This is an operator-provided VPS CLI result, not an automated CI attestation",
+    "Testing the stock container confirms infrastructure and installed provider, not branch source changes",
+    "Only a partial stream segment was downloaded and inspected; no complete video playback",
+    "No FlixCDN/Playwright headed-browser test performed"
+  ]
+}
