@@ -1,9 +1,10 @@
 """Unit/integration tests with a local fake Lampac (no upstream streaming required)."""
 import json
+import socket
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from unittest.mock import patch
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import patch, MagicMock
 
 import live_tests
 
@@ -38,7 +39,7 @@ class _FakeLampac(BaseHTTPRequestHandler):
 
 class TestLive(unittest.TestCase):
     def test_navigation_and_stream_fetch(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeLampac)
+        server = HTTPServer(("127.0.0.1", 0), _FakeLampac)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -84,6 +85,40 @@ class TestLive(unittest.TestCase):
             live_tests._ffprobe_issue(
                 b"error while loading shared libraries: cannot map segment"),
             "ffprobe-shared-library-loader")
+
+    def test_stream_timeout_is_classified_and_retried_once(self):
+        metrics = {"network_retries": 0}
+        with patch.object(live_tests, "BASE", "http://127.0.0.1:29118"), \
+             patch.object(live_tests._opener, "open",
+                          side_effect=[socket.timeout("timed out"),
+                                       socket.timeout("timed out")]):
+            with self.assertRaises(live_tests.TestIssue) as cm:
+                live_tests._fetch(
+                    "http://127.0.0.1:29118/proxy/test.ts", timeout=20,
+                    retry_network=True, phase="hls-followup-2", metrics=metrics)
+        exc = cm.exception
+        self.assertEqual(exc.status, "inconclusive")
+        self.assertEqual(exc.details["phase"], "hls-followup-2")
+        self.assertEqual(exc.details["endpoint"], "lampac-loopback")
+        self.assertEqual(exc.details["network_error"], "timeout")
+        self.assertEqual(exc.details["attempts"], 2)
+        self.assertEqual(metrics["network_retries"], 1)
+
+    def test_stream_recovers_from_one_transient_timeout(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers.get.return_value = "video/mp2t"
+        response.read.return_value = b"\x47" * 188
+        metrics = {"network_retries": 0}
+        with patch.object(live_tests, "BASE", "http://127.0.0.1:29118"), \
+             patch.object(live_tests._opener, "open",
+                          side_effect=[socket.timeout("timed out"), response]):
+            data, kind = live_tests._fetch(
+                "http://127.0.0.1:29118/proxy/test.ts", timeout=20,
+                retry_network=True, phase="hls-followup-2", metrics=metrics)
+        self.assertEqual(data, b"\x47" * 188)
+        self.assertEqual(kind, "video/mp2t")
+        self.assertEqual(metrics["network_retries"], 1)
 
     def test_disallow_internal_cdns(self):
         with self.assertRaises(live_tests.TestIssue) as cm:
