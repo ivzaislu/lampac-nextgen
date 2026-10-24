@@ -89,6 +89,83 @@ For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
 
+## LIVE Online tests on VPS (real internet, NOT offline)
+
+The VPS runs a **test-only** Lampac process built from the current task branch.
+The workflow is: compile on GitHub Actions -> manually deploy that exact branch
+commit to the isolated test instance -> run end-to-end checks on the VPS.
+
+New MCP tool: \`run_live_online_test(task_id, provider, params)\`.
+
+For example, after deploying the task branch, test a provider whose API accepts
+a KinoPoisk identifier:
+
+    run_live_online_test(
+      task_id="THE_TASK_ID",
+      provider="hdvb",
+      params={"kinopoisk_id":"A_VALID_TEST_ID", "title":"A_TEST_TITLE"}
+    )
+
+The runner uses \`rjson=true\` and follows Lampac template responses:
+\`similar\` -> \`movie\` or \`season\` -> \`episode\` -> \`VideoTpl\`
+(playback URL). It then really fetches the HLS playlist or a direct media URL,
+fetches one short media fragment (max 256 KiB per request), and optionally
+asks \`ffprobe\` to identify an audio/video codec from that sample. This checks
+**network availability and stream bytes**, not complete film playback; limited
+fragments might be too short to decode, so a stream can be marked
+\`inconclusive\` even when it actually works.
+
+**Required on VPS:**
+
+1. Install and start the Lampac version BUILT FROM THE TASK BRANCH in a
+   separate test process. Do not use production Lampac or main.
+2. Bind the test port to loopback (for example 127.0.0.1:29118) and ensure
+   the MCP service can reach it. Avoid starting Chromium/transcoding alongside
+   this test on a 1 GB VPS.
+3. After verifying the deployed process, have the *trusted deployment script*
+   write the exact 40-character **task commit SHA** to
+   \`LAMPAC_TEST_DATA/test-instance/commit.sha\`, where
+   \`LAMPAC_TEST_DATA\` here denotes the same location as
+   \`LAMPAC_MCP_DATA\` (by default \`/srv/lampac-dev-mcp\`).
+   The runner reads \`LAMPAC_TEST_DEPLOYED_SHA_FILE\` when overridden.
+   This marker is **a deployment attestation set by the operator**, not
+   verified against a remote running process. Never copy an arbitrary SHA
+   without checking the running test instance.
+4. Set \`LAMPAC_TEST_BASE_URL=http://127.0.0.1:29118\`. If Lampac generates
+   playback links using its own public domain rather than loopback, set
+   \`LAMPAC_TEST_PUBLIC_BASE_URL\` to that exact public base so the runner
+   can rewrite *only* that origin to the local test instance.
+5. If the playback URL bypasses Lampac's \`/proxy\` and targets an external
+   CDN directly, its hostname must be explicitly allowed with
+   \`LAMPAC_TEST_STREAM_HOSTS=cdn.example.org,*.other.example.org\`.
+   The runner refuses arbitrary internal addresses and HTTP external URLs.
+   Stream hosts and redirects must pass allowlist checks.
+6. Install \`ffprobe\` if you need codec identification. Without it, a
+   successful HTTP fragment fetch is still reported, but the full test
+   returns \`inconclusive\`, not \`passed\`.
+
+Testing makes **real outgoing connections** from your VPS to external
+providers/CDNs, under their normal authentication, geographic and rate
+restrictions. Outcomes are:
+- \`passed\`: media bytes received and codec identified from the sample.
+- \`failed\`: a definite error in the tested response or route.
+- \`inconclusive\`: blocked source, missing allowlist, network failure,
+  DRM/geo/access restrictions, or insufficient codec data.
+- \`not-ready\`: test instance is not marked as the task's exact commit.
+
+Secrets, complete stream URLs and response bodies are not included in
+reports. Never use arbitrary sites, user-supplied URLs or untrusted
+hostnames as test destinations. This initial runner covers a subset of
+Online JSON template flows; provider-specific tests for complicated
+selectors, required auth, SISI, Sync, background jobs and media services
+remain separate work.
+
+**Security limitation:** the Python HTTP client resolves DNS before a
+request but does not pin the resolved address to the socket; DNS rebinding
+and untrusted redirect behavior require a network-isolated runner or
+an egress proxy with address enforcement before exposing tests to
+multiple users. Do not consider this a hardened sandbox.
+
 ## Example workflow
 
 1. start_task("fix provider X", "fix") -> task_id + branch dev/fix/...
