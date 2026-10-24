@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 import json
 import os
 import re
+import shutil
 import subprocess
 import uuid
 from contextlib import contextmanager
@@ -357,6 +358,73 @@ def get_ci_build_status(task_id: str) -> dict:
                 "note": "Build workflow status; this is not functional validation"}
     return {"status": "awaiting-run", "branch": state["branch"],
             "sha": sha, "note": "GitHub has not listed the dispatched run yet"}
+
+
+def _memory_snapshot(meminfo: str) -> dict:
+    """Parse Linux /proc/meminfo (kB) without guessing host/container limits."""
+    result: dict[str, int] = {}
+    for line in meminfo.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].endswith(":") and parts[1].isdigit():
+            name = parts[0][:-1]
+            if name in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                result[name + "_MiB"] = int(parts[1]) // 1024
+    return result
+
+
+def _cgroup_memory() -> dict:
+    """Read effective cgroup v2 limits when accessible. max => unlimited."""
+    result: dict[str, int | str] = {}
+    for name in ("memory.max", "memory.current", "memory.swap.max", "memory.swap.current"):
+        p = Path("/sys/fs/cgroup") / name
+        try:
+            value = p.read_text(encoding="ascii").strip()
+            result[name] = "unlimited" if value == "max" else int(value) // (1024 * 1024)
+        except (OSError, ValueError):
+            continue
+    return result
+
+
+@mcp.tool()
+def vps_browser_preflight(mode: str = "headless") -> dict:
+    """Read host RAM/swap and browser prerequisites for live Lampac testing.
+
+    mode = none | headless | headed. This does NOT start Chromium or confirm
+    that the provider works. FlixCDN currently needs headed Chromium + Xvfb.
+    """
+    if mode not in ("none", "headless", "headed"):
+        raise ValueError("mode must be none, headless or headed")
+    mem: dict = {}
+    try:
+        mem = _memory_snapshot(Path("/proc/meminfo").read_text(encoding="ascii"))
+    except OSError:
+        pass
+    chromium = (
+        shutil.which("chromium") or shutil.which("chromium-browser")
+        or shutil.which("google-chrome-stable")
+    )
+    xvfb = shutil.which("Xvfb")
+    warnings: list[str] = []
+    if mode != "none" and not chromium:
+        warnings.append("No system Chromium/Chrome executable found in MCP host PATH; test container may differ")
+    if mode == "headed" and not xvfb:
+        warnings.append("Xvfb is missing (required by the current FlixCDN Linux browser resolver)")
+    if mem.get("MemAvailable_MiB") is not None and mem["MemAvailable_MiB"] < 256:
+        warnings.append("Low available physical RAM; browser startup may cause swapping or OOM")
+    if mem.get("SwapTotal_MiB") is None:
+        warnings.append("Could not read total configured swap")
+    # An advisory only: service/container mounts may differ from the Lampac runtime.
+    return {
+        "mode": mode,
+        "meminfo_MiB": mem,
+        "cgroup_limits_MiB": _cgroup_memory(),
+        "chromium": chromium,
+        "xvfb": xvfb,
+        "warnings": warnings,
+        "status": "prerequisites-observed" if not warnings else "needs-review",
+        "note": ("Swap is not RAM. Browser may be launched inside a different container; "
+                 "this host-only check cannot prove Playwright or a provider is working.")
+    }
 
 
 @mcp.tool()
