@@ -124,8 +124,15 @@ codec from that partial sample. The next CLI version reports MPEG-TS packet
 framing (`mpegts_sync_detected`, `mpegts_packet_count`,
 `mpegts_pat_seen`) and FFprobe's **numeric exit code / sanitized issue
 category**, so users can distinguish valid stream transport from
-inconclusive codec detection. No raw ffprobe stderr (potentially containing
-tokenized URLs) is printed.
+inconclusive codec detection. An actual HDVB run on a 1 GB VPS reported
+348 synchronized TS packets plus PAT and `ffprobe_exit_code=127`. That
+points to an FFprobe process/loader failure, not evidence of bad media.
+The initial 384 MiB virtual-address-space cap could prevent FFprobe's
+shared libraries from loading; we now use 2048 MiB virtual memory while
+keeping the 5-second CPU and 10-second wall-clock limits. This is NOT
+a 2 GB physical RAM allocation or a per-process RSS guarantee.
+Check `ffprobe -version` under the same VPS account if exit 127 recurs.
+No raw ffprobe stderr (potentially containing tokenized URLs) is printed.
 
 Exit codes: 0 passed with codec, 1 failed, 2 inconclusive, 3 blocked,
 4 unknown status. In particular `inconclusive` can mean provider outage,
