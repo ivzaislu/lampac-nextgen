@@ -29,5 +29,18 @@ class CliTests(unittest.TestCase):
             ]), 2)
 
 
+    def test_navigation_timeout_passed_to_runner(self):
+        import live_tests
+        with patch.object(live_tests, "run_online",
+                          return_value={"provider": "flixcdn", "status": "inconclusive"}) as runner:
+            self.assertEqual(probe_online.main([
+                "--provider", "flixcdn", "--param", "kinopoisk_id=258687",
+                "--navigation-timeout", "90"
+            ]), 2)
+        runner.assert_called_once_with(
+            "flixcdn", {"kinopoisk_id": "258687"}, navigation_timeout=90)
+
+
+
 if __name__ == "__main__":
     unittest.main()
