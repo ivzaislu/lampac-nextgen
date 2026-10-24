@@ -37,5 +37,22 @@
     "Headed Chrome / Xvfb launch was not confirmed",
     "No playable URL or stream sample was retrieved on this attempt",
     "No branch-specific source build was tested"
-  ]
+  ],
+  "latest_container_findings": {
+    "previous_container_exit_code": 139,
+    "previous_container_oom_killed": false,
+    "last_log_line": "2026-10-24T18:28:12.094383065Z Out of memory.",
+    "possible_interpretation": "Memory allocation failure and exit 139 (segmentation fault) indicate instability; Docker OOMKilled=false does not rule out memory pressure",
+    "latest_startup_after_low_memory_profile": {
+      "modules_loaded": [
+        "FlixCDN",
+        "Online"
+      ],
+      "configure_complete": true,
+      "first_host_http_probe": "connection reset during/soon after startup; readiness not confirmed",
+      "docker_stats": "381.1 MiB of 700 MiB (54.44%), 130 PIDs, CPU 1.79%",
+      "host_memory": "970 MiB total, 213 MiB available, 199 MiB swap used out of 5 GiB"
+    },
+    "needed_before_next_test": "Verify API /api/chromium/ping responds 200/pong while container running; then optionally apply ResponseCancelAfter=120 seconds in isolated profile for slow headed-browser request"
+  }
 }
