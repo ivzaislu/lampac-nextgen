@@ -3,8 +3,6 @@
 Never pass arbitrary URLs to this runner. Discovery happens through the Lampac API,
 and external CDN egress requires explicit hostname allowlisting.
 """
-from __future__ import annotations
-
 import ipaddress
 import json
 import os
@@ -34,7 +32,7 @@ HOSTS = tuple(
 
 
 class TestIssue(Exception):
-    def __init__(self, status: str, reason: str):
+    def __init__(self, status, reason):
         self.status, self.reason = status, reason
         super().__init__(reason)
 
@@ -47,7 +45,7 @@ class _NoRedirect(HTTPRedirectHandler):
 _opener = build_opener(ProxyHandler({}), _NoRedirect())
 
 
-def _origin(value: str) -> tuple[str, str, int]:
+def _origin(value):
     u = urlsplit(value)
     if u.scheme not in ("http", "https") or not u.hostname or u.username or u.password:
         raise TestIssue("blocked", "Invalid URL or disallowed URL scheme")
@@ -55,7 +53,7 @@ def _origin(value: str) -> tuple[str, str, int]:
     return u.scheme, u.hostname.lower(), port
 
 
-def _base() -> str:
+def _base():
     scheme, host, port = _origin(BASE)
     if scheme != "http" or host not in ("127.0.0.1", "::1", "localhost"):
         raise TestIssue("blocked", "Lampac test base must be HTTP loopback")
@@ -64,7 +62,7 @@ def _base() -> str:
     return BASE
 
 
-def _authorize(url: str) -> str:
+def _authorize(url):
     base = _base()
     # Lampac may generate its public URL; explicitly rewrite only this known origin.
     if PUBLIC_BASE:
@@ -100,7 +98,7 @@ def _authorize(url: str) -> str:
     return url
 
 
-def _fetch(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, str]:
+def _fetch(url, headers=None):
     request_headers = {"User-Agent": "LampacDevMCP/0.1", "Accept-Encoding": "identity",
                        "Range": f"bytes=0-{READ_LIMIT - 1}"}
     if headers:
@@ -132,7 +130,7 @@ def _fetch(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, s
     raise TestIssue("failed", "Too many HTTP redirects")
 
 
-def _load_json(payload: bytes) -> dict:
+def _load_json(payload):
     try:
         value = json.loads(payload)
     except (ValueError, UnicodeDecodeError) as exc:
@@ -142,7 +140,7 @@ def _load_json(payload: bytes) -> dict:
     return value
 
 
-def _next(response: dict) -> tuple[str, str, dict[str, str]]:
+def _next(response):
     """Follow one Lampa template item (similar/season/episode/movie) or final play URL."""
     typ = response.get("type", "")
     if response.get("method") == "play" and isinstance(response.get("url"), str):
@@ -159,7 +157,7 @@ def _next(response: dict) -> tuple[str, str, dict[str, str]]:
     return "call", item["url"], item.get("headers") or {}
 
 
-def _media_probe(url: str, headers: dict[str, str]) -> dict:
+def _media_probe(url, headers):
     """For HLS follow at most 3 manifests, then sample ONE segment; never download full video."""
     hls_count = 0
     while hls_count < 4:
@@ -199,7 +197,7 @@ def _media_probe(url: str, headers: dict[str, str]) -> dict:
                  "-analyzeduration", "1500000", "-protocol_whitelist", "pipe,fd",
                  "-show_entries", "stream=codec_name,codec_type",
                  "-of", "json", "-i", "pipe:0"],
-                input=data, capture_output=True, timeout=10, check=False,
+                input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=False,
                 env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
                 preexec_fn=limit_probe)
             info = json.loads(p.stdout or b"{}")
@@ -216,7 +214,7 @@ def _media_probe(url: str, headers: dict[str, str]) -> dict:
     raise TestIssue("inconclusive", "HLS nested manifest depth exceeded")
 
 
-def run_online(provider: str, params: dict[str, str]) -> dict:
+def run_online(provider, params):
     """Run actual network flow on this VPS; one provider, bounded requests/bytes/time."""
     if not re.fullmatch(r"[a-zA-Z0-9_-]{2,48}", provider):
         raise ValueError("Invalid provider")
@@ -225,7 +223,7 @@ def run_online(provider: str, params: dict[str, str]) -> dict:
         for k, v in params.items()
     ):
         raise ValueError("Use a small, non-secret provider query fixture")
-    steps: list[dict] = []
+    steps = []
     try:
         url = f"{_base()}/lite/{provider}?{urlencode({**params, 'rjson': 'true'})}"
         seen = set()
