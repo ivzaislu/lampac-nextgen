@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-24",
+  "test_kind": "live-online-browser-required-infrastructure-smoke",
+  "tested_instance": "ghcr.io/lampac-nextgen/lampac (existing disposable VPS container; not task branch build)",
+  "provider": "flixcdn",
+  "fixture": {
+    "kinopoisk_id": "258687",
+    "title": "Интерстеллар"
+  },
+  "status": "inconclusive",
+  "cli_exit_code": 2,
+  "observed": {
+    "module_loaded": true,
+    "chromium_binary_in_container": true,
+    "xvfb_binary_in_container": true,
+    "module_response": "movie",
+    "navigation_to_stream": "network timeout after 12 seconds",
+    "network_error": "timeout",
+    "attempted_navigation_seconds": 12,
+    "stream_retrieved": false,
+    "ffprobe_executed": false,
+    "container_inspect": {
+      "status": "running",
+      "OOMKilled": false
+    },
+    "docker_stats_snapshot": "0B/0B and PIDS=0 (unreliable/missing snapshot, contradicts inspect)"
+  },
+  "next_actions": [
+    "Verify container's actual process and local /api/chromium/ping endpoint",
+    "Retry only once using configurable navigation timeout (90 seconds) for headed browser startup",
+    "Check warnings for FlixCDN headed browser / Xvfb without exposing signed URLs",
+    "Do not infer error in FlixCDN from infrastructure timeout alone"
+  ],
+  "limitations": [
+    "Report reconstructed from user's VPS terminal output, not signed telemetry or CI attestation",
+    "Headed Chrome / Xvfb launch was not confirmed",
+    "No playable URL or stream sample was retrieved on this attempt",
+    "No branch-specific source build was tested"
+  ]
+}
