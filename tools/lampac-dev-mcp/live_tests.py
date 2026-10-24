@@ -8,6 +8,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import resource
 import re
 import shutil
 import socket
@@ -188,11 +189,19 @@ def _media_probe(url: str, headers: dict[str, str]) -> dict:
                            reason="Bytes received but ffprobe is not installed")
             return summary
         try:
+            def limit_probe():
+                # A tiny, untrusted stream sample; prevent subprocess resource abuse.
+                resource.setrlimit(resource.RLIMIT_AS, (384 * 1024**2, 384 * 1024**2))
+                resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+
             p = subprocess.run(
                 [ffprobe, "-v", "error", "-probesize", "131072",
-                 "-analyzeduration", "1500000", "-show_entries",
-                 "stream=codec_name,codec_type", "-of", "json", "-i", "pipe:0"],
-                input=data, capture_output=True, timeout=10, check=False)
+                 "-analyzeduration", "1500000", "-protocol_whitelist", "pipe,fd",
+                 "-show_entries", "stream=codec_name,codec_type",
+                 "-of", "json", "-i", "pipe:0"],
+                input=data, capture_output=True, timeout=10, check=False,
+                env={"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
+                preexec_fn=limit_probe)
             info = json.loads(p.stdout or b"{}")
             streams = [x for x in info.get("streams", [])
                        if x.get("codec_type") in ("video", "audio") and x.get("codec_name")]
