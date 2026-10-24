@@ -118,7 +118,17 @@ The test sends real external requests through Lampac, follows up to six
 stream. On this low-powered VPS do just ONE test at a time; do not run
 parallel browser tests.
 
-In a real HDVB smoke check, Lampac returned movie -> play and two HLS
+**Confirmed real VPS result (2026-10-24):** HDVB returned a movie
+template, navigated to play, delivered two HLS manifests and 65,536
+MPEG-TS bytes. The sample contained 348 synchronized TS packets, a PAT,
+and codecs H.264 + AAC confirmed by FFprobe (exit code 0). The test CLI
+returned `passed` / exit code 0 without network retries. An anonymized
+report is saved at `reports/hdvb-vps-2026-10-24.json`.
+This validates real online testing on the VPS using the *stock Lampac
+container*; it does **not** validate code built from this task branch
+or prove full video playback.
+
+In an earlier real HDVB smoke check, Lampac returned movie -> play and two HLS
 manifests, then 65,536 bytes of video/mp2t; FFprobe did not confirm a
 codec from that partial sample. The next CLI version reports MPEG-TS packet
 framing (`mpegts_sync_detected`, `mpegts_packet_count`,
