@@ -428,7 +428,7 @@ def vps_browser_preflight(mode: str = "headless") -> dict:
 
 
 @mcp.tool()
-def run_live_online_test(task_id: str, provider: str, params: dict[str, str]) -> dict:
+def run_live_online_test(task_id: str, provider: str, params: dict[str, str], browser_mode: str = "none") -> dict:
     """Live network test: Lampac JSON navigation -> playback link -> HLS/media -> codec.
 
     Requires an already deployed test-only Lampac instance at EXACT task commit.
@@ -450,7 +450,11 @@ def run_live_online_test(task_id: str, provider: str, params: dict[str, str]) ->
         deployed_sha = sha_file.read_text(encoding="ascii").strip()
         if not re.fullmatch(r"[0-9a-f]{40}", deployed_sha) or deployed_sha != sha:
             return {"status": "not-ready", "reason": "Running test instance does not match task commit"}
+        # Browser is started by Lampac itself, not by the MCP test process.
+        # This is advisory only; the Lampac test instance may be containerized.
+        preflight = vps_browser_preflight(browser_mode)
         report = run_online(provider, params)
+        report["browser_preflight"] = preflight
         report["tested_sha"] = sha
         state["validation"] = report["status"]
         state["last_live_report"] = report
