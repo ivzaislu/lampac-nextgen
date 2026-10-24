@@ -10,7 +10,6 @@ import argparse
 import json
 import os
 import sys
-from urllib.parse import urlsplit
 
 
 def _params(raw: list[str]) -> dict[str, str]:
