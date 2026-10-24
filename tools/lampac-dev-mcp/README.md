@@ -137,7 +137,7 @@ The VPS runs a **test-only** Lampac process built from the current task branch.
 The workflow is: compile on GitHub Actions -> manually deploy that exact branch
 commit to the isolated test instance -> run end-to-end checks on the VPS.
 
-New MCP tool: \`run_live_online_test(task_id, provider, params)\`.
+New MCP tool: \`run_live_online_test(task_id, provider, params, browser_mode)\`. Set \`browser_mode\` to \`none\`, \`headless\` or \`headed\`; the mode is for resource diagnostics, not for launching an extra browser.
 
 For example, after deploying the task branch, test a provider whose API accepts
 a KinoPoisk identifier:
