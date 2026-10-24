@@ -29,12 +29,16 @@ def main(argv=None):
                         help="Lampac route name, e.g. hdvb")
     parser.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
                         help="Test metadata (repeat); do not include private credentials")
+    parser.add_argument("--navigation-timeout", type=int, default=12,
+                        help="Seconds to wait for browser-backed navigation (5-120); FlixCDN: 90")
     parser.add_argument("--base", default="http://127.0.0.1:29118",
                         help="Existing, loopback-only Lampac test instance")
     parser.add_argument("--stream-hosts", default="",
                         help="Explicit external HTTPS CDN host allowlist, comma-separated")
     args = parser.parse_args(argv)
 
+    if not (5 <= args.navigation_timeout <= 120):
+        parser.error("--navigation-timeout must be between 5 and 120 seconds")
     try:
         params = _params(args.param)
     except ValueError as exc:
@@ -46,7 +50,8 @@ def main(argv=None):
     try:
         import live_tests
         # Don't print source URLs or untrusted HTML: they may contain auth tokens.
-        result = live_tests.run_online(args.provider, params)
+        result = live_tests.run_online(
+            args.provider, params, navigation_timeout=args.navigation_timeout)
     except (ValueError, live_tests.TestIssue) as exc:
         result = {"status": "blocked", "reason": str(exc)}
     print(json.dumps(result, indent=2, ensure_ascii=False))
