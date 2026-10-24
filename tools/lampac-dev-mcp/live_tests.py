@@ -186,6 +186,11 @@ def _ts_packet_profile(sample):
 def _ffprobe_issue(stderr):
     """Do not put raw diagnostic text (possibly private URLs) into test reports."""
     message = stderr.decode("utf-8", errors="replace").lower()
+    if any(key in message for key in ("error while loading shared libraries",
+                                      "failed to map segment", "cannot map",
+                                      "cannot open shared object file",
+                                      "dynamic linker")):
+        return "ffprobe-shared-library-loader"
     if any(key in message for key in ("cannot allocate memory", "out of memory",
                                       "error allocating", "memory allocation")):
         return "resource-limit"
@@ -235,8 +240,10 @@ def _media_probe(url, headers):
             return summary
         try:
             def limit_probe():
-                # A tiny, untrusted stream sample; prevent subprocess resource abuse.
-                resource.setrlimit(resource.RLIMIT_AS, (384 * 1024**2, 384 * 1024**2))
+                # Limit CPU and address space, without starving ffprobe's dynamic
+                # linker: 384 MiB caused exit 127 on a 1 GB RAM / 5 GB swap VPS.
+                # RLIMIT_AS is virtual address space, not physical RAM.
+                resource.setrlimit(resource.RLIMIT_AS, (2048 * 1024**2, 2048 * 1024**2))
                 resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
 
             command = [ffprobe, "-v", "error", "-probesize", "262144",
@@ -261,6 +268,8 @@ def _media_probe(url, headers):
                                codecs=sorted({x["codec_name"] for x in streams}))
                 return summary
             summary["codec_issue"] = _ffprobe_issue(p.stderr)
+            if p.returncode == 127 and summary["codec_issue"] == "codec-not-recognized-in-sample":
+                summary["codec_issue"] = "ffprobe-execution-or-loader-error"
         except (OSError, subprocess.TimeoutExpired) as exc:
             summary["codec_issue"] = "probe-execution-failed"
         except ValueError:
