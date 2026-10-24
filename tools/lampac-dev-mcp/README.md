@@ -169,6 +169,51 @@ hostname is listed via `--stream-hosts example.cdn.com`. Review the reported
 hostname before adding it; do not broadly allow arbitrary domains.
 Do NOT bypass access controls or DRM.
 
+## Headed Chrome + Xvfb live smoke: FlixCDN
+
+The previous VPS observation confirmed `/usr/bin/chromium` and
+`/usr/bin/Xvfb` inside `lampac-mcp-test`; its log contained
+`loaded module: FlixCDN`. The initially checked manifest path was
+wrong: the module is shipped under `/lampac/module/OnlineRUS/FlixCDN/`.
+The missing `/lampac/init.conf` is normal when Lampac uses
+`/lampac/base.conf` with built-in defaults. The module itself defaults
+to **disabled**. To exercise FlixCDN, enable it **only in the disposable
+test container**, not in a production Lampac.
+
+On the VPS, while keeping the existing single `lampac-mcp-test`
+container running (a second Lampac/Chrome would overcommit 1 GB RAM):
+
+    docker exec lampac-mcp-test test -f /lampac/base.conf
+    docker exec lampac-mcp-test test -f /lampac/module/OnlineRUS/FlixCDN/manifest.json
+    cd /home/ubuntu/lampac-online-test
+    RAW="https://raw.githubusercontent.com/ivzaislu/lampac-nextgen/dev/feature/lampac-dev-mcp-20261024/tools/lampac-dev-mcp"
+    sudo -u ubuntu curl -fLsS "$RAW/examples/flixcdn-vps.init.conf" -o flixcdn-vps.init.conf
+    sudo -u ubuntu python3 -m json.tool flixcdn-vps.init.conf > /dev/null
+    docker cp flixcdn-vps.init.conf lampac-mcp-test:/lampac/init.conf
+
+This is an ephemeral edit to that **test** container only.
+`CoreInit` watches `init.conf` for changes, and `FlixCDN` registers
+an update handler. New module load filters need a fresh Lampac process,
+but toggling `FlixCDN.enable` on this already loaded module should be
+picked up without a restart. The overlay inherits `base.conf` and
+preserves the loopback-only host Docker port mapping.
+
+Run one test; FlixCDN launches its own headed Chromium and Xvfb on
+the streaming step (separate from Lampac's headless Chromium):
+
+    timeout 180s sudo -u ubuntu python3 probe_online.py --provider flixcdn \
+      --param "kinopoisk_id=258687" --param "title=Интерстеллар"
+    echo "exit code: $?"
+    docker inspect lampac-mcp-test --format 'OOM={{.State.OOMKilled}} Status={{.State.Status}}'
+    docker stats --no-stream lampac-mcp-test
+
+Provider access limitations, proxy requirements, or a missing film may
+yield an inconclusive test; those outcomes are not evidence that the
+headless/headed runtime is broken. **Do not globally disable Chromium
+or weaken its sandbox.** A line like `Browser_Disconnected` alone is not
+a provider failure. Never post complete signed media URLs or access
+tokens from raw HTTP responses/logs.
+
 ## Browser-required providers on a 1 vCPU / 1 GB RAM VPS
 
 **Do not disable Playwright or Chromium globally.** Some Lampac providers
