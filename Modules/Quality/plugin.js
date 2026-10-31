@@ -25,6 +25,20 @@
             : resolution >= 720 ? 'HD' : resolution > 0 ? 'SD' : '';
     }
 
+    function normalizedTitle(text) {
+        return String(text || '').toLowerCase().replace(/ё/g, 'е')
+            .replace(/[^a-zа-я0-9]+/gi, ' ').trim();
+    }
+
+    function matchesTitle(release, item) {
+        var info = release.Info || release.info || {};
+        var candidates = [normalizedTitle(item.title), normalizedTitle(item.original)].filter(Boolean);
+        var names = [info.name, info.originalname].map(normalizedTitle).filter(Boolean);
+        if (names.some(function (name) { return candidates.indexOf(name) >= 0; })) return true;
+        var title = ' ' + normalizedTitle(release.Title || release.title) + ' ';
+        return candidates.some(function (name) { return title.indexOf(' ' + name + ' ') >= 0; });
+    }
+
     function bestOf(results, item) {
         if (!Array.isArray(results)) return null;
         var best = null, bestScore = -1;
@@ -32,6 +46,7 @@
             if (!release) return;
             var title = String(release.Title || release.title || '');
             if (!title || /\b(?:trailer|teaser|sample)\b|трейлер|тизер/i.test(title)) return;
+            if (!matchesTitle(release, item)) return;
             var info = release.Info || release.info || {};
             var types = info.types || release.types;
             if (Array.isArray(types) && types.length && !types.some(function (type) {

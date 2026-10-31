@@ -22,6 +22,8 @@ assert.equal(bestOf([row('Example 2010 4K')], movie), null);
 assert.equal(bestOf([row('Example 2025 4K', {Info: {types: ['serial']}})], movie), null);
 assert.equal(bestOf([row('Example CAM 1080p'), row('Example 2025 4K')], movie), '4K');
 assert.equal(bestOf([], movie), null);
+assert.equal(bestOf([row('Unrelated Movie 2025 4K'), row('Example 2025 1080p')], movie), 'FHD');
+assert.equal(bestOf([row('Unrelated Movie 2025 4K')], movie), null);
 const tv = normalize({id: 55, name: 'Show', original_name: 'Series', first_air_date: '2023-02-01'});
 assert.equal(tv.type, 'tv');
 assert.equal(tv.year, 2023);
