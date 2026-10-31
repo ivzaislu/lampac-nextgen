@@ -69,7 +69,7 @@ function boot(count, storage, behavior) {
                 }
                 if (body.op === 'get_batch') {
                     const result = {};
-                    body.items.forEach(item => {
+                    if (!behavior.miss) body.items.forEach(item => {
                         result[item.movie] = behavior.stale
                             ? {label: 'CAM', checkedAt: Clock.now()-2*86400000,
                                 until: Clock.now()+86400000}
@@ -155,6 +155,21 @@ function boot(count, storage, behavior) {
     assert.ok(reloaded.cards.every(c=>c.badges.length===1 && c.badges[0].textContent==='FHD'));
     assert.equal(reloaded.status().persistent_entries,150);
 
+    // A cold catalogue sends 150 independent Lampa.Parser.get lookups
+    // (no JacRed batch API) but combines SQL writes into five batches,
+    // and never dispatches more than one write at once.
+    const cold=boot(150,new Map(),{delay:35,miss:true});
+    await wait(1400);
+    const coldGets=cold.sqlCalls.filter(x=>x.op==='get_batch');
+    const coldPuts=cold.sqlCalls.filter(x=>x.op==='put_batch');
+    assert.equal(coldGets.length,5);
+    assert.equal(coldPuts.length,5,'150 uncached results need five SQL write batches');
+    assert.equal(coldPuts.reduce((sum,x)=>sum+x.items.length,0),150);
+    assert.equal(cold.parserCalls(),150,'150 uncached films still require per-film JacRed');
+    assert.ok(cold.peakSql()<=3,
+        'Two cache reads plus one write is the maximum concurrent SQL work');
+    assert.ok(cold.cards.every(c=>c.badges[0] && c.badges[0].textContent==='FHD'));
+
     // A transient HTTP error should bypass SQL temporarily, not permanently.
     clockShift=0;
     const retry=boot(1,new Map(),{delay:20,failOnce:true});
@@ -208,5 +223,5 @@ function boot(count, storage, behavior) {
             {Title:request.movie.title+' 2025 WEB-DL 2160p'}
         ]});
     }
-    console.log('Quality stress: 150 cards, bounded SQL, restart, retry and background refresh OK');
+    console.log('Quality stress: 150 warm/cold cards, bounded SQL read/write, restart, retry and background refresh OK');
 })().catch(e=>{console.error(e); process.exitCode=1;});
