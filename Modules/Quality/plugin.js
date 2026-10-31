@@ -44,12 +44,12 @@
     function yearOf(release) {
         var info = release.Info || release.info || {};
         var reported = Number(info.relased || release.relased || 0);
-        if (reported >= 1900 && reported <= new Date().getFullYear() + 1) return reported;
+        if (reported >= 1900 && reported <= 2100) return reported;
         var title = String(release.Title || release.title || '');
         var matches = title.match(/(?:^|\D)(?:19|20)\d\d(?=\D|$)/g) || [];
         for (var i = 0; i < matches.length; i++) {
             var candidate = Number(matches[i].replace(/\D/g, ''));
-            if (candidate >= 1900 && candidate <= new Date().getFullYear() + 1)
+            if (candidate >= 1900 && candidate <= 2100)
                 return candidate;
         }
         return 0;
@@ -76,6 +76,7 @@
                     : /^(movie|documovie|film)$/.test(value);
             })) return;
             var year = yearOf(release);
+            if (year > new Date().getFullYear() + 1) return;
             if (year && item.year && Math.abs(year - item.year) > (item.type === 'tv' ? 5 : 1)) {
                 // For a long-running series the torrent year may be a season
                 // release date, not the show's premiere year. Don't accept
