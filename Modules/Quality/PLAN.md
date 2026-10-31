@@ -66,7 +66,7 @@
 - [x] Создать `Quality.csproj` (`net10.0`, ссылка на `Shared`).
 - [x] Создать `ModInit.cs` и `ModuleConf.cs`: загрузка конфигурации, подписка/отписка от `UpdateInitFile`.
 - [x] Зарегистрировать `Quality.csproj` в `NextGen.slnx`.
-- [ ] Выполнить `dotnet build Modules/Quality/Quality.csproj --nologo`.
+- [x] Выполнить `dotnet build Modules/Quality/Quality.csproj --nologo` — CI [№1](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41241756360), success.
 - [ ] Проверить загрузку/выгрузку динамического модуля на реальном Lampac.
 
 **Готовность:** проект компилируется, загружается и выгружается корректно.
@@ -166,6 +166,14 @@
 **Готовность:** работающий, документированный и безопасно отключаемый модуль.
 
 ## Журнал
+
+### 2026-10-31 — CI №1 и старт алгоритма
+
+- [CI Quality №1](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41241756360) **success**: manifest, отдельная сборка Quality и JacRed на .NET 10.
+- Добавлена первая чистая функция ранжирования `QualityScorer` поверх `Shared.Models.JacRed.TorrentDetails`.
+- Добавлена проверка 16 контрольных сценариев в `tests/quality-smoke.cs` с запуском через .NET 10 file-based apps; **результат следующего CI пока не известен**.
+- Пока **не подтверждены** динамическая загрузка и вызовы JacRed из Quality; это блокирующие задачи этапа 0.
+
 
 ### 2026-10-31 — сохранён план, создан базовый каркас
 

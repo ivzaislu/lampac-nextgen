@@ -3,6 +3,7 @@
   "dynamic": true,
   "tree": [
     "ModInit.cs",
-    "ModuleConf.cs"
+    "ModuleConf.cs",
+    "QualityScorer.cs"
   ]
 }

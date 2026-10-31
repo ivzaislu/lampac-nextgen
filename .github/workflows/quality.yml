@@ -50,3 +50,6 @@ jobs:
 
       - name: Build JacRed dependency independently
         run: dotnet build Modules/JacRed/JacRed.csproj --configuration Release --nologo
+
+      - name: Quality scoring smoke tests (.NET 10 file-based app)
+        run: dotnet run --file tests/quality-smoke.cs
