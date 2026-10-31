@@ -156,7 +156,9 @@ jobs:
           python3 - <<'PY'
           import json
           from pathlib import Path
-          assert json.loads(Path('/tmp/quality-cache-isolation.json').read_text())['hit'] is False
+          isolation=json.loads(Path('/tmp/quality-cache-isolation.json').read_text())
+          print('SQLite isolation response:', isolation)
+          assert isolation.get('hit') is False, 'Different SQL scope must produce a cache miss'
           PY
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             --data '{"op":"put","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb","label":"FAKE"}' \
