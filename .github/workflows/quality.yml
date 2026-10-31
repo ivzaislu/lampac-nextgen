@@ -9,6 +9,7 @@ on:
       - '!Modules/Quality/PLAN.md'
       - '!Modules/Quality/README.md'
       - 'tests/quality-client.test.js'
+      - 'tests/quality-cache-client.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -65,7 +66,9 @@ jobs:
         run: node --check Modules/Quality/plugin.js
 
       - name: Run client quality regression checks
-        run: node tests/quality-client.test.js
+        run: |
+          node tests/quality-client.test.js
+          node tests/quality-cache-client.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
@@ -147,4 +150,21 @@ jobs:
           assert cached['hit'] is True and cached['label']=='4K'
           assert Path('/tmp/lampac-quality-smoke/database/quality-cache.db').is_file()
           PY
+          curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"get","scope":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb"}' \
+            http://127.0.0.1:9118/quality/cache > /tmp/quality-cache-isolation.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          assert json.loads(Path('/tmp/quality-cache-isolation.json').read_text())['hit'] is False
+          PY
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"put","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb","label":"FAKE"}' \
+            http://127.0.0.1:9118/quality/cache)
+          [ "$code" = 400 ]
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -H 'Origin: https://evil.example.invalid' \
+            --data '{"op":"get","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb"}' \
+            http://127.0.0.1:9118/quality/cache)
+          [ "$code" = 403 ]
           echo "Quality runtime plugin, status and SQLite cache: OK"
