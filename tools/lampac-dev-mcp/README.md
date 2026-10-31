@@ -92,7 +92,25 @@ For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
 
-## Branch-specific CI test image (stage 2; not yet verified by a run)
+## Branch-specific CI test image (stage 2; retry after startup failure)
+
+GitHub Actions Build #119 (run 41222012485) on commit
+`0788971f2868ed9010868490060096a15b239323`
+failed with `startup_failure` and zero jobs. GitHub did not expose a
+job log. Inspection of the new caller found it invoked the release
+Docker reusable workflow with only `contents: read` and
+`packages: write`, whereas the called job requested
+`contents: write`, `id-token: write`, `attestations: write`, etc.
+Reusable workflows cannot elevate permissions. Rather than grant
+release-grade scopes to test builds, the fix makes
+`build-mcp-test-image` a self-contained job with exactly
+`contents: read` and `packages: write`. It checks out `github.sha`,
+runs Docker Buildx, pushes one SHA-tagged `linux/amd64` image,
+checks the resulting digest, and uploads the receipt itself. The
+original reusable release Docker workflow was restored unchanged.
+**The corrected workflow has not yet run; no successful image is claimed.**
+
+
 
 `build.yml` is an **existing** dispatchable workflow in the fork. When
 manually dispatched on `dev/feature/*` or `dev/fix/*`, it now:
@@ -109,7 +127,8 @@ manually dispatched on `dev/feature/*` or `dev/fix/*`, it now:
    registry **digest**, full source SHA, full digest-based image reference,
    platform and GitHub Actions run ID. Future VPS deployment should use
    `image_ref` from this receipt, NOT the tag.
-5. Leaves the existing release upload job unchanged. A feature
+5. Creates the receipt inside the same least-privileged test-image job.
+6. Leaves the existing release upload job unchanged. A feature
    `workflow_dispatch` skips the old redundant multi-platform Docker
    job; normal `main`, tag, PR and release workflows keep the previous
    path.
