@@ -11,6 +11,7 @@ on:
       - 'tests/quality-client.test.js'
       - 'tests/quality-cache-client.test.js'
       - 'tests/quality-batch-client.test.js'
+      - 'tests/quality-stress-client.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -71,6 +72,7 @@ jobs:
           node tests/quality-client.test.js
           node tests/quality-cache-client.test.js
           node tests/quality-batch-client.test.js
+          node tests/quality-stress-client.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
@@ -191,4 +193,31 @@ jobs:
             --data '{"op":"put_batch","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","items":[{"movie":"4444444444444444","label":"4K","ttlDays":999}]}' \
             http://127.0.0.1:9118/quality/cache)
           [ "$code" = 400 ]
+          python3 - <<'PY'
+          import json
+          import time
+          import urllib.request
+          def post(body):
+              req=urllib.request.Request('http://127.0.0.1:9118/quality/cache',
+                  data=json.dumps(body).encode(),headers={'Content-Type':'application/json'},method='POST')
+              with urllib.request.urlopen(req,timeout=8) as response:
+                  return json.loads(response.read())
+          scope='d'*32
+          source='e'*16
+          keys=[f'{x:016x}' for x in range(1,151)]
+          start=time.monotonic()
+          for begin in range(0,150,30):
+              items=[{'movie':k,'label':'FHD','ttlDays':14} for k in keys[begin:begin+30]]
+              assert post({'op':'put_batch','scope':scope,'source':source,'items':items})['saved']==30
+          for begin in range(0,150,30):
+              items=[{'movie':k} for k in keys[begin:begin+30]]
+              found=post({'op':'get_batch','scope':scope,'source':source,'items':items})['results']
+              assert len(found)==30
+              assert all(v['label']=='FHD' for v in found.values())
+          miss=post({'op':'get_batch','scope':'f'*32,'source':source,
+              'items':[{'movie':keys[0]}]})['results']
+          assert miss=={}
+          print('Quality SQLite: 150 writes + 150 reads in ten HTTP batches; seconds:',
+                round(time.monotonic()-start,3))
+          PY
           echo "Quality runtime plugin, status and SQLite cache: OK"
