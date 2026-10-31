@@ -154,13 +154,12 @@ def readiness(name, max_seconds=120):
     raise DeploymentError("Test container HTTP+module readiness timed out")
 
 
-def rollback(name, old, rename_from, backup_name, created):
+def rollback(name, old, rename_from, backup_name, failed_name, created):
     errors = []
     if created:
         try:
             if container(name):
                 docker(["stop", "--time", "5", name], ok=False, timeout=25)
-                failed_name = name + "-failed"
                 if container(failed_name):
                     errors.append("failed-container name reserved; leaving candidate as " + name)
                 else:
@@ -197,6 +196,7 @@ def main(argv=None):
     backup_name = None
     old = None
     touched_old = False
+    failed_name = TARGET + "-failed-" + options.expected_sha[:12]
     try:
         image_ref = validate_receipt(load_json(options.receipt), options.expected_sha)
         validate_config(load_json(options.config))
@@ -213,10 +213,6 @@ def main(argv=None):
             verify_old_container(old_name, old)
         elif target:
             raise DeploymentError("Existing target requires explicit --replace")
-        if options.apply and os.geteuid() != 0:
-            # Running as another Docker-authorized service account is fine;
-            # Docker CLI permissions, not UID 0, determine actual access.
-            pass
         if not options.apply:
             print(json.dumps({
                 "status": "dry-run", "target": TARGET, "replace": old_name,
@@ -225,6 +221,10 @@ def main(argv=None):
             }, indent=2))
             return 0
 
+        if container(failed_name):
+            raise DeploymentError("Failed deployment backup already exists: " + failed_name)
+        if old_name == TARGET and container(TARGET + "-rollback"):
+            raise DeploymentError("Previous test-container rollback backup already exists")
         docker(["pull", image_ref], timeout=900)
         verify_pulled_image(image_ref)
 
@@ -268,7 +268,7 @@ def main(argv=None):
     except (DeploymentError, ValueError, KeyError, TypeError, OSError) as exc:
         recovery = []
         if created or touched_old or renamed_from:
-            recovery = rollback(TARGET, old, renamed_from, backup_name, created)
+            recovery = rollback(TARGET, old, renamed_from, backup_name, failed_name, created)
         print(json.dumps({
             "status": "blocked" if not (created or touched_old or renamed_from) else "deployment-failed",
             "error": str(exc), "rollback_issues": recovery
