@@ -119,6 +119,56 @@ assert.equal(bestOf([row('WALL-E (2022) UHD 2160p')], wallE), null,
 assert.equal(bestOf([row('WALL-E (2008) Official Trailer 4K 2160p')], wallE), null,
     'High resolution promo must not override full film');
 
+
+// Real open JacRed v1 response from the user's WALL-E (2008) search, stripped
+// of tracker URLs, magnets and other irrelevant fields. The original response
+// had 108 rows, including 20 marked quality=2160. "multfilm" is a movie type,
+// while "multserial" alone must never qualify an animated feature film.
+const wallESnapshot = [
+    {tracker:'toloka',title:'ВОЛЛ-І / WALL·E (2008) BDRip 720p Ukr/Eng | Sub Ukr/Eng',
+        name:'ВОЛЛ-І',originalname:'WALL·E',relased:2008,
+        videotype:'sdr',quality:720,types:['multfilm']},
+    {tracker:'toloka',
+        title:'ВОЛЛ-І / WALL·E (2008) UHD BDRemux 4K 2160p HDR10+ Dolby Vision H.265 Ukr/Eng | Sub Ukr/Eng [Criterion Collection]',
+        name:'ВОЛЛ-І',originalname:'WALL·E',relased:2008,
+        videotype:'sdr',quality:2160,types:['multfilm']},
+    {tracker:'rutor',
+        title:'ВАЛЛ·И / WALL·E (2008) UHD BDRip 2160p | 4K | SDR | Лицензия',
+        name:'ВАЛЛ·И',originalname:'WALL·E',relased:2008,
+        videotype:'sdr',quality:2160,types:['multfilm','multserial']},
+    {tracker:'kinozal',
+        title:'ВАЛЛ-И / WALL-E / 2008 / ДБ, ПМ, АП (Сербин), СТ / 4K, HEVC, HDR / Blu-Ray Remux (2160p)',
+        name:'ВАЛЛ-И',originalname:'WALL-E',relased:2008,
+        videotype:'hdr',quality:2160,types:['multfilm','multserial']},
+    {tracker:'rutor',title:'ВАЛЛ-И / WALL-E (2008) BDRip 1080p | D',
+        name:'ВАЛЛ-И',originalname:'WALL-E',relased:2008,
+        videotype:'sdr',quality:1080,types:['multfilm','multserial']}
+];
+const actualWallE = normalize({id:10681,title:'ВАЛЛ·И',
+    original_title:'WALL·E',release_date:'2008-06-27'});
+assert.equal(bestOf(wallESnapshot,actualWallE),'4K',
+    'Real JacRed animation categories must not discard 2160p releases');
+assert.equal(bestOf(wallESnapshot.filter(r=>r.quality<2160),actualWallE),
+    'FHD', 'The same real records retain their numeric resolution');
+assert.equal(bestOf([{
+    title:'WALL·E (2008) UHD 2160p',name:'ВАЛЛ-И',
+    originalname:'WALL·E',relased:2008,quality:2160,
+    types:['multserial']
+}],actualWallE),null,
+    'An animated series category by itself does not prove a movie');
+const southParkAnimation=normalize({id:12971,name:'Южный парк',
+    original_name:'South Park',first_air_date:'1997-08-13'});
+assert.equal(bestOf([{
+    title:'South Park (1999) 1080p',name:'South Park',originalname:'South Park',
+    relased:1999,quality:1080,types:['multfilm','multserial']
+}],southParkAnimation),null,
+    'Ambiguous cartoon categories must not turn a feature into TV quality');
+assert.equal(bestOf([{
+    title:'South Park S28E01 (2026) 720p',name:'South Park',
+    relased:2026,quality:720,types:['multserial']
+}],southParkAnimation),'HD',
+    'An explicitly identified animated series episode is allowed');
+
 console.log('Quality plugin: scoring and Lampa Parser adapter OK');
 
 

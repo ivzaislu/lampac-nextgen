@@ -35,7 +35,9 @@
     function matchesTitle(release, item) {
         var info = release.Info || release.info || {};
         var candidates = [normalizedTitle(item.title), normalizedTitle(item.original)].filter(Boolean);
-        var names = [info.name, info.originalname, info.original_name].map(normalizedTitle).filter(Boolean);
+        var names = [info.name, info.originalname, info.original_name,
+            release.name, release.originalname, release.original_name]
+            .map(normalizedTitle).filter(Boolean);
         if (names.some(function (name) { return candidates.indexOf(name) >= 0; })) return true;
         var title = ' ' + normalizedTitle(release.Title || release.title) + ' ';
         return candidates.some(function (name) {
@@ -115,13 +117,16 @@
             if (promotionalRelease(release, item)) return;
             var types = releaseTypes(release);
             var declaredTv = types.some(function (type) {
-                return /^(serial|docuserial|tvshow|series|tv|anime_serial)$/.test(type);
+                return /^(serial|docuserial|tvshow|series|tv|anime_serial|multserial)$/.test(type);
             });
             var declaredMovie = types.some(function (type) {
-                return /^(movie|documovie|film|anime_movie)$/.test(type);
+                return /^(movie|documovie|film|anime_movie|multfilm)$/.test(type);
             });
             if (item.type === 'tv') {
-                if (declaredMovie) return;
+                // JacRed sometimes attaches both "multfilm" and "multserial"
+                // to an animated *feature* film (e.g. WALL-E). Do not let an
+                // ambiguous animation category alone prove a TV episode.
+                if (declaredMovie && (!declaredTv || !hasSeriesEvidence(release))) return;
                 // JacRed's generic search can return a feature film, game,
                 // advertisement or spin-off sharing the series name.
                 // A series label or season/episode evidence is required.
