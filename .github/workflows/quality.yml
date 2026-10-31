@@ -12,6 +12,7 @@ on:
       - 'tests/quality-cache-client.test.js'
       - 'tests/quality-batch-client.test.js'
       - 'tests/quality-stress-client.test.js'
+      - 'tests/quality-lifecycle-client.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -73,6 +74,7 @@ jobs:
           node tests/quality-cache-client.test.js
           node tests/quality-batch-client.test.js
           node tests/quality-stress-client.test.js
+          node tests/quality-lifecycle-client.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
