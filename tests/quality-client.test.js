@@ -55,6 +55,53 @@ assert.equal(bestOf([row('Original Name (2024) WEB-DL 1080p')], foreignMovie), '
 assert.equal(parserRequest(foreignMovie, foreignMovie.original).search, 'Original Name');
 assert.equal(parserRequest(foreignMovie, foreignMovie.title).search, 'Локальное название');
 
+
+// Known reports: Simpsons and Family Guy are long-running shows. A current
+// season year is not the show's first-air year; promotional releases and the
+// South Park feature film must never determine a series badge.
+const simpsons = normalize({id: 2001, name: 'Симпсоны', original_name: 'The Simpsons',
+    first_air_date: '1989-12-17'});
+const familyGuy = normalize({id: 2002, name: 'Гриффины', original_name: 'Family Guy',
+    first_air_date: '1999-01-31'});
+const southPark = normalize({id: 2003, name: 'Южный парк', original_name: 'South Park',
+    first_air_date: '1997-08-13'});
+assert.equal(bestOf([row('The Simpsons S36E01 (2025) WEB-DL 1080p')], simpsons), 'FHD');
+assert.equal(bestOf([row('Симпсоны (1989-2025) 01-36 сезоны 720p')], simpsons), 'HD');
+assert.equal(bestOf([row('Family Guy 2026 1080p', {Info:{types:['serial']}})], familyGuy), 'FHD');
+assert.equal(bestOf([row('Гриффины S23E01 (2025) WEB-DL 720p')], familyGuy), 'HD');
+assert.equal(bestOf([row('South Park S28E01 (2026) WEB-DL 1080p')], southPark), 'FHD');
+assert.equal(bestOf([row('South Park: Bigger, Longer & Uncut (1999) 720p')], southPark), null,
+    'Feature film sharing the TV title is not series quality');
+assert.equal(bestOf([row('South Park The Movie (1999) 1080p',
+    {Info:{types:['movie']}})], southPark), null);
+assert.equal(bestOf([row('South Park (2026) 720p')], southPark), null,
+    'Unclassified release with no season evidence must not set a series badge');
+const advertisements = [
+    'South Park S28 720p Official Trailer',
+    'South Park S28 Promo 2160p',
+    'South Park S28 TV Spot HD 1080p',
+    'South Park S28 WEB-DL 2160p Teaser',
+    'Южный парк S28 (2026) Реклама 4K',
+    'Южный парк S28 (2026) Проморолик 4K',
+    'Южный парк S28 (2026) Анонс 1080p',
+    'South Park S28 (2026) Sneak Peek 720p',
+    'South Park S28 (2026) Sample 1080p',
+    'South Park S28 (2026) Clip 2160p'
+];
+advertisements.forEach(name => assert.equal(bestOf([row(name)], southPark), null,
+    'Ad-only release must not result in a quality badge: ' + name));
+assert.equal(bestOf([row('South Park S28 Official Trailer 2160p'),
+    row('South Park S28E01 (2026) 720p')], southPark), 'HD',
+    'The best actual episode wins over higher-resolution advertisements');
+const trailerBoys = normalize({id: 2004, name: 'The Trailer Park Boys',
+    first_air_date:'2001-04-22'});
+assert.equal(bestOf([row('The Trailer Park Boys Season 2 (2002) 720p')], trailerBoys),
+    'HD', 'A show titled Trailer Park Boys must not be mistaken for a trailer');
+const moviePromo = {type:'movie',year:2025,title:'Example',original:'Example'};
+assert.equal(bestOf([row('Example 2025 Official Trailer 4K 2160p')], moviePromo), null);
+assert.equal(bestOf([row('Example 2025 Promotional 1080p')], moviePromo), null);
+assert.equal(bestOf([row('Example 2025 Рекламный ролик HD 720p')], moviePromo), null);
+
 console.log('Quality plugin: scoring and Lampa Parser adapter OK');
 
 

@@ -99,8 +99,8 @@ function boot(remoteGet) {
     assert.equal(first.status().sql_cache, true);
 
     await pause(430);
-    const disk = saved.get('quality_module_cache_v3');
-    assert.equal(disk.version, 3);
+    const disk = saved.get('quality_module_cache_v4');
+    assert.equal(disk.version, 4);
     assert.equal(Object.keys(disk.entries).length, 1, 'Lampa cache should be persisted');
 
     const second = boot({hit: false});
@@ -115,41 +115,28 @@ function boot(remoteGet) {
     assert.equal(third.badges[0].textContent, 'FHD');
     assert.deepEqual(third.requests.map(r => r.op), ['get_batch', 'put_batch']);
     assert.notEqual(third.requests[0].source, first.requests[0].source);
-    // Upgrade v2 -> v3: carry over only valid positive badges. The old
-    // "not found" entry is never allowed to suppress the corrected search.
-    function legacyHash(value) {
-        let a = 2166136261, b = 2246822507;
-        for (const ch of value) {
-            a = Math.imul(a ^ ch.charCodeAt(0), 16777619);
-            b = Math.imul(b ^ ch.charCodeAt(0), 3266489917);
-        }
-        return ('00000000' + (a >>> 0).toString(16)).slice(-8)
-            + ('00000000' + (b >>> 0).toString(16)).slice(-8);
-    }
-    const legacySource = [settings.jackett_url, settings.jackett_key,
-        settings.jackett_url_two, settings.jackett_key_two, settings.parser_use_link,
-        settings.jackett_interview || ''].join('|');
+    // v4 must ignore earlier positive AND negative cache entries.
+    // South Park's previous false HD must not survive the stricter check.
     const oldKey = 'tmdb:movie:22:2025';
-    saved.delete('quality_module_cache_v3');
-    saved.set('quality_module_cache_v2', {version: 2, source: legacyHash(legacySource),
-        entries: {[oldKey]: {label: '4K', until: Date.now() + 86400000}},
-        items: {[oldKey]: {source:'tmdb', type:'movie', id:'22', title:'Example',
-            original:'Example', year:2025, genres:[]}}});
-    const migrated = boot({hit: false});
-    assert.equal(migrated.badges[0].textContent, '4K');
-    assert.equal(migrated.parserCalls(), 0);
-    assert.equal(migrated.requests.length, 0);
-    await pause(420);
-    assert.equal(saved.get('quality_module_cache_v3').entries[oldKey].label, '4K');
+    const oldRecord = {label: 'HD', until: Date.now() + 86400000};
+    saved.delete('quality_module_cache_v4');
+    saved.set('quality_module_cache_v3', {version:3, source: 'old-hash',
+        entries: {[oldKey]:oldRecord}, items:{}});
+    const stalePositive = boot({hit:false});
+    await pause(460);
+    assert.equal(stalePositive.parserCalls(), 1,
+        'Version 3 positive results must be rechecked after ad-filter fix');
+    assert.equal(stalePositive.badges[0].textContent, 'FHD');
+    assert.notEqual(stalePositive.requests[0].source, first.requests[0].source,
+        'Changed source signatures must bypass older server SQL rows');
+    saved.delete('quality_module_cache_v4');
+    saved.set('quality_module_cache_v3', {version:3, source:'old-hash',
+        entries: {[oldKey]: {label:null,until:Date.now()+86400000}},items:{}});
+    const staleNegative = boot({hit:false});
+    await pause(460);
+    assert.equal(staleNegative.parserCalls(), 1,
+        'Version 3 negative results must be rechecked for long-running series');
+    assert.equal(staleNegative.badges[0].textContent, 'FHD');
 
-    saved.delete('quality_module_cache_v3');
-    saved.set('quality_module_cache_v2', {version: 2, source: legacyHash(legacySource),
-        entries: {[oldKey]: {label: null, until: Date.now() + 86400000}}, items:{}});
-    const retryMiss = boot({hit: false});
-    await pause(450);
-    assert.equal(retryMiss.parserCalls(), 1,
-        'Old negative cache must not block the improved search');
-    assert.equal(retryMiss.badges[0].textContent, 'FHD');
-
-    console.log('Quality: batched SQL hit, Lampa persistence, source isolation and visual classes and v2 migration OK');
+    console.log('Quality: batched SQL hit, Lampa persistence, source isolation and visual classes and v4 revalidation OK');
 })().catch(e => { console.error(e); process.exitCode = 1; });
