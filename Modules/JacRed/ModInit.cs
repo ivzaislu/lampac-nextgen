@@ -3,7 +3,6 @@ using Shared.Models.AppConf;
 using Shared.Models.Events;
 using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
-using Shared.Models.Quality;
 using System.Threading;
 
 namespace JacRed
@@ -20,7 +19,6 @@ namespace JacRed
 
             updateConf();
             EventListener.UpdateInitFile += updateConf;
-            EventListener.QualityReleaseSearch += SearchQualityReleases;
 
             foreach (var m in conf.limit_map)
                 CoreInit.conf.WAF.limit_map.Insert(0, m);
@@ -80,73 +78,6 @@ namespace JacRed
         {
             IsDispose = true;
             EventListener.UpdateInitFile -= updateConf;
-            EventListener.QualityReleaseSearch -= SearchQualityReleases;
-        }
-
-        // Use the same configured JacRed engines as its public indexer API.
-        // This deliberately returns only metadata; no torrent links or keys cross the boundary.
-        static async Task<IReadOnlyList<QualityRelease>> SearchQualityReleases(QualitySearchQuery request)
-        {
-            if (IsDispose || conf == null || request == null)
-                return null;
-
-            string query = !string.IsNullOrWhiteSpace(request.Title) ? request.Title : request.OriginalTitle;
-            if (string.IsNullOrWhiteSpace(query))
-                return Array.Empty<QualityRelease>();
-
-            int serial = request.IsSerial ? 2 : 1;
-            List<TorrentDetails> torrents;
-
-            try
-            {
-                switch (conf.typesearch)
-                {
-                    case "red":
-                        torrents = RedApi.Indexers(false, null, query, request.Title, request.OriginalTitle,
-                            request.Year, serial, null).torrents.ToList();
-                        break;
-                    case "webapi":
-                        torrents = await WebApi.Indexers(query, request.Title, request.OriginalTitle,
-                            request.Year, serial, null);
-                        break;
-                    case "jackett":
-                        torrents = await JackettApi.Indexers(request.Host, query, request.Title,
-                            request.OriginalTitle, request.Year, serial, null);
-                        break;
-                    default:
-                        return null;
-                }
-
-                if (conf.merge == "jackett" && conf.typesearch != "jackett")
-                {
-                    var supplemental = await JackettApi.Indexers(request.Host, query,
-                        request.Title, request.OriginalTitle, request.Year, serial, null);
-                    if (torrents == null && (supplemental == null || supplemental.Count == 0))
-                        return null;
-                    torrents ??= new List<TorrentDetails>();
-                    if (supplemental != null)
-                        torrents.AddRange(supplemental);
-                }
-
-                if (torrents == null)
-                    return null;
-
-                return torrents.Take(2_000).Select(t => new QualityRelease
-                {
-                    Title = t.title,
-                    Types = t.types,
-                    Year = t.relased,
-                    Quality = t.quality,
-                    VideoType = t.videotype,
-                    Seeders = t.sid,
-                    Peers = t.pir
-                }).ToList();
-            }
-            catch (Exception ex)
-            {
-                Serilog.Log.Warning("JacRed Quality metadata lookup failed: {ErrorType}", ex.GetType().Name);
-                return null;
-            }
         }
 
         void updateConf()
