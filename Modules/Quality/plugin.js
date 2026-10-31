@@ -500,11 +500,12 @@
     function draw(node, label, full) {
         // Lampa uses .card__quality on the poster and .full-start__status
         // inside .full-start-new__rate-line on the full page.
-        if (!label || !node || !document.body || (!full && !document.body.contains(node))) return;
+        if (!node || !document.body || (!full && !document.body.contains(node))) return;
         var parent = full ? node.querySelector('.full-start-new__rate-line')
             : node.querySelector('.card__view');
         if (!parent) return;
         var badge = parent.querySelector('.quality-module-badge');
+        if (!label) { if (badge && badge.remove) badge.remove(); return; }
         if (!badge) {
             badge = document.createElement('div');
             parent.appendChild(badge);
@@ -518,6 +519,7 @@
         var item = normalize(itemData);
         if (!item) return;
         var identity = keyOf(item);
+        if (full) lastFull = {key: identity, node: node, generation: generation};
         resolve(item, function (label) {
             if (!full) {
                 var current = normalize(node && node.card_data);
@@ -551,7 +553,12 @@
             var item = normalize(card.card_data);
             if (!item) continue;
             var identity = keyOf(item) + ':' + source;
-            if (observed && observed.get(card) === identity) continue;
+            if (observed && observed.get(card) === identity) {
+                var saved = cache[generation + ':' + keyOf(item)]
+                    || (persisted && persisted.entries[keyOf(item)]);
+                if (saved && recordDue(saved, item)) enqueueBackground(item);
+                continue;
+            }
             if (observed) observed.set(card, identity);
             if (previous && previous.remove) previous.remove();
             if (intersection) intersection.observe(card);
@@ -559,7 +566,54 @@
         }
     }
 
+    function registerSettings() {
+        if (!L.SettingsApi || !L.SettingsApi.addComponent || !L.SettingsApi.addParam) return;
+        L.SettingsApi.addComponent({
+            component: 'quality',
+            name: 'Quality — качество',
+            after: 'parser',
+            icon: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 17h18M5 14l4-4 3 3 6-7"/><circle cx="18" cy="6" r="2"/></svg>'
+        });
+        function add(name, type, label, choices, fallback, description, handler) {
+            var options = {component: 'quality',
+                param: {name: name, type: type, default: fallback},
+                field: {name: label, description: description || ''}};
+            if (choices) options.param.values = choices;
+            if (handler) options.onChange = handler;
+            L.SettingsApi.addParam(options);
+        }
+        var days = {'1': '1 день', '2': '2 дня', '3': '3 дня', '5': '5 дней',
+            '7': '7 дней', '10': '10 дней', '14': '14 дней', '21': '21 день',
+            '30': '30 дней', '45': '45 дней', '60': '60 дней'};
+        add('quality_module_enabled', 'trigger', 'Показывать бейджи', null, true,
+            'Метки качества на постерах и в полной карточке', scan);
+        add('quality_module_background', 'trigger', 'Обновлять в фоне', null, true,
+            'При запущенной Lampa качество периодически проверяется повторно');
+        add('quality_module_days_low', 'select', 'CAM / TS / TC', days, '1',
+            'Интервал повторной проверки низкого качества');
+        add('quality_module_days_hd', 'select', 'SD / HD / FHD', days, '5',
+            'Интервал повторной проверки HD-релизов');
+        add('quality_module_days_4k_new', 'select', '4K — новые фильмы', days, '10',
+            'Для фильмов последних двух лет');
+        add('quality_module_days_4k_old', 'select', '4K — старые фильмы', days, '30',
+            'Для фильмов старше двух лет');
+        add('quality_module_days_empty', 'select', 'Не найдено', days, '1',
+            'Интервал повторного поиска, когда релизов нет');
+        add('quality_module_batch_size', 'select', 'Размер SQL-пакета',
+            {'10': '10 записей', '20': '20 записей', '30': '30 записей'}, '30',
+            'Число фильмов в одном запросе к кэшу Lampac');
+        add('quality_module_refresh_minutes', 'select', 'Фоновая проверка',
+            {'5': 'Каждые 5 минут', '15': 'Каждые 15 минут', '30': 'Каждые 30 минут',
+                '60': 'Каждый час'}, '15',
+            'Частота обхода ранее просмотренных карточек');
+        add('quality_module_refresh_now', 'button', 'Обновить качество сейчас', null, '',
+            'Повторно проверить последние фильмы в фоне', function () {
+                refreshKnown(true);
+            });
+    }
+
     function start() {
+        registerSettings();
         var style = document.createElement('style');
         style.textContent = '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
             + 'font-weight:750;text-align:center;white-space:nowrap;line-height:1.35;'
@@ -595,11 +649,21 @@
         });
         if (L.Storage.listener && L.Storage.listener.follow) {
             L.Storage.listener.follow('change', function (event) {
-                if (event && /^(parser_torrent_type|parser_use_link|jackett_url|jackett_key|jackett_url_two|jackett_key_two|jackett_interview)$/.test(event.name))
+                if (!event) return;
+                if (/^(parser_torrent_type|parser_use_link|jackett_url|jackett_key|jackett_url_two|jackett_key_two|jackett_interview|quality_module_enabled)$/.test(event.name))
                     scan();
+                if (/^quality_module_days_/.test(event.name)) refreshKnown(false);
             });
         }
         scan();
+        // Background work is deliberately throttled and runs only in an open Lampa.
+        var backgroundTimer = setInterval(function () {
+            var minutes = numberSetting('quality_module_refresh_minutes', 15, 5, 60);
+            if (Date.now() - (start.lastBackground || 0) < minutes * 60000) return;
+            start.lastBackground = Date.now();
+            refreshKnown(false);
+        }, 60000);
+        if (backgroundTimer && typeof backgroundTimer.unref === 'function') backgroundTimer.unref();
     }
     if (document.body) start();
     else document.addEventListener('DOMContentLoaded', start);
