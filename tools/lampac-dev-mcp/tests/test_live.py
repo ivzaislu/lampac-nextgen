@@ -38,6 +38,13 @@ class _FakeLampac(BaseHTTPRequestHandler):
 
 
 class TestLive(unittest.TestCase):
+    def test_flixcdn_skips_without_network(self):
+        with patch.object(live_tests, "_fetch", side_effect=AssertionError("network forbidden")):
+            report = live_tests.run_online(
+                "flixcdn", {"kinopoisk_id": "258687", "title": "Test"})
+        self.assertEqual(report["status"], "skipped")
+        self.assertEqual(report["steps"][0]["status"], "skipped")
+
     def test_navigation_and_stream_fetch(self):
         server = HTTPServer(("127.0.0.1", 0), _FakeLampac)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
