@@ -145,6 +145,16 @@
 
 ## Журнал работы
 
+### 2026-10-31 — CI №10 и автоподключение через Lampac
+
+- [CI №10](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41244096130) — **success**: классификация, дополнительный full-card mock, сборка, публикация и HTTP.
+- Добавлена штатная подписка `EventListener.AppReplace` из `ModInit`: при раздаче LampaWeb app.js добавляется загрузчик `/quality.js`, если конфигурация Quality позволяет.
+- Новый параметр `Quality.autoinject` по умолчанию `true`, при `enable=false` модуль не инжектирует скрипт.
+- Добавлены C# проверки с `EventAppReplace` для appjs, appcss и отключения. **Новый CI ещё не пройден**.
+- Внешняя Lampa по-прежнему может подключать `/quality.js` вручную, а рабочий manifest остаётся выключенным.
+
+
+
 ### 2026-10-31 — исправление CI №8
 
 - [CI №8](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41243514800) — **failure** на этапе нового mock-теста: в tests/quality-client.test.js переменная `parserRequest` была объявлена дважды, сборка Quality и проверка синтаксиса самого плагина прошли.

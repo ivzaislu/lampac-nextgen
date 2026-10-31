@@ -6,6 +6,12 @@
 
 Quality использует штатный Lampa.Parser.get. Настроенный вами в privateinit.js JacRed уже известен Lampa через Lampa.Storage (jackett_url, jackett_key, второе подключение и parser_use_link). **Не копируйте URL и API-ключ в Quality.** Встроенный JacRed Lampac не используется.
 
+## Автоматическое подключение в LampaWeb
+
+Если модуль Quality загружен (`manifest.enable=true`), `Quality.enable=true` и `Quality.autoinject=true` (значения конфигурации по умолчанию), он использует `EventListener.AppReplace`, как TranslationSub. Когда LampaWeb отдаёт встроенный JS приложения, Quality автоматически загружает `/quality.js`. Другие модули и их списки плагинов менять не требуется.
+
+При использовании внешней Lampa или при `autoinject=false` можно подключить плагин вручную.
+
 ## Ручное подключение для тестирования
 
 1. На тестовой установке после проверки CI включите Modules/Quality/manifest.json, установив enable: true. По умолчанию это false.
