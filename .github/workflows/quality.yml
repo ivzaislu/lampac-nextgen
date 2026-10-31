@@ -1,0 +1,52 @@
+name: Quality module checks
+
+on:
+  push:
+    branches:
+      - feature/qulity-lampa-module
+    paths:
+      - 'Modules/Quality/**'
+      - 'NextGen.slnx'
+      - '.github/workflows/quality.yml'
+  pull_request:
+    paths:
+      - 'Modules/Quality/**'
+      - 'NextGen.slnx'
+      - '.github/workflows/quality.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Check module manifest and files
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("Modules/Quality")
+          manifest = json.loads((root / "manifest.json").read_text())
+          assert manifest["dynamic"] is True
+          assert manifest["enable"] is False, "Quality must remain disabled until runtime verification"
+          for path in manifest["tree"]:
+              assert (root / path).is_file(), path
+          assert 'Modules/Quality/Quality.csproj' in Path("NextGen.slnx").read_text()
+          print("Quality manifest and solution: OK")
+          PY
+
+      - name: Build Quality module
+        run: dotnet build Modules/Quality/Quality.csproj --configuration Release --nologo
+
+      - name: Build JacRed dependency independently
+        run: dotnet build Modules/JacRed/JacRed.csproj --configuration Release --nologo
