@@ -77,12 +77,33 @@ jobs:
       sbom_artifact_retention_days: ${{ (inputs.tag != '' || startsWith(github.ref, 'refs/tags/')) && 30 || 7 }}
     secrets: inherit
 
+  test-mcp-deployment:
+    name: Test guarded MCP deployer (no Docker changes)
+    if: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) }}
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact dispatched commit
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Python for deployment safety tests
+        uses: actions/setup-python@v6.0.0
+        with:
+          python-version: '3.11'
+      - name: Run isolated deployer unit tests
+        working-directory: tools/lampac-dev-mcp
+        run: python -m unittest discover -s tests -p 'test_deploy.py' -v
+
   build-mcp-test-image:
     name: Build isolated MCP test image and record digest
     # This job is intentionally self-contained: reusing the release Docker
     # workflow would demand its broader contents/attestation permissions.
     if: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) }}
-    needs: build
+    needs:
+      - build
+      - test-mcp-deployment
     runs-on: ubuntu-26.04
     permissions:
       contents: read
