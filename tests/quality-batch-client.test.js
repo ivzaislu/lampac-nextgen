@@ -107,7 +107,7 @@ function boot(movies, sqlHits, delayParser) {
         setInterval, IntersectionObserver: Intersection, MutationObserver: Mutation},
     {filename: 'quality-batch-plugin.js'});
     return {calls, cards, parserCallbacks, parserCount: () => parserCount,
-        settingsComponents, settingsParams, listeners, status: () => w.LampaQuality.status()};
+        settingsComponents, settingsParams, listeners, local, status: () => w.LampaQuality.status()};
 }
 
 (async () => {
@@ -170,5 +170,15 @@ function boot(movies, sqlHits, delayParser) {
     many.parserCallbacks[2].callback({Results: [{Title: 'Stale Film 3 2025 1080p'}]});
     await sleep(30);
     assert.equal(many.parserCount(), 3, 'Remaining stale entries must wait for a later refresh window');
-    console.log('Quality SQL: 12-card batch, SettingsApi, SWR and background throttle OK');
+
+    // A callback completing after a user disables Quality must never
+    // reintroduce a badge on the card.
+    const disabled = boot([{id: 501, title: 'Disabled Movie'}], {}, true);
+    await sleep(240);
+    assert.equal(disabled.parserCallbacks.length, 1);
+    disabled.local.set('quality_module_enabled', 'false');
+    disabled.listeners.app({type: 'ready'});
+    disabled.parserCallbacks[0].callback({Results: [{Title: 'Disabled Movie 2025 4K 2160p'}]});
+    assert.equal(disabled.cards[0].badges.length, 0);
+    console.log('Quality SQL: 12-card batch, SettingsApi, SWR, throttle and disable guard OK');
 })().catch(error => {console.error(error); process.exitCode = 1;});
