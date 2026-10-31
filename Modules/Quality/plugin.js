@@ -590,7 +590,7 @@
                 // parser queue limit (2) and only run this if still below FHD.
                 if (job.item.type === 'movie' && job.item.year
                     && job.item.year < new Date().getFullYear() - 2 && titles.length)
-                    plans.push({title: titles[0], broad: true, ifBelow: 'FHD'});
+                    plans.push({title: titles[0], broad: true, ifBelow: '4K'});
                 function requestNext() {
                     if (finished) return;
                     if (job.generation !== generation) { finish(null, false); return; }

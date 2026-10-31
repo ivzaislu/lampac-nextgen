@@ -525,5 +525,16 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
         {search:'ВАЛЛ·И',broad:false},
         {search:'WALL·E',broad:true}
     ]);
+    checkWallE(req=>{
+        if(!req.from_search && req.search==='WALL·E')
+            return [row('WALL-E (2008) WEB-DL 1080p')];
+        if(!req.from_search)return [row('ВАЛЛ·И (2008) BluRay 720p')];
+        return [row('WALL-E (2008) REMUX UHD 2160p',
+            {Info:{relased:2022,types:['movie']}})];
+    },[
+        {search:'WALL·E',broad:false},
+        {search:'ВАЛЛ·И',broad:false},
+        {search:'WALL·E',broad:true}
+    ]);
     console.log('Quality: WALL-E chooses 4K across aliases and guarded yearless remaster lookup OK');
 }
