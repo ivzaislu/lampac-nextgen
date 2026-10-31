@@ -40,6 +40,8 @@ assert.equal(bestOf([row('The Long Show S17 (2025) WEB-DL 1080p',
     'A new season of a long-running series is not a new unrelated title');
 assert.equal(bestOf([row('The Long Show (2025) 1080p', {Info: {types: ['series']}})], olderShow), null,
     'A very different year without a season marker is ambiguous');
+assert.equal(bestOf([row('The Long Show 17x02 (2025) 720p')], olderShow), 'HD',
+    'Numeric episode notation also identifies a new season');
 assert.equal(bestOf([row('Other Show S17 (2025) 2160p')], olderShow), null,
     'A different series must not match on year and resolution alone');
 assert.equal(bestOf([row('The Long Show S17 (2032) 2160p')], olderShow), null,

@@ -56,7 +56,7 @@
     }
     function seasonRelease(release) {
         var title = String(release.Title || release.title || '');
-        return /(?:^|[^a-z\d])s\d{1,2}(?:e\d{1,3})?(?:[^a-z\d]|$)|\bseason[\s._-]*\d{1,2}\b|сезон[\s._-]*\d{1,2}|\d{1,2}[\s._-]*(?:сезон|season)/i.test(title);
+        return /(?:^|[^a-z\d])s\d{1,2}(?:e\d{1,3})?(?:[^a-z\d]|$)|\bseason[\s._-]*\d{1,2}\b|сезон[\s._-]*\d{1,2}|\d{1,2}[\s._-]*(?:сезон|season)|\b\d{1,2}[xх]\d{1,3}\b/i.test(title);
     }
 
     function bestOf(results, item) {
