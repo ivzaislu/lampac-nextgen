@@ -182,5 +182,13 @@ function boot(count, storage, behavior) {
     assert.equal(stale.parserCalls(),3);
     assert.equal(stale.cards[0].badges[0].textContent,'4K');
     assert.ok(stale.cards.slice(1).every(c=>c.badges[0].textContent==='CAM'));
+    // Drain all mocked in-flight parser callbacks: leaving them pending would
+    // keep the real 35-second request timers alive and slow the CI run.
+    for (let i=1; i<stale.pendingParsers.length; i++) {
+        const request=stale.pendingParsers[i].request;
+        stale.pendingParsers[i].done({Results:[
+            {Title:request.movie.title+' 2025 WEB-DL 2160p'}
+        ]});
+    }
     console.log('Quality stress: 150 cards, bounded SQL, restart, retry and background refresh OK');
 })().catch(e=>{console.error(e); process.exitCode=1;});
