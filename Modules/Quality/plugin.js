@@ -125,7 +125,8 @@
         var s = L.Storage;
         // Only in memory; no URLs or credentials sent to Lampac Quality.
         return [s.field('jackett_url'), s.field('jackett_key'), s.field('jackett_url_two'),
-            s.field('jackett_key_two'), s.field('parser_use_link')].join('|');
+            s.field('jackett_key_two'), s.field('parser_use_link'),
+            s.field('jackett_interview')].join('|');
     }
 
     function keyOf(item) {
@@ -232,16 +233,22 @@
         }, {rootMargin: '150px'}) : null;
 
     function scan() {
-        if (!configured()) return;
+        var enabled = configured();
+        var source = enabled ? sourceSignature() : '';
         var cards = document.querySelectorAll('.card');
         for (var i = 0; i < cards.length; i++) {
             var card = cards[i];
+            var previous = card.querySelector('.quality-module-badge');
+            if (!enabled) {
+                if (previous && previous.remove) previous.remove();
+                if (observed) observed.delete(card);
+                continue;
+            }
             var item = normalize(card.card_data);
             if (!item) continue;
-            var identity = keyOf(item);
+            var identity = keyOf(item) + ':' + source;
             if (observed && observed.get(card) === identity) continue;
             if (observed) observed.set(card, identity);
-            var previous = card.querySelector('.quality-module-badge');
             if (previous && previous.remove) previous.remove();
             if (intersection) intersection.observe(card);
             else load(card.card_data, card, false);
@@ -272,6 +279,12 @@
         L.Listener.follow('app', function (event) {
             if (event && event.type === 'ready') scan();
         });
+        if (L.Storage.listener && L.Storage.listener.follow) {
+            L.Storage.listener.follow('change', function (event) {
+                if (event && /^(parser_torrent_type|parser_use_link|jackett_url|jackett_key|jackett_url_two|jackett_key_two|jackett_interview)$/.test(event.name))
+                    scan();
+            });
+        }
         scan();
     }
     if (document.body) start();

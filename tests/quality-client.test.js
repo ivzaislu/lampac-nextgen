@@ -45,11 +45,11 @@ const client = fs.readFileSync(path.join(__dirname, '../Modules/Quality/plugin.j
 const badges = [];
 const view = {
     querySelector(selector) { return selector === '.quality-module-badge' ? badges[0] || null : null; },
-    appendChild(node) { badges.push(node); }
+    appendChild(node) { badges.push(node); node.remove = () => { const at = badges.indexOf(node); if (at >= 0) badges.splice(at, 1); }; }
 };
 const card = {
     card_data: {id: 77, title: 'Example', original_title: 'Example', release_date: '2025-01-01'},
-    querySelector(selector) { return selector === '.card__view' ? view : null; }
+    querySelector(selector) { return selector === '.card__view' ? view : selector === '.quality-module-badge' ? view.querySelector(selector) : null; }
 };
 const fullBadges = [];
 const fullRate = {
@@ -72,9 +72,10 @@ const settings = {
     jackett_url_two: '', jackett_key_two: ''
 };
 let parserCalls = 0;
+const storageEvents = {};
 let capturedParserRequest = null;
 const fakeWindow = {Lampa: {
-    Storage: {field(name) { return settings[name] || ''; }},
+    Storage: {field(name) { return settings[name] || ''; }, listener: {follow(name, callback) { storageEvents[name] = callback; }}},
     Parser: {get(request, done) {
         parserCalls++;
         capturedParserRequest = request;
@@ -110,4 +111,14 @@ listenerHandlers.full({
 assert.equal(parserCalls, 1, 'Full page should reuse the film cache');
 assert.equal(fullBadges.length, 1);
 assert.equal(fullBadges[0].textContent, 'FHD');
+settings.jackett_url = 'https://another.example.invalid';
+storageEvents.change({name: 'jackett_url'});
+assert.equal(parserCalls, 2, 'Changing JacRed endpoint must requery the card');
+assert.equal(badges.length, 1);
+assert.equal(badges[0].textContent, 'FHD');
+settings.parser_torrent_type = 'prowlarr';
+storageEvents.change({name: 'parser_torrent_type'});
+assert.equal(badges.length, 0, 'Quality badge must disappear when JacRed parser is disabled');
+console.log('Quality plugin: source changes and disabling JacRed OK.');
+
 console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
