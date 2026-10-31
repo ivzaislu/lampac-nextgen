@@ -80,7 +80,7 @@ function boot(remoteGet) {
     }
     class PassiveMutations { observe() {} }
     vm.runInNewContext(plugin, {
-        window: mockWindow, document, console, setTimeout, clearTimeout,
+        window: mockWindow, document, console, setTimeout, clearTimeout, setInterval,
         IntersectionObserver: ImmediateIntersection,
         MutationObserver: PassiveMutations
     }, {filename: 'quality-plugin-sql.js'});
