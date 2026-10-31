@@ -356,3 +356,82 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
         ['Original Title'], '4K');
     console.log('Quality: original/local title fallback and parser error recovery OK');
 }
+
+
+// Live Lampa.Parser contract mock: a year-restricted search can be empty
+// for a 1989/1999 show. Only TV titles receive title-only (from_search)
+// fallbacks, and a movie or promotional clip must never be selected.
+{
+    function tvFallback(item, broadOriginalReleases, expectedLabel, expectBroadLocalized) {
+        const calls = [], badges = [];
+        const view = {
+            querySelector(selector) { return selector === '.quality-module-badge' ? badges[0] || null : null; },
+            appendChild(node) {
+                badges.push(node);
+                node.remove = () => { const i = badges.indexOf(node); if(i >= 0) badges.splice(i, 1); };
+            }
+        };
+        const node = {
+            card_data: item,
+            querySelector(selector) { return selector === '.card__view' ? view : view.querySelector(selector); }
+        };
+        const document = {
+            body: {contains(x) { return x === node; }},
+            head: {appendChild() {}},
+            querySelectorAll(selector) { return selector === '.card' ? [node] : []; },
+            createElement() { return {className: '', textContent: ''}; }
+        };
+        const local = item.name || item.title, original = item.original_name || item.original_title;
+        const w = {Lampa: {
+            Storage: {
+                field(name) {
+                    return {parser_torrent_type:'jackett', parser_use_link:'one',
+                        jackett_url:'https://external.invalid'}[name] || '';
+                },
+                listener: {follow() {}}
+            },
+            Parser: {get(request, done) {
+                calls.push({search:request.search, broad:request.from_search});
+                if (!request.from_search) return done({Results:[]});
+                if (request.search === original) return done({Results:broadOriginalReleases});
+                return done({Results:[]});
+            }},
+            Listener: {follow() {}}
+        }};
+        class Immediate {
+            constructor(cb) { this.cb=cb; }
+            observe(n) { this.cb([{target:n,isIntersecting:true}]); }
+            unobserve() {}
+        }
+        class Passive { observe() {} }
+        vm.runInNewContext(client,{window:w,document,console,setTimeout,clearTimeout,setInterval,
+            IntersectionObserver:Immediate,MutationObserver:Passive},{filename:'quality-tv-year-fallback.js'});
+        assert.equal(badges[0] && badges[0].textContent, expectedLabel,
+            'Expected only verified full-episode quality');
+        const planned = [
+            {search:original,broad:false},
+            {search:local,broad:false},
+            {search:original,broad:true}
+        ];
+        if(expectBroadLocalized) planned.push({search:local,broad:true});
+        assert.deepEqual(calls,planned,
+            'TV fallback should remove the year restriction only after normal lookups fail');
+    }
+    tvFallback({
+        id:301, name:'Симпсоны', original_name:'The Simpsons',
+        first_air_date:'1989-12-17'
+    },[row('The Simpsons S36E01 (2025) WEB-DL 1080p')],'FHD',false);
+    tvFallback({
+        id:302, name:'Гриффины', original_name:'Family Guy',
+        first_air_date:'1999-01-31'
+    },[row('Family Guy S23E01 (2025) WEB-DL 720p')],'HD',false);
+    tvFallback({
+        id:303, name:'Южный парк', original_name:'South Park',
+        first_air_date:'1997-08-13'
+    },[
+        row('South Park: Bigger, Longer & Uncut (1999) HDTV 720p'),
+        row('South Park S28 (2026) Official Trailer 2160p'),
+        row('South Park S28 (2026) Promo 1080p')
+    ],undefined,true);
+    console.log('Quality: original-title/yearless TV fallback and anti-promo verification OK');
+}
