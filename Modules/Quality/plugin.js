@@ -127,6 +127,7 @@
     var rankLabels = Object.keys(rank);
     var batchDelayMs = 150, maxSqlBatch = 30;
     var lastRefresh = Object.create(null);
+    var backgroundTokens = 3, backgroundTokenTime = Date.now();
 
     function setting(name, fallback) {
         var value;
@@ -315,6 +316,8 @@
         if (sqlBatchTimer) { clearTimeout(sqlBatchTimer); sqlBatchTimer = null; }
         abandoned.forEach(function (job) { dropPending(job, null); });
         lastRefresh = Object.create(null);
+        backgroundTokens = 3;
+        backgroundTokenTime = Date.now();
     }
     function jobFor(item) {
         return {key: generation + ':' + keyOf(item), item: item,
@@ -328,6 +331,12 @@
         // Avoid retry storms when JacRed fails. Low-priority requests are throttled.
         if (Date.now() - (lastRefresh[key] || 0) < 15 * 60000) return;
         if (backgroundQueue.length >= 60) return;
+        if (Date.now() - backgroundTokenTime >= 60000) {
+            backgroundTokenTime = Date.now();
+            backgroundTokens = 3;
+        }
+        if (backgroundTokens <= 0) return;
+        backgroundTokens--;
         lastRefresh[key] = Date.now();
         pending[key] = [];
         backgroundQueue.push(jobFor(item));
@@ -527,6 +536,7 @@
             }
             draw(node, label, full);
         });
+        if (full && lastFull && lastFull.node === node) lastFull.generation = generation;
     }
 
     var intersection = typeof IntersectionObserver === 'function'
@@ -554,6 +564,7 @@
             if (!item) continue;
             var identity = keyOf(item) + ':' + source;
             if (observed && observed.get(card) === identity) {
+                if (!previous) { load(card.card_data, card, false); continue; }
                 var saved = cache[generation + ':' + keyOf(item)]
                     || (persisted && persisted.entries[keyOf(item)]);
                 if (saved && recordDue(saved, item)) enqueueBackground(item);
