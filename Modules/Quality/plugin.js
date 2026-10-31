@@ -432,7 +432,16 @@
         signature = current;
         generation++;
         cache = Object.create(null);
-        loadPersistent(hashId(current));
+        if (current) {
+            loadPersistent(hashId(current));
+        } else {
+            // Disabling must not replace the last valid source's saved cache
+            // with an empty record under the same Lampa.Storage key.
+            savePersistent();
+            persisted = null;
+            persistentSource = '';
+            known = Object.create(null);
+        }
         var abandoned = queue.splice(0).concat(backgroundQueue.splice(0),
             sqlPending.splice(0));
         if (sqlBatchTimer) { clearTimeout(sqlBatchTimer); sqlBatchTimer = null; }
