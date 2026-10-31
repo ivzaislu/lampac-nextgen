@@ -172,6 +172,15 @@ requests; skipped must never be mistaken for passed playback. On the
 test VPS, keep only one test container and do not attempt FlixCDN headed
 playback by default.
 
+For subsequent `dev/feature/*` or `dev/fix/*` dispatches, the
+`test-mcp-deployment` CI job runs Python 3.11 unit checks for the
+Python 3.6-compatible deployer **before** the Docker image job.
+These checks exercise receipt validation, target-container restrictions,
+dry-run safety, media probe result filtering, and rollback behavior
+with mocks; they do **not** interact with a real Docker daemon.
+Build #120 predates this additional job. The first run of the new
+unit-test gate remains **unverified**.
+
 ## Stage 3 prototype: guarded test-container deployment
 
 `deploy_test_image.py` is a dependency-free Python 3.6+ CLI that
