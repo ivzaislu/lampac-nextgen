@@ -55,7 +55,7 @@ def main(argv=None):
     except (ValueError, live_tests.TestIssue) as exc:
         result = {"status": "blocked", "reason": str(exc)}
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    return {"passed": 0, "inconclusive": 2,
+    return {"passed": 0, "skipped": 0, "inconclusive": 2,
             "blocked": 3, "failed": 1}.get(result.get("status"), 4)
 
 
