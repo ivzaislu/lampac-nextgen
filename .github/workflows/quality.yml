@@ -6,13 +6,23 @@ on:
       - feature/qulity-lampa-module
     paths:
       - 'Modules/Quality/**'
+      - '!Modules/Quality/PLAN.md'
+      - '!Modules/Quality/README.md'
+      - 'tests/quality-client.test.js'
+      - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
   pull_request:
     paths:
       - 'Modules/Quality/**'
+      - '!Modules/Quality/PLAN.md'
+      - '!Modules/Quality/README.md'
+      - 'tests/quality-client.test.js'
+      - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
+
+  workflow_dispatch:
 
 permissions:
   contents: read
