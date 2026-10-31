@@ -530,6 +530,8 @@
         var identity = keyOf(item);
         if (full) lastFull = {key: identity, node: node, generation: generation};
         resolve(item, function (label) {
+            // Settings/source may change while SQL or JacRed is still pending.
+            if (!configured() || sourceSignature() !== signature) return;
             if (!full) {
                 var current = normalize(node && node.card_data);
                 if (!current || keyOf(current) !== identity) return;
