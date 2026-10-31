@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "test_kind": "live-online-sha-pinned-build-smoke",
+  "source": "operator-provided VPS CLI output plus verified GitHub Actions Build #120 job and digest",
+  "build": {
+    "repository": "ivzaislu/lampac-nextgen",
+    "branch": "dev/feature/lampac-dev-mcp-20261024",
+    "source_sha": "ae72e758589903ad74689178b67db52bfb4b3198",
+    "workflow_run_id": 41222449253,
+    "workflow_run_number": 120,
+    "workflow_conclusion": "success",
+    "image": "ghcr.io/ivzaislu/lampac-mcp-test",
+    "image_digest": "sha256:d99cb0f96c6b3d10b8d95455dd106b37cbac0405028b5540bd3244bdd76b3105",
+    "image_ref": "ghcr.io/ivzaislu/lampac-mcp-test@sha256:d99cb0f96c6b3d10b8d95455dd106b37cbac0405028b5540bd3244bdd76b3105",
+    "image_receipt_artifact": "lampac-mcp-image-ae72e758589903ad74689178b67db52bfb4b3198"
+  },
+  "runtime": {
+    "host": "operator VPS (host identifiers omitted)",
+    "container_name": "lampac-mcp-build120",
+    "port": "127.0.0.1:29118",
+    "resource_caps": {
+      "cpu": 1,
+      "memory_mib": 700,
+      "pids": 256
+    },
+    "startup_logs": [
+      "compilation HDVB",
+      "compilation Online",
+      "loaded module: HDVB",
+      "loaded module: Online",
+      "Configure complete"
+    ],
+    "status_before": "running",
+    "memory_before_mib": 236.5,
+    "status_after": "running",
+    "exit_code_after": 0,
+    "oom_killed_after": false,
+    "memory_after_mib": 319.4,
+    "note": "Docker image digest independently observed in successful GitHub Actions log; VPS container image inspect digest was not included in operator output"
+  },
+  "test": {
+    "provider": "hdvb",
+    "fixture": {
+      "kinopoisk_id": "258687",
+      "title": "Интерстеллар"
+    },
+    "status": "passed",
+    "cli_exit_code": 0,
+    "steps": [
+      "provider: movie (passed)",
+      "navigation: play (passed)",
+      "playback_link (passed)",
+      "stream (passed)"
+    ],
+    "stream": {
+      "bytes_sampled": 262144,
+      "media_type": "video/mp2t",
+      "hls_manifests": 2,
+      "network_retries": 0,
+      "mpegts_sync_detected": true,
+      "mpegts_packet_count": 1394,
+      "mpegts_pat_seen": true,
+      "stream_format_status": "mpegts-framing-valid",
+      "codec_confirmed": true,
+      "ffprobe_exit_code": 0,
+      "codecs": [
+        "aac",
+        "h264"
+      ]
+    }
+  },
+  "limitations": [
+    "Only 256 KiB of media was inspected, not the complete film or UI playback",
+    "Operator manually deployed the image; deployment automation is not yet implemented or tested",
+    "Runtime status and memory are snapshots only, not stress/soak test",
+    "FlixCDN dedicated headed browser was intentionally excluded",
+    "This validates the exact built commit ae72e758..., not source changes made after Build #120"
+  ]
+}
