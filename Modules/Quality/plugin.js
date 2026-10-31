@@ -700,7 +700,7 @@
         var item = normalize(itemData);
         if (!item) return;
         var identity = keyOf(item);
-        if (full) lastFull = {key: identity, node: node, generation: generation};
+        if (full) lastFull = {key: identity, node: node, data: itemData, generation: generation};
         resolve(item, function (label) {
             // Settings/source may change while SQL or JacRed is still pending.
             if (!configured() || sourceSignature() !== signature) return;
@@ -725,6 +725,15 @@
     function scan() {
         var enabled = configured();
         var source = enabled ? sourceSignature() : '';
+        if (source !== signature) {
+            // Invalidate outstanding callbacks and remove badges on the full
+            // page too, not only on posters. Re-enable restores the full
+            // badge from the existing cache or starts a fresh lookup.
+            if (lastFull) draw(lastFull.node, null, true);
+            resetSource(source);
+            if (enabled && lastFull && lastFull.data)
+                load(lastFull.data, lastFull.node, true);
+        }
         var cards = document.querySelectorAll('.card');
         for (var i = 0; i < cards.length; i++) {
             var card = cards[i];

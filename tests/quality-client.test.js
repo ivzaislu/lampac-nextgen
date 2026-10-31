@@ -190,7 +190,13 @@ const card = {
 const fullBadges = [];
 const fullRate = {
     querySelector(selector) { return selector === '.quality-module-badge' ? fullBadges[0] || null : null; },
-    appendChild(node) { fullBadges.push(node); }
+    appendChild(node) {
+        fullBadges.push(node);
+        node.remove = () => {
+            const index = fullBadges.indexOf(node);
+            if (index >= 0) fullBadges.splice(index, 1);
+        };
+    }
 };
 const detachedFullNode = {
     querySelector(selector) { return selector === '.full-start-new__rate-line' ? fullRate : null; }
@@ -208,10 +214,18 @@ const settings = {
     jackett_url_two: '', jackett_key_two: ''
 };
 let parserCalls = 0;
-const storageEvents = {};
+const storageEvents = {}, qualityPreferences = {};
 let capturedParserRequest = null;
 const fakeWindow = {Lampa: {
-    Storage: {field(name) { return settings[name] || ''; }, listener: {follow(name, callback) { storageEvents[name] = callback; }}},
+    Storage: {
+        field(name) { return settings[name] || ''; },
+        get(name, fallback) {
+            return Object.prototype.hasOwnProperty.call(qualityPreferences, name)
+                ? qualityPreferences[name] : fallback;
+        },
+        set(name, value) { qualityPreferences[name] = value; },
+        listener: {follow(name, callback) { storageEvents[name] = callback; }}
+    },
     Parser: {get(request, done) {
         parserCalls++;
         capturedParserRequest = request;
@@ -258,9 +272,21 @@ storageEvents.change({name: 'jackett_url'});
 assert.equal(parserCalls, 2, 'Changing JacRed endpoint must requery the card');
 assert.equal(badges.length, 1);
 assert.equal(badges[0].textContent, 'FHD');
+assert.equal(fullBadges.length, 1, 'Full page must refresh after source change');
+qualityPreferences.quality_module_enabled = false;
+storageEvents.change({name: 'quality_module_enabled'});
+assert.equal(badges.length, 0, 'Disabling Quality clears poster badges');
+assert.equal(fullBadges.length, 0, 'Disabling Quality clears full-page badges');
+assert.equal(fakeWindow.LampaQuality.status().configured, false);
+qualityPreferences.quality_module_enabled = true;
+storageEvents.change({name: 'quality_module_enabled'});
+assert.equal(parserCalls, 2, 'Re-enabling Quality should reuse a valid cache');
+assert.equal(badges.length, 1, 'Re-enabling Quality restores poster badges');
+assert.equal(fullBadges.length, 1, 'Re-enabling Quality restores full-page badge');
 settings.parser_torrent_type = 'prowlarr';
 storageEvents.change({name: 'parser_torrent_type'});
 assert.equal(badges.length, 0, 'Quality badge must disappear when JacRed parser is disabled');
+assert.equal(fullBadges.length, 0, 'Disabled JacRed removes the full-page badge');
 console.log('Quality plugin: source changes and disabling JacRed OK.');
 
 console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
