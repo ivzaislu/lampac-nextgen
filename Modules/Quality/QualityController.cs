@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Shared;
@@ -43,6 +44,15 @@ public class QualityController : BaseController
         public string source { get; set; } = "";
         public string movie { get; set; } = "";
         public string? label { get; set; }
+        public int ttlDays { get; set; } = 0;
+        public List<CacheBatchItem>? items { get; set; }
+    }
+
+    public sealed class CacheBatchItem
+    {
+        public string movie { get; set; } = "";
+        public string? label { get; set; }
+        public int ttlDays { get; set; }
     }
 
     private string TrustedCacheScope(string browserScope)
@@ -76,7 +86,7 @@ public class QualityController : BaseController
                 || !string.Equals(parsed.Authority, Request.Host.Value, StringComparison.OrdinalIgnoreCase))
                 return StatusCode(403);
         }
-        if (Request.ContentLength is > 2048 || request == null
+        if (Request.ContentLength is > 12288 || request == null
             || !QualityCache.ValidIds(request.scope, request.source, request.movie))
             return BadRequest();
 
@@ -86,8 +96,31 @@ public class QualityController : BaseController
             if (request.op == "get")
             {
                 var cached = QualityCache.Get(scope, request.source, request.movie);
-                return new JsonResult(new {hit = cached.hit, label = cached.label, until = cached.until},
+                return new JsonResult(new {hit = cached.hit, label = cached.label, until = cached.until, checkedAt = cached.checkedAt},
                     new JsonSerializerOptions {DefaultIgnoreCondition = JsonIgnoreCondition.Never});
+            }
+            if (request.op is "get_batch" or "put_batch")
+            {
+                if (request.items is not { Count: > 0 and <= QualityCache.MaxBatchSize })
+                    return BadRequest();
+                if (request.items.Exists(item => item == null || !QualityCache.ValidMovie(item.movie)))
+                    return BadRequest();
+
+                if (request.op == "get_batch")
+                {
+                    var keys = request.items.ConvertAll(item => item.movie);
+                    var hits = QualityCache.GetBatch(scope, request.source, keys);
+                    return new JsonResult(new { results = hits },
+                        new JsonSerializerOptions {DefaultIgnoreCondition = JsonIgnoreCondition.Never});
+                }
+
+                if (request.items.Exists(item =>
+                    !QualityCache.ValidLabel(item.label) || item.ttlDays is < 1 or > 60))
+                    return BadRequest();
+                var writes = request.items.ConvertAll(item =>
+                    new QualityCache.CacheWrite(item.movie, item.label, item.ttlDays));
+                QualityCache.PutBatch(scope, request.source, writes);
+                return Ok(new { saved = writes.Count });
             }
             if (request.op == "put")
             {
