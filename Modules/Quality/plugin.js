@@ -113,17 +113,61 @@
     root.__qualityPluginLoaded = true;
     root.__qualityPluginLoadError = null;
     var L = root.Lampa;
-    var cache = Object.create(null), pending = Object.create(null), queue = [];
-    var active = 0, signature = '', generation = 0;
-    var observed = typeof WeakMap === 'function' ? new WeakMap() : null;
-    var persistentKey = 'quality_module_cache_v2', persistent = null, persistTimer = null;
-    var persistentSource = '';
-    var sqlUnavailable = false;
+    var cache = Object.create(null), pending = Object.create(null);
+    var queue = [], backgroundQueue = [], sqlPending = [], sqlWrites = [];
+    var active = 0, signature = '', generation = 0, sqlUnavailable = false;
+    var sqlBatchTimer = null, sqlWriteTimer = null, persistTimer = null;
+    var persisted = null, persistentSource = '', lastFull = null;
+    var known = Object.create(null), observed = typeof WeakMap === 'function' ? new WeakMap() : null;
+    var persistentKey = 'quality_module_cache_v2';
     var scriptSource = document.currentScript && document.currentScript.src || '';
     var sqlEndpoint = /\/quality\.js(?:\?.*)?$/i.test(scriptSource)
         ? scriptSource.replace(/\/quality\.js(?:\?.*)?$/i, '/quality/cache') : '';
     var sqlScope = '';
+    var rankLabels = Object.keys(rank);
+    var batchDelayMs = 150, maxSqlBatch = 30;
+    var lastRefresh = Object.create(null);
 
+    function setting(name, fallback) {
+        var value;
+        try { if (L.Storage.get) value = L.Storage.get(name, fallback); } catch (e) {}
+        return value === undefined || value === null || value === '' ? fallback : value;
+    }
+    function numberSetting(name, fallback, min, max) {
+        var value = Number(setting(name, fallback));
+        return isFinite(value) && value >= min && value <= max ? value : fallback;
+    }
+    function backgroundEnabled() {
+        return setting('quality_module_background', true) !== false
+            && String(setting('quality_module_background', true)) !== 'false';
+    }
+    function badgeEnabled() {
+        return setting('quality_module_enabled', true) !== false
+            && String(setting('quality_module_enabled', true)) !== 'false';
+    }
+    function ttlDays(label, item) {
+        var key = label === '4K'
+            ? (item && item.year && item.year < new Date().getFullYear() - 2
+                ? 'quality_module_days_4k_old' : 'quality_module_days_4k_new')
+            : /^(CAM|TS|TC)$/.test(label || '') ? 'quality_module_days_low'
+            : label ? 'quality_module_days_hd' : 'quality_module_days_empty';
+        var defaults = {quality_module_days_low: 1, quality_module_days_hd: 5,
+            quality_module_days_4k_new: 10, quality_module_days_4k_old: 30,
+            quality_module_days_empty: 1};
+        return numberSetting(key, defaults[key], 1, 60);
+    }
+    function sqlBatchSize() {
+        return numberSetting('quality_module_batch_size', 30, 1, 30);
+    }
+    function hashId(value) {
+        var a = 2166136261, b = 2246822507, text = String(value || '');
+        for (var i = 0; i < text.length; i++) {
+            a = Math.imul(a ^ text.charCodeAt(i), 16777619);
+            b = Math.imul(b ^ text.charCodeAt(i), 3266489917);
+        }
+        return ('00000000' + (a >>> 0).toString(16)).slice(-8)
+            + ('00000000' + (b >>> 0).toString(16)).slice(-8);
+    }
     function initSqlScope() {
         if (!sqlEndpoint || !L.Storage.get || !L.Storage.set
             || typeof root.fetch !== 'function') return;
@@ -140,214 +184,319 @@
             }
         } catch (e) { sqlScope = ''; }
     }
-
-    function sqlRequest(job, operation, label, callback) {
-        if (!sqlScope || !sqlEndpoint || sqlUnavailable
-            || typeof root.fetch !== 'function') {
-            if (callback) callback(null, false);
-            return;
-        }
-        var settled = false;
-        var timeout = setTimeout(function () { finish(null, false); }, 1500);
-        function finish(value, hit) {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeout);
-            if (callback) callback(value, hit);
-        }
-        var data = {op: operation, scope: sqlScope,
-            source: job.sourceHash, movie: job.movieHash};
-        if (operation === 'put') data.label = label;
-        root.fetch(sqlEndpoint, {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            credentials: 'same-origin', body: JSON.stringify(data)
-        }).then(function (response) {
-            if (!response.ok) throw new Error('Quality SQL unavailable');
-            return response.json();
-        }).then(function (result) {
-            if (operation === 'get' && result && result.hit === true
-                && (result.label === null || Object.prototype.hasOwnProperty.call(rank, result.label))
-                && Number(result.until) > Date.now())
-                finish(result.label, true);
-            else finish(null, false);
-        }).catch(function () {
-            sqlUnavailable = true;
-            finish(null, false);
-        });
-    }
-
     initSqlScope();
-
-    // Two 32-bit rolling hashes. Neither JacRed URLs nor keys are persisted.
-    function hashId(value) {
-        var a = 2166136261, b = 2246822507, text = String(value || '');
-        for (var i = 0; i < text.length; i++) {
-            a = Math.imul(a ^ text.charCodeAt(i), 16777619);
-            b = Math.imul(b ^ text.charCodeAt(i), 3266489917);
-        }
-        return ('00000000' + (a >>> 0).toString(16)).slice(-8)
-            + ('00000000' + (b >>> 0).toString(16)).slice(-8);
-    }
-
-    function savePersistent() {
-        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
-        if (!persistent || !L.Storage.set) return;
-        var keys = Object.keys(persistent.entries);
-        var now = Date.now();
-        keys.forEach(function (key) {
-            if (persistent.entries[key].until <= now) delete persistent.entries[key];
-        });
-        keys = Object.keys(persistent.entries);
-        if (keys.length > 500) {
-            keys.sort(function (a, b) {
-                return persistent.entries[b].until - persistent.entries[a].until;
-            });
-            keys.slice(500).forEach(function (key) { delete persistent.entries[key]; });
-        }
-        try { L.Storage.set(persistentKey, persistent, true); } catch (e) {}
-    }
-
-    function schedulePersistent() {
-        if (!persistTimer && L.Storage.set)
-            persistTimer = setTimeout(savePersistent, 350);
-    }
-
-    function loadPersistent(source) {
-        if (persistent && persistentSource === source) return;
-        savePersistent();
-        persistentSource = source;
-        var value = null;
-        try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
-        if (!value || value.version !== 2 || value.source !== source
-            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
-            value = {version: 2, source: source, entries: {}};
-        persistent = value;
-    }
-
     function configured() {
         var s = L.Storage;
-        if (s.field('parser_torrent_type') !== 'jackett') return false;
+        if (!badgeEnabled() || s.field('parser_torrent_type') !== 'jackett') return false;
         var mode = s.field('parser_use_link') || 'one';
         return mode === 'two' ? !!s.field('jackett_url_two')
             : mode === 'one' ? !!s.field('jackett_url')
             : !!(s.field('jackett_url') || s.field('jackett_url_two'));
     }
-
     function sourceSignature() {
         var s = L.Storage;
-        // Only in memory; no URLs or credentials sent to Lampac Quality.
+        // Hash in memory; no JacRed URL or key enters persistent storage or HTTP.
         return [s.field('jackett_url'), s.field('jackett_key'), s.field('jackett_url_two'),
             s.field('jackett_key_two'), s.field('parser_use_link'),
             s.field('jackett_interview')].join('|');
     }
-
     function keyOf(item) {
         return item.source + ':' + item.type + ':' + (item.id || item.title) + ':' + item.year;
     }
-
+    function recordValid(record) {
+        return !!record && typeof record === 'object' && Number(record.until) > Date.now()
+            && (record.label === null || Object.prototype.hasOwnProperty.call(rank, record.label));
+    }
+    function recordDue(record, item) {
+        if (!record) return false;
+        var checked = Number(record.checkedAt) || (Number(record.until)
+            - ttlDays(record.label, item) * 86400000);
+        return Date.now() >= checked + ttlDays(record.label, item) * 86400000;
+    }
+    function makeRecord(label, item, serverRecord) {
+        var checked = serverRecord && Number(serverRecord.checkedAt) || Date.now();
+        var until = serverRecord && Number(serverRecord.until)
+            || (checked + (ttlDays(label, item) + 2) * 86400000);
+        return {label: label, checkedAt: checked, until: until};
+    }
+    function savePersistent() {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        if (!persisted || !L.Storage.set) return;
+        var now = Date.now();
+        Object.keys(persisted.entries).forEach(function (key) {
+            if (persisted.entries[key].until <= now) {
+                delete persisted.entries[key];
+                delete persisted.items[key];
+            }
+        });
+        var keys = Object.keys(persisted.entries);
+        if (keys.length > 500) {
+            keys.sort(function (a, b) {
+                return persisted.entries[b].until - persisted.entries[a].until;
+            });
+            keys.slice(500).forEach(function (key) {
+                delete persisted.entries[key]; delete persisted.items[key];
+            });
+        }
+        try { L.Storage.set(persistentKey, persisted, true); } catch (e) {}
+    }
+    function schedulePersistent() {
+        if (!persistTimer && L.Storage.set) persistTimer = setTimeout(savePersistent, 350);
+    }
+    function loadPersistent(source) {
+        if (persisted && persistentSource === source) return;
+        savePersistent();
+        persistentSource = source;
+        var value;
+        try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
+        if (!value || value.version !== 2 || value.source !== source
+            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
+            value = {version: 2, source: source, entries: {}, items: {}};
+        if (!value.items || typeof value.items !== 'object') value.items = {};
+        persisted = value;
+        known = Object.create(null);
+        Object.keys(value.items).slice(-200).forEach(function (key) {
+            if (value.items[key] && recordValid(value.entries[key])) known[key] = value.items[key];
+        });
+    }
+    function remember(item) {
+        var key = keyOf(item);
+        known[key] = item;
+        if (Object.keys(known).length > 220)
+            delete known[Object.keys(known)[0]];
+    }
+    function saveRecord(job, record, fromSql) {
+        if (job.generation !== generation) return;
+        cache[job.key] = record;
+        if (persisted) {
+            var key = keyOf(job.item);
+            persisted.entries[key] = record;
+            persisted.items[key] = job.item;
+            schedulePersistent();
+        }
+        if (Object.keys(cache).length > 500) cache = Object.create(null);
+        if (!fromSql) enqueueSqlWrite(job, record.label, ttlDays(record.label, job.item));
+    }
+    function dropPending(job, label) {
+        var callbacks = pending[job.key] || [];
+        delete pending[job.key];
+        callbacks.forEach(function (cb) { try { cb(label); } catch (e) {} });
+    }
+    function updateVisible(job, label) {
+        if (job.generation !== generation || !configured()) return;
+        var cards = document.querySelectorAll('.card');
+        for (var i = 0; i < cards.length; i++) {
+            var item = normalize(cards[i].card_data);
+            if (item && keyOf(item) === keyOf(job.item)) draw(cards[i], label, false);
+        }
+        if (lastFull && lastFull.key === keyOf(job.item)
+            && lastFull.generation === generation)
+            draw(lastFull.node, label, true);
+    }
+    function complete(job, label, success, fromSql, serverRecord) {
+        if (job.generation !== generation) success = false;
+        if (success) {
+            var saved = makeRecord(label, job.item, serverRecord);
+            saveRecord(job, saved, fromSql);
+            updateVisible(job, label);
+        }
+        dropPending(job, success ? label : null);
+        if (success && fromSql && recordDue(saved, job.item))
+            enqueueBackground(job.item);
+    }
+    function resetSource(current) {
+        if (current === signature) return;
+        signature = current;
+        generation++;
+        cache = Object.create(null);
+        loadPersistent(hashId(current));
+        var abandoned = queue.splice(0).concat(backgroundQueue.splice(0),
+            sqlPending.splice(0));
+        if (sqlBatchTimer) { clearTimeout(sqlBatchTimer); sqlBatchTimer = null; }
+        abandoned.forEach(function (job) { dropPending(job, null); });
+        lastRefresh = Object.create(null);
+    }
+    function jobFor(item) {
+        return {key: generation + ':' + keyOf(item), item: item,
+            generation: generation, sourceHash: persistentSource, movieHash: hashId(keyOf(item))};
+    }
+    function enqueueBackground(item) {
+        if (!configured() || !backgroundEnabled()) return;
+        var key = generation + ':' + keyOf(item);
+        var existing = cache[key] || (persisted && persisted.entries[keyOf(item)]);
+        if (!existing || !recordDue(existing, item) || pending[key]) return;
+        // Avoid retry storms when JacRed fails. Low-priority requests are throttled.
+        if (Date.now() - (lastRefresh[key] || 0) < 15 * 60000) return;
+        if (backgroundQueue.length >= 60) return;
+        lastRefresh[key] = Date.now();
+        pending[key] = [];
+        backgroundQueue.push(jobFor(item));
+        runQueue();
+    }
     root.LampaQuality = {
         status: function () {
-            return {
-                loaded: true,
-                parser_type: String(L.Storage.field('parser_torrent_type') || ''),
-                configured: configured(),
-                active_requests: active,
-                queued_requests: queue.length,
+            return {loaded: true, parser_type: String(L.Storage.field('parser_torrent_type') || ''),
+                configured: configured(), active_requests: active,
+                queued_requests: queue.length + backgroundQueue.length + sqlPending.length,
                 cache_entries: Object.keys(cache).length,
-                persistent_entries: persistent ? Object.keys(persistent.entries).length : 0,
-                sql_cache: !!(sqlScope && !sqlUnavailable)
-            };
-        }
+                persistent_entries: persisted ? Object.keys(persisted.entries).length : 0,
+                sql_cache: !!(sqlScope && !sqlUnavailable),
+                batch_size: sqlBatchSize(), background_refresh: backgroundEnabled()};
+        },
+        refresh: function () { refreshKnown(true); }
     };
 
     function resolve(item, callback) {
         if (!configured()) { callback(null); return; }
-        var current = sourceSignature();
-        if (current !== signature) {
-            signature = current;
-            generation++;
-            cache = Object.create(null);
-            loadPersistent(hashId(current));
-            var abandoned = queue.splice(0);
-            abandoned.forEach(function (job) {
-                var waiting = pending[job.key] || [];
-                delete pending[job.key];
-                waiting.forEach(function (cb) { try { cb(null); } catch (e) {} });
+        resetSource(sourceSignature());
+        remember(item);
+        var job = jobFor(item);
+        var saved = cache[job.key];
+        if (!saved && persisted) {
+            saved = persisted.entries[keyOf(item)];
+            if (recordValid(saved)) cache[job.key] = saved;
+        }
+        if (recordValid(saved)) {
+            callback(saved.label);
+            if (recordDue(saved, item)) enqueueBackground(item);
+            return;
+        }
+        if (pending[job.key]) { pending[job.key].push(callback); return; }
+        if (queue.length + backgroundQueue.length + sqlPending.length >= 120) {
+            callback(null); return;
+        }
+        pending[job.key] = [callback];
+        if (sqlScope && !sqlUnavailable) {
+            sqlPending.push(job);
+            scheduleSqlBatch();
+        } else {
+            queue.push(job); runQueue();
+        }
+    }
+    function sendSqlBatch(op, jobs, done) {
+        if (!sqlScope || !sqlEndpoint || sqlUnavailable || !root.fetch) {
+            done(null, false); return;
+        }
+        var payload = {op: op, scope: sqlScope, source: jobs[0].sourceHash,
+            items: jobs.map(function (job) {
+                var result = {movie: job.movieHash};
+                if (op === 'put_batch') {
+                    result.label = job.label;
+                    result.ttlDays = job.ttlDays;
+                }
+                return result;
+            })};
+        var settled = false;
+        var timer = setTimeout(function () { finish(null, false); }, 2500);
+        function finish(response, ok) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            done(response, ok);
+        }
+        root.fetch(sqlEndpoint, {method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)})
+            .then(function (response) {
+                if (!response.ok) throw new Error('Quality SQL batch unavailable');
+                return response.json();
+            }).then(function (response) { finish(response, true); })
+            .catch(function () { sqlUnavailable = true; finish(null, false); });
+    }
+    function scheduleSqlBatch() {
+        if (sqlBatchTimer || !sqlPending.length) return;
+        if (sqlPending.length >= sqlBatchSize()) { flushSqlBatch(); return; }
+        sqlBatchTimer = setTimeout(flushSqlBatch, batchDelayMs);
+    }
+    function flushSqlBatch() {
+        if (sqlBatchTimer) { clearTimeout(sqlBatchTimer); sqlBatchTimer = null; }
+        if (!sqlPending.length) return;
+        var jobs = sqlPending.splice(0, sqlBatchSize());
+        var currentGeneration = generation;
+        sendSqlBatch('get_batch', jobs, function (response, ok) {
+            jobs.forEach(function (job) {
+                if (job.generation !== generation || currentGeneration !== generation) {
+                    dropPending(job, null); return;
+                }
+                var record = ok && response && response.results
+                    && response.results[job.movieHash];
+                if (record && recordValid(record)) {
+                    complete(job, record.label, true, true, record);
+                } else {
+                    queue.push(job);
+                }
             });
-        }
-        // Old in-flight and new requests must never share a pending entry.
-        var key = generation + ':' + keyOf(item);
-        var saved = cache[key];
-        if (!saved && persistent) {
-            var record = persistent.entries[keyOf(item)];
-            if (record && record.until > Date.now()
-                && (record.label === null || Object.prototype.hasOwnProperty.call(rank, record.label))) {
-                saved = {label: record.label, until: record.until};
-                cache[key] = saved;
-            }
-        }
-        if (saved && saved.until > Date.now()) { callback(saved.label); return; }
-        if (pending[key]) { pending[key].push(callback); return; }
-        if (queue.length >= 120) { callback(null); return; }
-        pending[key] = [callback];
-        queue.push({key: key, item: item, generation: generation,
-            sourceHash: persistentSource, movieHash: hashId(keyOf(item))});
-        runQueue();
+            runQueue();
+        });
+        if (sqlPending.length) scheduleSqlBatch();
     }
-
-    function complete(job, label, success, fromSql) {
-        if (job.generation !== generation) { label = null; success = false; }
-        if (success) {
-            var days = /^(CAM|TS|TC)$/.test(label || '') ? 1 : label === '4K' ? 10 : label ? 5 : 1;
-            var record = {label: label, until: Date.now() + days * 86400000};
-            cache[job.key] = record;
-            if (persistent) {
-                persistent.entries[keyOf(job.item)] = record;
-                schedulePersistent();
-            }
-            if (Object.keys(cache).length > 500) cache = Object.create(null);
-            if (!fromSql) sqlRequest(job, 'put', label);
-        }
-        var callbacks = pending[job.key] || [];
-        delete pending[job.key];
-        callbacks.forEach(function (cb) { try { cb(label); } catch (e) {} });
-        active--;
-        runQueue();
+    function enqueueSqlWrite(job, label, days) {
+        if (!sqlScope || sqlUnavailable || !root.fetch) return;
+        sqlWrites.push({sourceHash: job.sourceHash, movieHash: job.movieHash,
+            label: label, ttlDays: days});
+        if (sqlWrites.length >= sqlBatchSize()) flushSqlWrites();
+        else if (!sqlWriteTimer) sqlWriteTimer = setTimeout(flushSqlWrites, batchDelayMs);
     }
-
+    function flushSqlWrites() {
+        if (sqlWriteTimer) { clearTimeout(sqlWriteTimer); sqlWriteTimer = null; }
+        if (!sqlWrites.length) return;
+        var first = sqlWrites[0].sourceHash, jobs = [];
+        for (var i = 0; i < sqlWrites.length && jobs.length < sqlBatchSize();) {
+            if (sqlWrites[i].sourceHash === first) jobs.push(sqlWrites.splice(i, 1)[0]);
+            else i++;
+        }
+        sendSqlBatch('put_batch', jobs, function () {});
+        if (sqlWrites.length)
+            sqlWriteTimer = setTimeout(flushSqlWrites, batchDelayMs);
+    }
     function runQueue() {
-        while (active < 2 && queue.length) {
+        while (active < 2 && (queue.length || backgroundQueue.length)) {
             (function (job) {
                 active++;
                 var finished = false;
                 var timeout = setTimeout(function () { finish(null, false); }, 20000);
-                function finish(label, ok, fromSql) {
+                function finish(label, success) {
                     if (finished) return;
                     finished = true;
                     clearTimeout(timeout);
-                    complete(job, label, ok, !!fromSql);
+                    active--;
+                    complete(job, label, success, false);
+                    runQueue();
                 }
-                function queryJacRed() {
-                    if (finished) return;
-                    // A queued job may become stale while checking SQLite.
-                    if (job.generation !== generation) return finish(null, false);
-                    try {
-                        L.Parser.get(parserRequest(job.item), function (response) {
-                            if (!response || !Array.isArray(response.Results)) return finish(null, false);
-                            finish(bestOf(response.Results, job.item), true);
-                        }, function () { finish(null, false); });
-                    } catch (e) { finish(null, false); }
-                }
-                sqlRequest(job, 'get', null, function (label, found) {
-                    if (finished) return;
-                    if (found) finish(label, true, true);
-                    else queryJacRed();
-                });
-            })(queue.shift());
+                if (job.generation !== generation) { finish(null, false); return; }
+                try {
+                    L.Parser.get(parserRequest(job.item), function (response) {
+                        if (!response || !Array.isArray(response.Results)) return finish(null, false);
+                        finish(bestOf(response.Results, job.item), true);
+                    }, function () { finish(null, false); });
+                } catch (e) { finish(null, false); }
+            })(queue.length ? queue.shift() : backgroundQueue.shift());
         }
     }
-
+    function refreshKnown(force) {
+        if (!configured() || (!force && !backgroundEnabled())) return;
+        if (document.hidden) return;
+        var items = Object.keys(known), queued = 0;
+        for (var i = 0; i < items.length && queued < 3; i++) {
+            var item = known[items[i]];
+            var record = cache[generation + ':' + items[i]]
+                || (persisted && persisted.entries[items[i]]);
+            if (!item || !record || (!force && !recordDue(record, item))) continue;
+            if (force) {
+                var key = generation + ':' + keyOf(item);
+                if (!pending[key] && backgroundQueue.length < 60) {
+                    pending[key] = [];
+                    backgroundQueue.push(jobFor(item));
+                    queued++;
+                }
+            } else {
+                var before = backgroundQueue.length;
+                enqueueBackground(item);
+                if (backgroundQueue.length > before) queued++;
+            }
+        }
+        runQueue();
+    }
     function draw(node, label, full) {
         // Lampa uses .card__quality on the poster and .full-start__status
         // inside .full-start-new__rate-line on the full page.
