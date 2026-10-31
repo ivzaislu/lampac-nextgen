@@ -45,14 +45,18 @@ function boot(remoteGet) {
             requests.push(req);
             assert.equal(req.scope.length, 32);
             assert.equal(req.source.length, 16);
-            assert.equal(req.movie.length, 16);
+            assert.equal(req.items.length, 1);
+            assert.equal(req.items[0].movie.length, 16);
+            assert.ok(/^(get_batch|put_batch)$/.test(req.op));
             assert.equal(typeof req.scope, 'string');
             assert.equal(params.credentials, 'same-origin');
             const serialized = JSON.stringify(req);
             assert.equal(serialized.includes('private-token'), false);
             assert.equal(serialized.includes('jacred.example.invalid'), false);
-            if (req.op === 'get')
-                return Promise.resolve({ok: true, json: () => Promise.resolve(remoteGet)});
+            if (req.op === 'get_batch')
+                return Promise.resolve({ok: true, json: () => Promise.resolve({
+                    results: remoteGet.hit ? {[req.items[0].movie]: remoteGet} : {}
+                })});
             return Promise.resolve({ok: true, json: () => Promise.resolve({saved: true})});
         },
         Lampa: {
@@ -85,16 +89,16 @@ function boot(remoteGet) {
 
 (async () => {
     const first = boot({hit: true, label: '4K', until: Date.now() + 86400000});
-    await pause(40);
+    await pause(230);
     assert.equal(first.parserCalls(), 0, 'SQLite hit must skip JacRed');
     assert.equal(first.badges[0].textContent, '4K');
     assert.match(first.badges[0].className, /card__quality/);
     assert.match(first.badges[0].className, /quality-module-4k/);
     assert.equal(first.requests.length, 1);
-    assert.equal(first.requests[0].op, 'get');
+    assert.equal(first.requests[0].op, 'get_batch');
     assert.equal(first.status().sql_cache, true);
 
-    await pause(400);
+    await pause(430);
     const disk = saved.get('quality_module_cache_v2');
     assert.equal(disk.version, 2);
     assert.equal(Object.keys(disk.entries).length, 1, 'Lampa cache should be persisted');
@@ -106,10 +110,10 @@ function boot(remoteGet) {
 
     settings.jackett_url = 'https://different.example.invalid';
     const third = boot({hit: false});
-    await pause(40);
+    await pause(420);
     assert.equal(third.parserCalls(), 1, 'Changing JacRed source must invalidate old caches');
     assert.equal(third.badges[0].textContent, 'FHD');
-    assert.deepEqual(third.requests.map(r => r.op), ['get', 'put']);
+    assert.deepEqual(third.requests.map(r => r.op), ['get_batch', 'put_batch']);
     assert.notEqual(third.requests[0].source, first.requests[0].source);
-    console.log('Quality: SQL hit, Lampa persistence, source isolation and visual classes OK');
+    console.log('Quality: batched SQL hit, Lampa persistence, source isolation and visual classes OK');
 })().catch(e => { console.error(e); process.exitCode = 1; });
