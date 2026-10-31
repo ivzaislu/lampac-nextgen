@@ -511,7 +511,8 @@
                 if (job.generation !== generation) { finish(null, false); return; }
                 var titles = searchTitles(job.item), attempt = 0, anySuccess = false;
                 function requestNext() {
-                    if (finished || job.generation !== generation) return;
+                    if (finished) return;
+                    if (job.generation !== generation) { finish(null, false); return; }
                     if (attempt >= titles.length) {
                         finish(null, anySuccess);
                         return;
@@ -519,7 +520,8 @@
                     var search = titles[attempt++];
                     try {
                         L.Parser.get(parserRequest(job.item, search), function (response) {
-                            if (finished || job.generation !== generation) return;
+                            if (finished) return;
+                            if (job.generation !== generation) { finish(null, false); return; }
                             if (response && Array.isArray(response.Results)) {
                                 anySuccess = true;
                                 var label = bestOf(response.Results, job.item);
