@@ -135,8 +135,11 @@ isolated, SHA-verified VPS deployment without touching production.
 
 FlixCDN's dedicated headed Chromium/Xvfb test is excluded from standard
 resource-limited VPS validation; its previous OOM results do not mean
-the HDVB test infrastructure failed. On the test VPS, keep only one
-test container and do not attempt FlixCDN headed playback by default.
+the HDVB test infrastructure failed. The probe now explicitly reports
+`"status": "skipped"` for `flixcdn`, with CLI exit code 0 and no HTTP
+requests; skipped must never be mistaken for passed playback. On the
+test VPS, keep only one test container and do not attempt FlixCDN headed
+playback by default.
 
 ## First live test on an existing test-only Lampac container
 
