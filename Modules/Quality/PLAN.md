@@ -49,9 +49,9 @@
 **Цель:** находить релизы через штатный JacRed без собственного индексатора и без лишнего внешнего HTTP.
 
 - [x] Изучена структура `Modules/JacRed`, классы `RedApi`, `WebApi`, `JackettApi`, `ApiController`.
-- [x] Подтверждены поля `TorrentDetails`: `title`, `quality`, `videotype`, `relased`, `sid`, `pir`, `types`.
+- [x] Подтверждены поля `TorrentDetails`: `title`, `quality`, `videotype`, `relased`, `sid`, `pir`, `types`. **Важная поправка CI:** тип объявлен в сборке JacRed, а не в сборке Shared, несмотря на namespace `Shared.Models.JacRed`.
 - [x] Зафиксировано, что один `RedApi` не покрывает автоматически все режимы JacRed.
-- [ ] Проверить прямой межмодульный вызов при динамической загрузке и компиляции.
+- [ ] Проверить прямой межмодульный вызов при динамической загрузке и компиляции. Добавлен мост `Shared.Models.Quality.QualitySearchQuery/QualityRelease` + `EventListener.QualityReleaseSearch`; сборка и реальный runtime ещё требуют проверки.
 - [ ] Проверить режимы `red`, `webapi`, `jackett` и `merge` без обхода фильтров/авторизации.
 - [ ] Если прямого поддерживаемого контракта нет, протестировать штатный **локальный API** JacRed как адаптер.
 - [ ] Проверить отключённый JacRed, ошибки и таймауты: ошибка **не равна** «релизов нет».
@@ -166,6 +166,13 @@
 **Готовность:** работающий, документированный и безопасно отключаемый модуль.
 
 ## Журнал
+
+### 2026-10-31 — исправление ошибки сборки CI №2
+
+- [CI Quality №2](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41241944880) **failure**, CS0234/CS0246: `TorrentDetails` принадлежит проекту JacRed, а не `Shared`. Ошибка выявлена именно CI, поэтому не отмечаем этот прогон успешным.
+- Исправление: общий DTO `QualityRelease` в `Shared`, событийный контракт `EventListener.QualityReleaseSearch`, регистрация обработчика в JacRed с поддержкой `red`/`webapi`/`jackett` и `merge=jackett`.
+- Quality больше не зависит от типов приватной сборки JacRed, контроллеры и секреты JacRed не экспортируются.
+- Новые сборка, smoke и динамический runtime **пока не подтверждены**.
 
 ### 2026-10-31 — CI №1 и старт алгоритма
 

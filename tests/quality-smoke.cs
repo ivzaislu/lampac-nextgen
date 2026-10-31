@@ -1,16 +1,17 @@
 #:project ../Modules/Quality/Quality.csproj
 
 using Quality;
-using Shared.Models.JacRed;
+using Shared.Models.Quality;
+using Shared.Models.Events;
 
-static TorrentDetails Release(string title, int quality = 0, int year = 2025, string type = "movie", int seeds = 0, string videoType = null)
-    => new() { title = title, quality = quality, relased = year, types = new[] { type }, sid = seeds, videotype = videoType };
+static QualityRelease Release(string title, int quality = 0, int year = 2025, string type = "movie", int seeds = 0, string videoType = null)
+    => new() { Title = title, Quality = quality, Year = year, Types = new[] { type }, Seeders = seeds, VideoType = videoType };
 
-static void EqualsLabel(string expected, TorrentDetails[] list, bool serial = false, int year = 2025)
+static void EqualsLabel(string expected, QualityRelease[] list, bool serial = false, int year = 2025)
 {
     var found = QualityScorer.PickBest(list, serial, year)?.DisplayLabel ?? "";
     if (found != expected)
-        throw new Exception($"Expected '{expected}', found '{found}' in '{string.Join(", ", list.Select(x => x.title))}'");
+        throw new Exception($"Expected '{expected}', found '{found}' in '{string.Join(", ", list.Select(x => x.Title))}'");
 }
 
 EqualsLabel("CAM", [Release("Film (2025) HDCAM 1080p", 1080)]);
@@ -35,3 +36,11 @@ var top = QualityScorer.PickBest([
 if (top?.FullLabel != "Film (2025) BluRay 1080p")
     throw new Exception("Seeders tie-break failed");
 Console.WriteLine("Quality scorer smoke: 16 scenarios passed.");
+
+EventListener.QualityReleaseSearch = query =>
+    Task.FromResult<IReadOnlyList<QualityRelease>>([Release(query.Title + " (2025) 1080p")]);
+var handler = EventListener.QualityReleaseSearch;
+var returned = await handler(new QualitySearchQuery { Title = "Bridge Test", Year = 2025 });
+EqualsLabel("FHD", returned.ToArray());
+EventListener.QualityReleaseSearch = null;
+Console.WriteLine("Shared JacRed/Quality contract: OK.");

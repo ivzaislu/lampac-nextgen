@@ -1,11 +1,15 @@
 using Microsoft.AspNetCore.Mvc;
 using Shared.Models.Templates;
+using Shared.Models.Quality;
 using System.Text;
 
 namespace Shared.Models.Events;
 
 public class EventListener
 {
+    // JacRed registers on load, unregisters on dispose; consumers never reference its assembly.
+    public static Func<QualitySearchQuery, Task<IReadOnlyList<QualityRelease>>> QualityReleaseSearch;
+
     public static Action<EventLoadKit> LoadKitInit;
 
     public static Action<EventLoadKit> LoadKit;

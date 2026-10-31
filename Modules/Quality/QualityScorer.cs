@@ -1,4 +1,4 @@
-using Shared.Models.JacRed;
+using Shared.Models.Quality;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 namespace Quality;
 
 // This is deliberately independent of the JacRed transport and of Lampa's DOM.
-// It operates on the existing Shared TorrentDetails contract.
+// It operates on the existing Shared QualityRelease contract.
 public static class QualityScorer
 {
     static readonly Regex Trailer = new(@"\b(?:trailer|teaser|sample)\b|трейлер|тизер", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -20,7 +20,7 @@ public static class QualityScorer
     static readonly Regex SD = new(@"480p|\b480\b|\b(?:web-dlrip|bdrip|hdrip)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     static readonly Regex Year = new(@"(?<!\d)(?:19|20)\d{2}(?!\d)", RegexOptions.Compiled);
 
-    public static QualitySelection PickBest(IEnumerable<TorrentDetails> releases, bool isSerial, int year)
+    public static QualitySelection PickBest(IEnumerable<QualityRelease> releases, bool isSerial, int year)
     {
         if (releases == null)
             return null;
@@ -33,21 +33,21 @@ public static class QualityScorer
 
         foreach (var release in releases)
         {
-            if (release == null || string.IsNullOrWhiteSpace(release.title) || Trailer.IsMatch(release.title))
+            if (release == null || string.IsNullOrWhiteSpace(release.Title) || Trailer.IsMatch(release.Title))
                 continue;
 
-            if (!MatchesType(release.types, isSerial) || !MatchesYear(release, year, isSerial))
+            if (!MatchesType(release.Types, isSerial) || !MatchesYear(release, year, isSerial))
                 continue;
 
-            string video = TsAudio.Replace($"{release.videotype} {release.title}", " ");
-            int resolution = release.quality > 0 ? release.quality : ParseResolution(video);
+            string video = TsAudio.Replace($"{release.VideoType} {release.Title}", " ");
+            int resolution = release.Quality > 0 ? release.Quality : ParseResolution(video);
             string label = DetectLabel(video, resolution);
             int rank = Rank(label);
             if (rank == 0)
                 continue;
 
-            int seeds = Math.Max(0, release.sid);
-            int peers = Math.Max(0, release.pir);
+            int seeds = Math.Max(0, release.Seeders);
+            int peers = Math.Max(0, release.Peers);
 
             if (rank > bestRank
                 || rank == bestRank && resolution > bestResolution
@@ -58,7 +58,7 @@ public static class QualityScorer
                 bestResolution = resolution;
                 bestSeeds = seeds;
                 bestPeers = peers;
-                best = new QualitySelection(resolution, label, release.title);
+                best = new QualitySelection(resolution, label, release.Title);
             }
         }
 
@@ -113,13 +113,13 @@ public static class QualityScorer
         return false;
     }
 
-    static bool MatchesYear(TorrentDetails release, int year, bool isSerial)
+    static bool MatchesYear(QualityRelease release, int year, bool isSerial)
     {
         if (year <= 0) return true;
-        int foundYear = release.relased;
+        int foundYear = release.Year;
         if (foundYear <= 0)
         {
-            var match = Year.Match(release.title);
+            var match = Year.Match(release.Title);
             if (match.Success)
                 int.TryParse(match.Value, out foundYear);
         }
