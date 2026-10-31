@@ -32,3 +32,63 @@ assert.equal(parserRequest(tv).movie.number_of_seasons, 1);
 assert.ok(Array.isArray(parserRequest(tv).movie.genres));
 assert.equal(parserRequest(tv).global, false);
 console.log('Quality plugin: scoring and Lampa Parser adapter OK');
+
+
+// Simulate the existing Lampa Parser contract: Quality must not construct a
+// JacRed URL or pass API credentials to any Quality server.
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const client = fs.readFileSync(path.join(__dirname, '../Modules/Quality/plugin.js'), 'utf8');
+const badges = [];
+const view = {
+    querySelector(selector) { return selector === '.quality-module-badge' ? badges[0] || null : null; },
+    appendChild(node) { badges.push(node); }
+};
+const card = {
+    card_data: {id: 77, title: 'Example', original_title: 'Example', release_date: '2025-01-01'},
+    querySelector(selector) { return selector === '.card__view' ? view : null; }
+};
+const fakeDocument = {
+    body: {contains(node) { return node === card; }},
+    head: {appendChild() {}},
+    createElement() { return {textContent: '', className: ''}; },
+    querySelectorAll(selector) { return selector === '.card' ? [card] : []; }
+};
+const settings = {
+    parser_torrent_type: 'jackett', parser_use_link: 'one',
+    jackett_url: 'https://example.invalid', jackett_key: 'test-secret-only-in-lampa',
+    jackett_url_two: '', jackett_key_two: ''
+};
+let parserCalls = 0;
+let parserRequest = null;
+const fakeWindow = {Lampa: {
+    Storage: {field(name) { return settings[name] || ''; }},
+    Parser: {get(request, done) {
+        parserCalls++;
+        parserRequest = request;
+        done({Results: [row('Example (2025) 1080p')]});
+    }},
+    Listener: {follow() {}}
+}};
+class FakeIntersectionObserver {
+    constructor(callback) { this.callback = callback; }
+    observe(node) { this.callback([{isIntersecting: true, target: node}]); }
+    unobserve() {}
+}
+class FakeMutationObserver { observe() {} }
+const env = {
+    window: fakeWindow, document: fakeDocument,
+    IntersectionObserver: FakeIntersectionObserver, MutationObserver: FakeMutationObserver,
+    setTimeout, clearTimeout, setInterval, console
+};
+vm.runInNewContext(client, env, {filename: 'plugin.js'});
+assert.equal(parserCalls, 1);
+assert.equal(parserRequest.search, 'Example');
+assert.equal(parserRequest.movie.release_date, '2025-01-01');
+assert.equal(badges.length, 1);
+assert.equal(badges[0].textContent, 'FHD');
+assert.ok(!JSON.stringify(parserRequest).includes('test-secret-only-in-lampa'));
+vm.runInNewContext(client, env, {filename: 'plugin.js'});
+assert.equal(parserCalls, 1, 'Plugin must ignore duplicate injection');
+console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
