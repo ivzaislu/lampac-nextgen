@@ -12,8 +12,8 @@
             .replace(/\[[^\]]*(?:звук\s+с\s+ts|audio\s+from\s+ts|sound\s+from\s+ts)[^\]]*\]/gi, ' ')
             .replace(/звук\s+с\s+ts|audio\s+from\s+ts|sound\s+from\s+ts/gi, ' ');
         var resolution = Number(info.quality || release.quality || 0);
-        if (/camrip|hdcam|hd-cam|tsrip|камрип|(?:^|[^a-z])cam(?:$|[^a-z])/i.test(video)) return 'CAM';
-        if (/telesync|tele[\s-]*sync|(?:^|[^\w])ts(?:$|[^\w])/i.test(video)) return 'TS';
+        if (/camrip|hdcam|hd-cam|камрип|(?:^|[^a-z])cam(?:$|[^a-z])/i.test(video)) return 'CAM';
+        if (/telesync|tele[\s-]*sync|tsrip|(?:^|[^\w])hdts(?:$|[^\w])|(?:^|[^\w])ts(?:$|[^\w])/i.test(video)) return 'TS';
         if (/telecine|tele[\s-]*cine|(?:^|[^\w])tc(?:$|[^\w])/i.test(video)) return 'TC';
         if (!resolution) {
             if (/2160p|\b4k\b|4к|\buhd\b/i.test(video)) resolution = 2160;
@@ -109,8 +109,8 @@
     root.__qualityPluginLoaded = true;
     var L = root.Lampa;
     var cache = Object.create(null), pending = Object.create(null), queue = [];
-    var active = 0, signature = '';
-    var observed = typeof WeakSet === 'function' ? new WeakSet() : null;
+    var active = 0, signature = '', generation = 0;
+    var observed = typeof WeakMap === 'function' ? new WeakMap() : null;
 
     function configured() {
         var s = L.Storage;
@@ -137,20 +137,28 @@
         var current = sourceSignature();
         if (current !== signature) {
             signature = current;
+            generation++;
             cache = Object.create(null);
+            var abandoned = queue.splice(0);
+            abandoned.forEach(function (job) {
+                var waiting = pending[job.key] || [];
+                delete pending[job.key];
+                waiting.forEach(function (cb) { try { cb(null); } catch (e) {} });
+            });
         }
-        var key = keyOf(item);
+        // Old in-flight and new requests must never share a pending entry.
+        var key = generation + ':' + keyOf(item);
         var saved = cache[key];
         if (saved && saved.until > Date.now()) { callback(saved.label); return; }
         if (pending[key]) { pending[key].push(callback); return; }
         if (queue.length >= 120) { callback(null); return; }
         pending[key] = [callback];
-        queue.push({key: key, item: item, source: current});
+        queue.push({key: key, item: item, generation: generation});
         runQueue();
     }
 
     function complete(job, label, success) {
-        if (job.source !== signature) { label = null; success = false; }
+        if (job.generation !== generation) { label = null; success = false; }
         if (success) {
             var days = /^(CAM|TS|TC)$/.test(label || '') ? 1 : label === '4K' ? 10 : label ? 5 : 1;
             cache[job.key] = {label: label, until: Date.now() + days * 86400000};
@@ -186,7 +194,8 @@
     }
 
     function draw(node, label, full) {
-        if (!label || !node || !document.body || !document.body.contains(node)) return;
+        // The full/complite event can arrive before its subtree is attached to the document.
+        if (!label || !node || !document.body || (!full && !document.body.contains(node))) return;
         var parent = full ? node.querySelector('.full-start-new__rate-line')
             || node.querySelector('.full-start-new__details')
             : node.querySelector('.card__view') || node;
@@ -203,7 +212,14 @@
     function load(itemData, node, full) {
         var item = normalize(itemData);
         if (!item) return;
-        resolve(item, function (label) { draw(node, label, full); });
+        var identity = keyOf(item);
+        resolve(item, function (label) {
+            if (!full) {
+                var current = normalize(node && node.card_data);
+                if (!current || keyOf(current) !== identity) return;
+            }
+            draw(node, label, full);
+        });
     }
 
     var intersection = typeof IntersectionObserver === 'function'
@@ -220,8 +236,13 @@
         var cards = document.querySelectorAll('.card');
         for (var i = 0; i < cards.length; i++) {
             var card = cards[i];
-            if (!card.card_data || observed && observed.has(card)) continue;
-            if (observed) observed.add(card);
+            var item = normalize(card.card_data);
+            if (!item) continue;
+            var identity = keyOf(item);
+            if (observed && observed.get(card) === identity) continue;
+            if (observed) observed.set(card, identity);
+            var previous = card.querySelector('.quality-module-badge');
+            if (previous && previous.remove) previous.remove();
             if (intersection) intersection.observe(card);
             else load(card.card_data, card, false);
         }
@@ -248,6 +269,9 @@
         } else {
             setInterval(scan, 2500);
         }
+        L.Listener.follow('app', function (event) {
+            if (event && event.type === 'ready') scan();
+        });
         scan();
     }
     if (document.body) start();

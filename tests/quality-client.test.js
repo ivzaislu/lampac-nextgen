@@ -6,6 +6,8 @@ const movie = {type: 'movie', year: 2025, title: 'Example', original: 'Example',
 const labels = [
     ['Example 2025 HDCAM 1080p', 'CAM'],
     ['Example 2025 TS 720p', 'TS'],
+    ['Example 2025 TSRip 720p', 'TS'],
+    ['Example 2025 HDTS 720p', 'TS'],
     ['Example 2025 TC 1080p', 'TC'],
     ['Example 2025 HDRip', 'SD'],
     ['Example 2025 WEB-DL 720p', 'HD'],
@@ -49,6 +51,15 @@ const card = {
     card_data: {id: 77, title: 'Example', original_title: 'Example', release_date: '2025-01-01'},
     querySelector(selector) { return selector === '.card__view' ? view : null; }
 };
+const fullBadges = [];
+const fullRate = {
+    querySelector(selector) { return selector === '.quality-module-badge' ? fullBadges[0] || null : null; },
+    appendChild(node) { fullBadges.push(node); }
+};
+const detachedFullNode = {
+    querySelector(selector) { return selector === '.full-start-new__rate-line' ? fullRate : null; }
+};
+const listenerHandlers = {};
 const fakeDocument = {
     body: {contains(node) { return node === card; }},
     head: {appendChild() {}},
@@ -69,7 +80,7 @@ const fakeWindow = {Lampa: {
         capturedParserRequest = request;
         done({Results: [row('Example (2025) 1080p')]});
     }},
-    Listener: {follow() {}}
+    Listener: {follow(name, callback) { listenerHandlers[name] = callback; }}
 }};
 class FakeIntersectionObserver {
     constructor(callback) { this.callback = callback; }
@@ -91,4 +102,12 @@ assert.equal(badges[0].textContent, 'FHD');
 assert.ok(!JSON.stringify(capturedParserRequest).includes('test-secret-only-in-lampa'));
 vm.runInNewContext(client, env, {filename: 'plugin.js'});
 assert.equal(parserCalls, 1, 'Plugin must ignore duplicate injection');
+listenerHandlers.full({
+    type: 'complite',
+    data: {movie: {id: 77, title: 'Example', original_title: 'Example', release_date: '2025-01-01'}},
+    body: [detachedFullNode]
+});
+assert.equal(parserCalls, 1, 'Full page should reuse the film cache');
+assert.equal(fullBadges.length, 1);
+assert.equal(fullBadges[0].textContent, 'FHD');
 console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
