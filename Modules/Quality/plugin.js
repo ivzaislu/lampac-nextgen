@@ -118,6 +118,66 @@
     var observed = typeof WeakMap === 'function' ? new WeakMap() : null;
     var persistentKey = 'quality_module_cache_v2', persistent = null, persistTimer = null;
     var persistentSource = '';
+    var sqlUnavailable = false;
+    var scriptSource = document.currentScript && document.currentScript.src || '';
+    var sqlEndpoint = /\/quality\.js(?:\?.*)?$/i.test(scriptSource)
+        ? scriptSource.replace(/\/quality\.js(?:\?.*)?$/i, '/quality/cache') : '';
+    var sqlScope = '';
+
+    function initSqlScope() {
+        if (!sqlEndpoint || !L.Storage.get || !L.Storage.set
+            || typeof root.fetch !== 'function') return;
+        try {
+            sqlScope = L.Storage.get('quality_module_sql_scope_v1') || '';
+            if (!/^[a-f0-9]{32}$/.test(sqlScope)) {
+                if (!root.crypto || !root.crypto.getRandomValues) return;
+                var bytes = new Uint8Array(16);
+                root.crypto.getRandomValues(bytes);
+                sqlScope = Array.prototype.map.call(bytes, function (byte) {
+                    return ('0' + byte.toString(16)).slice(-2);
+                }).join('');
+                L.Storage.set('quality_module_sql_scope_v1', sqlScope, true);
+            }
+        } catch (e) { sqlScope = ''; }
+    }
+
+    function sqlRequest(job, operation, label, callback) {
+        if (!sqlScope || !sqlEndpoint || sqlUnavailable
+            || typeof root.fetch !== 'function') {
+            if (callback) callback(null, false);
+            return;
+        }
+        var settled = false;
+        var timeout = setTimeout(function () { finish(null, false); }, 1500);
+        function finish(value, hit) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            if (callback) callback(value, hit);
+        }
+        var data = {op: operation, scope: sqlScope,
+            source: job.sourceHash, movie: job.movieHash};
+        if (operation === 'put') data.label = label;
+        root.fetch(sqlEndpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'same-origin', body: JSON.stringify(data)
+        }).then(function (response) {
+            if (!response.ok) throw new Error('Quality SQL unavailable');
+            return response.json();
+        }).then(function (result) {
+            if (operation === 'get' && result && result.hit === true
+                && (result.label === null || Object.prototype.hasOwnProperty.call(rank, result.label))
+                && Number(result.until) > Date.now())
+                finish(result.label, true);
+            else finish(null, false);
+        }).catch(function () {
+            sqlUnavailable = true;
+            finish(null, false);
+        });
+    }
+
+    initSqlScope();
 
     // Two 32-bit rolling hashes. Neither JacRed URLs nor keys are persisted.
     function hashId(value) {
@@ -194,7 +254,9 @@
                 configured: configured(),
                 active_requests: active,
                 queued_requests: queue.length,
-                cache_entries: Object.keys(cache).length
+                cache_entries: Object.keys(cache).length,
+                persistent_entries: persistent ? Object.keys(persistent.entries).length : 0,
+                sql_cache: !!(sqlScope && !sqlUnavailable)
             };
         }
     };
@@ -229,11 +291,12 @@
         if (pending[key]) { pending[key].push(callback); return; }
         if (queue.length >= 120) { callback(null); return; }
         pending[key] = [callback];
-        queue.push({key: key, item: item, generation: generation});
+        queue.push({key: key, item: item, generation: generation,
+            sourceHash: persistentSource, movieHash: hashId(keyOf(item))});
         runQueue();
     }
 
-    function complete(job, label, success) {
+    function complete(job, label, success, fromSql) {
         if (job.generation !== generation) { label = null; success = false; }
         if (success) {
             var days = /^(CAM|TS|TC)$/.test(label || '') ? 1 : label === '4K' ? 10 : label ? 5 : 1;
@@ -244,6 +307,7 @@
                 schedulePersistent();
             }
             if (Object.keys(cache).length > 500) cache = Object.create(null);
+            if (!fromSql) sqlRequest(job, 'put', label);
         }
         var callbacks = pending[job.key] || [];
         delete pending[job.key];
@@ -258,18 +322,28 @@
                 active++;
                 var finished = false;
                 var timeout = setTimeout(function () { finish(null, false); }, 20000);
-                function finish(label, ok) {
+                function finish(label, ok, fromSql) {
                     if (finished) return;
                     finished = true;
                     clearTimeout(timeout);
-                    complete(job, label, ok);
+                    complete(job, label, ok, !!fromSql);
                 }
-                try {
-                    L.Parser.get(parserRequest(job.item), function (response) {
-                        if (!response || !Array.isArray(response.Results)) return finish(null, false);
-                        finish(bestOf(response.Results, job.item), true);
-                    }, function () { finish(null, false); });
-                } catch (e) { finish(null, false); }
+                function queryJacRed() {
+                    if (finished) return;
+                    // A queued job may become stale while checking SQLite.
+                    if (job.generation !== generation) return finish(null, false);
+                    try {
+                        L.Parser.get(parserRequest(job.item), function (response) {
+                            if (!response || !Array.isArray(response.Results)) return finish(null, false);
+                            finish(bestOf(response.Results, job.item), true);
+                        }, function () { finish(null, false); });
+                    } catch (e) { finish(null, false); }
+                }
+                sqlRequest(job, 'get', null, function (label, found) {
+                    if (finished) return;
+                    if (found) finish(label, true, true);
+                    else queryJacRed();
+                });
             })(queue.shift());
         }
     }
