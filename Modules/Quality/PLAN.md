@@ -145,6 +145,14 @@
 
 ## Журнал работы
 
+### 2026-10-31 — исправление CI №8
+
+- [CI №8](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41243514800) — **failure** на этапе нового mock-теста: в tests/quality-client.test.js переменная `parserRequest` была объявлена дважды, сборка Quality и проверка синтаксиса самого плагина прошли.
+- Коллизия имени исправлена: переменная результата переименована в `capturedParserRequest`. Нужна повторная проверка CI.
+- Реальный JacRed пользователя и UI Lampa остаются непроверенными.
+
+
+
 ### 2026-10-31 — CI №7 и дополнительная интеграционная проверка
 
 - [CI №7](https://github.com/ivzaislu/lampac-nextgen/actions/runs/41243347333): **success** (сборка, Node, публикация Core, динамическая загрузка Quality, GET /quality.js).

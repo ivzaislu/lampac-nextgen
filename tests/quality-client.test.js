@@ -61,12 +61,12 @@ const settings = {
     jackett_url_two: '', jackett_key_two: ''
 };
 let parserCalls = 0;
-let parserRequest = null;
+let capturedParserRequest = null;
 const fakeWindow = {Lampa: {
     Storage: {field(name) { return settings[name] || ''; }},
     Parser: {get(request, done) {
         parserCalls++;
-        parserRequest = request;
+        capturedParserRequest = request;
         done({Results: [row('Example (2025) 1080p')]});
     }},
     Listener: {follow() {}}
@@ -84,11 +84,11 @@ const env = {
 };
 vm.runInNewContext(client, env, {filename: 'plugin.js'});
 assert.equal(parserCalls, 1);
-assert.equal(parserRequest.search, 'Example');
-assert.equal(parserRequest.movie.release_date, '2025-01-01');
+assert.equal(capturedParserRequest.search, 'Example');
+assert.equal(capturedParserRequest.movie.release_date, '2025-01-01');
 assert.equal(badges.length, 1);
 assert.equal(badges[0].textContent, 'FHD');
-assert.ok(!JSON.stringify(parserRequest).includes('test-secret-only-in-lampa'));
+assert.ok(!JSON.stringify(capturedParserRequest).includes('test-secret-only-in-lampa'));
 vm.runInNewContext(client, env, {filename: 'plugin.js'});
 assert.equal(parserCalls, 1, 'Plugin must ignore duplicate injection');
 console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
