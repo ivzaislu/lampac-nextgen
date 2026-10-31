@@ -348,6 +348,14 @@ def run_online(provider, params, navigation_timeout=12):
         raise ValueError("Use a small, non-secret provider query fixture")
     if type(navigation_timeout) is not int or not (5 <= navigation_timeout <= 120):
         raise ValueError("navigation_timeout must be an integer from 5 to 120 seconds")
+    # FlixCDN is the sole hosted resolver requiring its own headed
+    # Chromium + Xvfb. The 1 GB VPS twice logged 'Out of memory' during
+    # live probes. Do not launch it as part of standard MCP validation.
+    if provider.lower() == "flixcdn":
+        return {"status": "skipped", "provider": provider, "steps": [
+            {"stage": "provider", "status": "skipped",
+             "reason": "Dedicated headed Chromium/Xvfb is excluded from low-memory VPS smoke tests"}
+        ], "note": "Skip is intentional; this is not a provider failure or successful playback"}
     steps = []
     try:
         url = f"{_base()}/lite/{provider}?{urlencode({**params, 'rjson': 'true'})}"
