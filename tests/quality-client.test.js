@@ -105,6 +105,20 @@ assert.equal(bestOf([row('Example 2025 Official Trailer 4K 2160p')], moviePromo)
 assert.equal(bestOf([row('Example 2025 Promotional 1080p')], moviePromo), null);
 assert.equal(bestOf([row('Example 2025 Рекламный ролик HD 720p')], moviePromo), null);
 
+
+const wallE = normalize({id:10681, title:'ВАЛЛ·И', original_title:'WALL·E',
+    release_date:'2008-06-27'});
+assert.equal(bestOf([row('WALL-E (2008) BluRay 720p')], wallE), 'HD');
+assert.equal(bestOf([row('WALLE (2008) WEB-DL UHD 2160p')], wallE), '4K',
+    'The letter E may be attached without a separator');
+assert.equal(bestOf([row('WALL-E (2008) UHD 2160p',
+    {Info: {relased: 2022, types: ['movie']}})], wallE), '4K',
+    'A 4K remaster with metadata year 2022 still names the 2008 original');
+assert.equal(bestOf([row('WALL-E (2022) UHD 2160p')], wallE), null,
+    'The 2008 release year must be present to allow an off-year remaster');
+assert.equal(bestOf([row('WALL-E (2008) Official Trailer 4K 2160p')], wallE), null,
+    'High resolution promo must not override full film');
+
 console.log('Quality plugin: scoring and Lampa Parser adapter OK');
 
 
@@ -292,7 +306,7 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
 // The previous quality_lampa searched original title first and localized title
 // second. Verify the native Lampa.Parser fallback without any private JacRed URL.
 {
-    function testSearchFallback(firstResponse, expected, expectedBadge) {
+    function testSearchFallback(firstResponse, expected, expectedBadge, secondResponse) {
         const queries = [], badges = [], listeners = {};
         const poster = {
             querySelector(selector) { return selector === '.quality-module-badge' ? badges[0] || null : null; },
@@ -331,7 +345,7 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
                             if (firstResponse === 'network_error') fail('temporary failure');
                             else done({Results: firstResponse});
                         } else {
-                            done({Results: [row('Местное название 2024 1080p')]});
+                            done({Results: secondResponse || [row('Местное название 2024 1080p')]});
                         }
                     }
                 },
@@ -357,6 +371,13 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
         ['Original Title', 'Местное название'], 'FHD');
     testSearchFallback([row('Original Title (2024) 2160p')],
         ['Original Title'], '4K');
+    testSearchFallback([row('Original Title (2024) 720p')],
+        ['Original Title', 'Местное название'], '4K',
+        [row('Местное название (2024) 2160p')],
+        'A second alias can have better quality than the first');
+    testSearchFallback([row('Original Title (2024) 1080p')],
+        ['Original Title', 'Местное название'], 'FHD',
+        [row('Местное название (2024) 720p')]);
     console.log('Quality: original/local title fallback and parser error recovery OK');
 }
 
@@ -437,4 +458,70 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
         row('South Park S28 (2026) Promo 1080p')
     ],undefined,true);
     console.log('Quality: original-title/yearless TV fallback and anti-promo verification OK');
+}
+
+
+// WALL·E (2008): a cached HD can be caused by the *first* name lookup
+// returning HD even when the localized name or a yearless search finds 4K.
+{
+    function checkWallE(replyFor, expectedCalls) {
+        const badges=[], requests=[];
+        const view={
+            querySelector(s){return s==='.quality-module-badge'?badges[0]||null:null;},
+            appendChild(node){badges.push(node);node.remove=()=>{const i=badges.indexOf(node);if(i>=0)badges.splice(i,1);};}
+        };
+        const card={
+            card_data:{id:10681, title:'ВАЛЛ·И',original_title:'WALL·E',
+                release_date:'2008-06-27'},
+            querySelector(s){return s==='.card__view'?view:view.querySelector(s);}
+        };
+        const d={
+            body:{contains(n){return n===card;}},
+            head:{appendChild(){}},
+            querySelectorAll(s){return s==='.card'?[card]:[];},
+            createElement(){return {className:'',textContent:''};}
+        };
+        const w={Lampa:{
+            Storage:{
+                field(name){return {parser_torrent_type:'jackett',
+                    parser_use_link:'one',jackett_url:'https://external.invalid'}[name]||'';},
+                listener:{follow(){}}
+            },
+            Parser:{get(request,done){
+                requests.push({search:request.search,broad:request.from_search});
+                done({Results:replyFor(request)});
+            }},
+            Listener:{follow(){}}
+        }};
+        class Visible{
+            constructor(callback){this.callback=callback;}
+            observe(n){this.callback([{isIntersecting:true,target:n}]);}
+            unobserve(){}
+        }
+        class Mutation{observe(){}}
+        vm.runInNewContext(client,{window:w,document:d,console,setTimeout,clearTimeout,
+            setInterval,IntersectionObserver:Visible,MutationObserver:Mutation},
+            {filename:'quality-wall-e-comparison.js'});
+        assert.equal(badges[0]&&badges[0].textContent,'4K');
+        assert.deepEqual(requests,expectedCalls);
+    }
+    checkWallE(req=>{
+        if(req.search==='WALL·E')return [row('WALL-E (2008) 720p')];
+        return [row('ВАЛЛ·И (2008) REMUX UHD 2160p')];
+    },[
+        {search:'WALL·E',broad:false},
+        {search:'ВАЛЛ·И',broad:false}
+    ]);
+    checkWallE(req=>{
+        if(!req.from_search&&req.search==='WALL·E')
+            return [row('WALL-E (2008) WEB-DL 720p')];
+        if(!req.from_search)return [];
+        return [row('WALLE (2008) REMUX UHD 2160p',
+            {Info:{relased:2022,types:['movie']}})];
+    },[
+        {search:'WALL·E',broad:false},
+        {search:'ВАЛЛ·И',broad:false},
+        {search:'WALL·E',broad:true}
+    ]);
+    console.log('Quality: WALL-E chooses 4K across aliases and guarded yearless remaster lookup OK');
 }
