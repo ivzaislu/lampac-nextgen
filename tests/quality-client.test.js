@@ -122,3 +122,90 @@ assert.equal(badges.length, 0, 'Quality badge must disappear when JacRed parser 
 console.log('Quality plugin: source changes and disabling JacRed OK.');
 
 console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
+
+
+// Asynchronous Lampa scenario: a recycled card, an in-flight request and a
+// switch to another configured JacRed must not show the earlier release.
+{
+    const renderedBadges = [];
+    const callbacks = [];
+    const handlers = {}, storageHandlers = {};
+    const sourceSettings = {
+        parser_torrent_type: 'jackett',
+        parser_use_link: 'one',
+        jackett_url: 'https://first.example.invalid',
+        jackett_key: 'opaque-client-key',
+        jackett_url_two: '', jackett_key_two: ''
+    };
+    const cardView = {
+        querySelector(selector) {
+            return selector === '.quality-module-badge' ? renderedBadges[0] || null : null;
+        },
+        appendChild(node) {
+            renderedBadges.push(node);
+            node.remove = () => {
+                const index = renderedBadges.indexOf(node);
+                if (index >= 0) renderedBadges.splice(index, 1);
+            };
+        }
+    };
+    const recycledCard = {
+        card_data: {id: 1, title: 'Alpha', original_title: 'Alpha', release_date: '2025-01-01'},
+        querySelector(selector) {
+            if (selector === '.card__view') return cardView;
+            if (selector === '.quality-module-badge') return cardView.querySelector(selector);
+            return null;
+        }
+    };
+    const page = {
+        body: {contains(node) { return node === recycledCard; }},
+        head: {appendChild() {}},
+        createElement() { return {textContent: '', className: ''}; },
+        querySelectorAll(selector) { return selector === '.card' ? [recycledCard] : []; }
+    };
+    const windowMock = {Lampa: {
+        Storage: {
+            field(name) { return sourceSettings[name] || ''; },
+            listener: {follow(name, callback) { storageHandlers[name] = callback; }}
+        },
+        Parser: {get(request, done) { callbacks.push(done); }},
+        Listener: {follow(name, callback) { handlers[name] = callback; }}
+    }};
+    class ImmediateObserver {
+        constructor(callback) { this.callback = callback; }
+        observe(node) { this.callback([{isIntersecting: true, target: node}]); }
+        unobserve() {}
+    }
+    class SilentMutationObserver { observe() {} }
+    vm.runInNewContext(client, {
+        window: windowMock, document: page, console,
+        IntersectionObserver: ImmediateObserver,
+        MutationObserver: SilentMutationObserver,
+        setTimeout, clearTimeout, setInterval
+    }, {filename: 'quality-asynchronous-plugin.js'});
+
+    assert.equal(callbacks.length, 1, 'First card must start a request');
+    recycledCard.card_data = {id: 2, title: 'Beta', original_title: 'Beta', release_date: '2025-01-01'};
+    handlers.app({type: 'ready'});
+    assert.equal(callbacks.length, 2, 'Recycled card must start its own request');
+
+    sourceSettings.jackett_url = 'https://second.example.invalid';
+    storageHandlers.change({name: 'jackett_url'});
+    assert.equal(callbacks.length, 2, 'Concurrency limit should queue a third request');
+
+    callbacks[0]({Results: [row('Alpha 2025 4K')]});
+    assert.equal(renderedBadges.length, 0, 'Old film must never update a recycled card');
+    assert.equal(callbacks.length, 3, 'New source request should start after a slot is freed');
+
+    callbacks[1]({Results: [row('Beta 2025 4K')]});
+    assert.equal(renderedBadges.length, 0, 'Old JacRed result must not overwrite new source');
+
+    callbacks[2]({Results: [row('Beta 2025 1080p')]});
+    assert.equal(renderedBadges.length, 1);
+    assert.equal(renderedBadges[0].textContent, 'FHD');
+
+    sourceSettings.parser_torrent_type = 'prowlarr';
+    storageHandlers.change({name: 'parser_torrent_type'});
+    assert.equal(renderedBadges.length, 0, 'Disabled JacRed parser must remove quality badge');
+    console.log('Quality plugin: async card reuse, concurrency and stale-provider guard OK.');
+}
