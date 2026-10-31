@@ -38,7 +38,18 @@
         var names = [info.name, info.originalname, info.original_name].map(normalizedTitle).filter(Boolean);
         if (names.some(function (name) { return candidates.indexOf(name) >= 0; })) return true;
         var title = ' ' + normalizedTitle(release.Title || release.title) + ' ';
-        return candidates.some(function (name) { return title.indexOf(' ' + name + ' ') >= 0; });
+        return candidates.some(function (name) {
+            if (title.indexOf(' ' + name + ' ') >= 0) return true;
+            // WALL·E / WALL-E / WALLE and ВАЛЛ·И / ВАЛЛИ:
+            // combine only a one-letter suffix, not arbitrary words.
+            var parts = name.split(' ');
+            if (parts.length === 2 && parts[1].length === 1
+                && parts[0].length >= 3) {
+                var compact = parts.join('');
+                if (title.indexOf(' ' + compact + ' ') >= 0) return true;
+            }
+            return false;
+        });
     }
 
     // Only whole promotional markers outside the requested title count.
@@ -124,11 +135,19 @@
             var year = yearOf(release);
             if (year > new Date().getFullYear() + 1) return;
             if (year && item.year && Math.abs(year - item.year) > (item.type === 'tv' ? 5 : 1)) {
-                // A torrent's release year can be much later than the premiere
-                // of The Simpsons, Family Guy or South Park.
-                if (item.type !== 'tv' || year < item.year
-                    || !hasSeriesEvidence(release))
+                if (item.type === 'movie') {
+                    // A restored/remastered film may have metadata dated with
+                    // the new release, despite the title naming the original year.
+                    var titleYears = String(title).match(/(?:^|\D)(?:19|20)\d{2}(?=\D|$)/g) || [];
+                    var exactOriginalYear = titleYears.some(function (part) {
+                        return Math.abs(Number(part.replace(/\D/g, '')) - item.year) <= 1;
+                    });
+                    if (!exactOriginalYear) return;
+                } else if (year < item.year || !hasSeriesEvidence(release)) {
+                    // A torrent's release year can be much later than the
+                    // premiere of a long-running show.
                     return;
+                }
             }
             var label = qualityOf(release);
             if (!label) return;
@@ -204,9 +223,9 @@
     var sqlBatchTimer = null, sqlWriteTimer = null, persistTimer = null;
     var persisted = null, persistentSource = '', lastFull = null;
     var known = Object.create(null), observed = typeof WeakMap === 'function' ? new WeakMap() : null;
-    // v4 rechecks all earlier labels: older positive hits can be trailers or
-    // South Park feature films. Never silently inherit unverified positives.
-    var persistentKey = 'quality_module_cache_v4', algorithmVersion = 'verified-video-v4';
+    // v5 fixes early HD selection before checking an alternate name and
+    // bypasses previously cached HD results in both local and SQL storage.
+    var persistentKey = 'quality_module_cache_v5', algorithmVersion = 'best-across-titles-v5';
     var scriptSource = document.currentScript && document.currentScript.src || '';
     var sqlEndpoint = /\/quality\.js(?:\?.*)?$/i.test(scriptSource)
         ? scriptSource.replace(/\/quality\.js(?:\?.*)?$/i, '/quality/cache') : '';
@@ -337,9 +356,9 @@
         persistentSource = source;
         var value;
         try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
-        if (!value || value.version !== 4 || value.source !== source
+        if (!value || value.version !== 5 || value.source !== source
             || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
-            value = {version: 4, source: source, entries: {}, items: {}};
+            value = {version: 5, source: source, entries: {}, items: {}};
         if (!value.items || typeof value.items !== 'object') value.items = {};
         persisted = value;
         known = Object.create(null);
@@ -561,18 +580,29 @@
                 }
                 if (job.generation !== generation) { finish(null, false); return; }
                 var titles = searchTitles(job.item), attempt = 0, anySuccess = false;
+                var highest = null;
                 var plans = titles.map(function (title) { return {title: title, broad: false}; });
                 if (job.item.type === 'tv') titles.forEach(function (title) {
                     plans.push({title: title, broad: true});
                 });
+                // For older movies, a single title-only search can discover a
+                // 4K remaster excluded by strict year/title filters. Keep the
+                // parser queue limit (2) and only run this if still below FHD.
+                if (job.item.type === 'movie' && job.item.year
+                    && job.item.year < new Date().getFullYear() - 2 && titles.length)
+                    plans.push({title: titles[0], broad: true, ifBelow: 'FHD'});
                 function requestNext() {
                     if (finished) return;
                     if (job.generation !== generation) { finish(null, false); return; }
-                    if (attempt >= plans.length) {
-                        finish(null, anySuccess);
+                    if (attempt >= plans.length || highest === '4K') {
+                        finish(highest, anySuccess);
                         return;
                     }
                     var plan = plans[attempt++];
+                    if (plan.ifBelow && highest && rank[highest] >= rank[plan.ifBelow]) {
+                        requestNext();
+                        return;
+                    }
                     try {
                         L.Parser.get(parserRequest(job.item, plan.title, plan.broad), function (response) {
                             if (finished) return;
@@ -580,7 +610,8 @@
                             if (response && Array.isArray(response.Results)) {
                                 anySuccess = true;
                                 var label = bestOf(response.Results, job.item);
-                                if (label) { finish(label, true); return; }
+                                if (label && (!highest || rank[label] > rank[highest]))
+                                    highest = label;
                             }
                             requestNext();
                         }, function () { requestNext(); });
