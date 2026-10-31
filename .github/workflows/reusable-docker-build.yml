@@ -9,6 +9,12 @@ on:
         type: string
         required: true
 
+      registry:
+        description: "Explicit registry override; empty preserves GHCR_REGISTRY variable/default"
+        type: string
+        required: false
+        default: ""
+
       version:
         description: "Release version (semver) to tag and pass as LAMPAC_VERSION build-arg. Empty = branch/SHA tags and LAMPAC_VERSION=dev"
         type: string
@@ -116,7 +122,7 @@ jobs:
       attestations: write
       artifact-metadata: write
     env:
-      GHCR_REGISTRY: ${{ vars.GHCR_REGISTRY || 'ghcr.io' }}
+      GHCR_REGISTRY: ${{ inputs.registry != '' && inputs.registry || vars.GHCR_REGISTRY || 'ghcr.io' }}
       GHCR_IMAGE: ${{ vars.GHCR_REGISTRY || 'ghcr.io' }}/${{ github.repository_owner }}/${{ inputs.image }}
     outputs:
       tags: ${{ steps.meta.outputs.tags }}
