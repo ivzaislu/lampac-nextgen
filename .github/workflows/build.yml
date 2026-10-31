@@ -90,6 +90,7 @@ jobs:
     uses: ./.github/workflows/reusable-docker-build.yml
     with:
       image: lampac-mcp-test
+      registry: ghcr.io
       checkout_ref: ${{ github.sha }}
       platforms: linux/amd64
       push: true
