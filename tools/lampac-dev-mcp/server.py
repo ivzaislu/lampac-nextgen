@@ -327,9 +327,11 @@ def request_ci_build(task_id: str) -> dict:
         state["ci_dispatch_sha"] = sha
         state["ci_dispatch_at"] = requested_at
         _save_state(task_id, state)
+        owner = urlparse(REMOTE).path.strip("/").split("/")[0].lower()
+        expected_image_tag = "ghcr.io/{}/lampac-mcp-test:sha-{}".format(owner, sha)
         return {"status": "requested", "branch": state["branch"], "sha": sha,
-                "workflow": "build.yml",
-                "note": "Workflow runs asynchronously on GitHub, not on VPS; full project build, not functional module tests."}
+                "workflow": "build.yml", "expected_test_image_tag": expected_image_tag,
+                "note": "Image is NOT available until the entire workflow succeeds; the run does not validate provider functionality."}
 
 
 @mcp.tool()
@@ -352,10 +354,18 @@ def get_ci_build_status(task_id: str) -> dict:
         created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
         if created < requested - timedelta(minutes=2):
             continue
-        return {"status": run.get("status"), "conclusion": run.get("conclusion"),
-                "url": run.get("html_url"), "run_id": run.get("id"),
-                "sha": sha, "branch": state["branch"],
-                "note": "Build workflow status; this is not functional validation"}
+        result = {"status": run.get("status"), "conclusion": run.get("conclusion"),
+                  "url": run.get("html_url"), "run_id": run.get("id"),
+                  "sha": sha, "branch": state["branch"],
+                  "note": "Build workflow status; this is not functional validation"}
+        if run.get("status") == "completed" and run.get("conclusion") == "success":
+            owner = urlparse(REMOTE).path.strip("/").split("/")[0].lower()
+            result["test_image_tag"] = "ghcr.io/{}/lampac-mcp-test:sha-{}".format(owner, sha)
+            result["image_receipt_artifact"] = "lampac-mcp-image-{}".format(sha)
+            result["deployment_note"] = (
+                "Download the receipt artifact and deploy the image by its SHA256 digest, "
+                "not by the mutable tag. Verify the deployed source SHA before live tests.")
+        return result
     return {"status": "awaiting-run", "branch": state["branch"],
             "sha": sha, "note": "GitHub has not listed the dispatched run yet"}
 
