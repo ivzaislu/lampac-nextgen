@@ -1,54 +1,42 @@
 # Quality for Lampac NextGen
 
-Нативный модуль Lampac, раздающий /quality.js. Клиентский JS отображает максимальное качество торрентов (CAM, TS, TC, SD, HD, FHD, 4K). **Модуль находится в разработке.**
+Нативный модуль Lampac для Lampa: на постерах и полной карточке фильма/сериала показывает лучшую доступную метку `CAM / TS / TC / SD / HD / FHD / 4K`. **Тестовая версия** — пользователь подтвердил, что бейджи появляются в обоих местах, однако новое оформление и SQLite ещё требуют проверки в его установке.
 
-## Источник данных
+## Откуда берётся качество
 
-Quality использует штатный Lampa.Parser.get. Настроенный вами в privateinit.js JacRed уже известен Lampa через Lampa.Storage (jackett_url, jackett_key, второе подключение и parser_use_link). **Не копируйте URL и API-ключ в Quality.** Встроенный JacRed Lampac не используется.
+Только из штатного `Lampa.Parser.get` с существующими настройками внешнего JacRed в `privateinit.js`. Quality не обращается к встроенному `Modules/JacRed`, не требует дополнительного URL или API-ключа и не передаёт их в Lampac.
 
-## Автоматическое подключение в LampaWeb
+## Установка/обновление
 
-Если модуль Quality загружен (`manifest.enable=true`), `Quality.enable=true` и `Quality.autoinject=true` (значения конфигурации по умолчанию), он использует `EventListener.AppReplace`, как TranslationSub. Когда LampaWeb отдаёт встроенный JS приложения, Quality автоматически загружает `/quality.js`. Другие модули и их списки плагинов менять не требуется.
+В установленном Lampac папка — `module/Quality/` (или `mods/Quality/`), а **не** исходная `Modules/Quality/`. При обновлении замените **всю папку**, включая `QualityCache.cs`, `QualityController.cs`, `ModInit.cs`, `ModuleConf.cs`, `manifest.json` и `plugin.js`; иначе серверная часть SQL не появится.
 
-При использовании внешней Lampa или при `autoinject=false` можно подключить плагин вручную.
+В тестовой ветке `manifest.json` содержит `"enable": true`. Если `BaseModule.LoadModules` содержит конкретный список, добавьте в него `Quality` (при `.*` не требуется). Перезапустите Lampac, затем перезагрузите Lampa (при необходимости очистите кэш `app.min.js`).
 
-## Ручное подключение для тестирования
+Для встроенной LampaWeb с `Quality.autoinject=true` модуль автоматически подключает `/quality.js` через `EventListener.AppReplace`. Если используете внешнюю Lampa, подключите URL `https://АДРЕС-ЛАМПАКА/quality.js` как JS-плагин. Если используете `LampaWeb.customPlugins`, **добавьте** Quality в существующий список, не заменяя другие записи.
 
-1. На тестовой установке после проверки CI включите Modules/Quality/manifest.json, установив enable: true. По умолчанию это false.
-2. В init.conf при уже работающем LampaWeb добавьте запись в существующий массив LampaWeb.customPlugins; сохраните остальные плагины:
+Проверки: `GET /quality/status` должен вернуть `loaded:true`, `enabled:true` и `sqlcache:true`; `GET /quality.js` должен вернуть JavaScript. В консоли самой Lampa: `window.__qualityPluginLoaded` и `window.LampaQuality?.status()`. Диагностика не содержит ключей и адресов JacRed.
 
-```json
-{
-  "LampaWeb": {
-    "customPlugins": [
-      { "url": "{localhost}/quality.js", "status": 1, "name": "Quality", "author": "lampac" }
-    ]
-  }
-}
-```
+## Как устроен кэш
 
-3. Убедитесь, что Lampa уже работает с JacRed через privateinit.js, и parser_torrent_type выбран как jackett.
-4. Проверьте постеры, полную карточку и исходящие запросы в DevTools: Quality должен обращаться только через Lampa.Parser.get, используя выбранные Lampa источники.
+1. **Память Lampa:** быстрый ответ при повторном появлении карточки в текущей сессии.
+2. **`Lampa.Storage`:** ключ `quality_module_cache_v2` сохраняет до 500 меток для повторного запуска; при смене JacRed источник перепроверяется.
+3. **SQLite Lampac:** `database/quality-cache.db` с HTTP API `POST /quality/cache`. Здесь хранятся **только** случайный клиентский scope либо серверный хэш проверенной учётной записи, отпечатки источника/фильма, метка и TTL.
+4. **Внешний JacRed через Lampa.Parser.get:** вызывается, только если действительного результата нет в предыдущих уровнях.
 
-Пример JSON выше — фрагмент настройки, не замена вашего существующего init.conf. Если customPlugins уже содержит другие записи, необходимо **добавить** элемент, не заменяя список.
+Срок действия: `CAM/TS/TC` — 1 день, `SD/HD/FHD` — 5 дней, `4K` — 10 дней, «не найдено» — 1 день. Сетевые ошибки не кэшируются. Имеется очередь максимум 120 задач и ограничение в 2 активных поиска.
 
-## Реализовано
+В SQLite одна таблица с периодическим удалением истёкших записей и ограничением порядка 25 000 результатов. База создаётся в рабочей директории Lampac; **сохраняйте папку `database` при обновлении**, если нужен старый кэш. По умолчанию параметр `Quality.sqlcache=true`; для отказа от серверного SQL установите `false` в конфигурации Quality — клиентский кэш останется.
 
-- JS классификация качества с фильтрацией названия, года, типа и трейлеров; корректная обработка надписи «звук с TS».
-- Бейджи на постерах и полной карточке, in-memory кэш, ограниченная очередь, дедупликация запросов.
-- Без серверного JacRed, Node.js, отдельной SQLite и NWS.
+SQLite используется, когда браузер поддерживает безопасный случайный идентификатор (`crypto.getRandomValues`), `fetch` и доступен URL Lampac. Внешняя Lampa может блокировать запросы к другому origin (CORS); в этом случае плагин автоматически использует локальные уровни и JacRed. **Не существует анонимного общего кэша для всех пользователей:** без авторизации записи разделены по браузерам; при проверенном аккаунте Lampac база может быть общей между устройствами этого аккаунта. Сервер не проверяет соответствие присланной клиентом метки реальному торренту.
 
-## Ограничения
+## Оформление
 
-- В рабочей ветке manifest.enable=false: требуется ручное тестовое включение.
-- CI проверяет сборку и запуск Lampac, но не авторизованный JacRed из вашей личной конфигурации, CORS и поведение на телевизоре.
-- Общего серверного кэша нет. Результаты определяются в Lampa; сервер получает только запрос /quality.js и не видит URL/ключи парсера.
-- Поддержка режима parser_torrent_type=jackett; Prowlarr/TorrServer пока не входят в задачу.
+- Постер — снизу слева на штатном месте `.card__quality`.
+- Полная карточка — в строке рейтингов, класс `.full-start__status`.
+- `CAM/TS/TC` — красный, `SD` — оранжевый, `HD` — синий, `FHD` — фиолетовый, `4K` — зелёный.
 
-## Проверки
+## Ограничения и проверки
 
-- dotnet build Modules/Quality/Quality.csproj --nologo
-- node --check Modules/Quality/plugin.js
-- node tests/quality-client.test.js
-- CI: https://github.com/ivzaislu/lampac-nextgen/actions/workflows/quality.yml
-- Текущие статусы этапов и журнал: [PLAN.md](PLAN.md).
+[CI GitHub Actions](https://github.com/ivzaislu/lampac-nextgen/actions/workflows/quality.yml) проверяет .NET 10, Node.js, HTTP API, SQL и динамический запуск. [PLAN.md](PLAN.md) содержит журнал с успешными и неуспешными прогонами.
+
+Команды: `dotnet build Modules/Quality/Quality.csproj`, `node tests/quality-client.test.js`, `node tests/quality-cache-client.test.js`. Проверка Node — имитация Lampa, не тест физического телевизора. Серверное SQL API принимает результаты клиента, поэтому глобальный публичный кэш не включён; rate-limit, CORS и поведение за пользовательским прокси предстоит проверить в реальной установке.
