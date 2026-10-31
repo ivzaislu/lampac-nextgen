@@ -20,6 +20,13 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             probe_online._params(["title="])
 
+    def test_flixcdn_skipped_is_success_exit(self):
+        import live_tests
+        with patch.object(live_tests, "_fetch", side_effect=AssertionError("network forbidden")):
+            result = probe_online.main([
+                "--provider", "flixcdn", "--param", "kinopoisk_id=258687"])
+        self.assertEqual(result, 0)
+
     def test_status_codes(self):
         import live_tests
         with patch.object(live_tests, "run_online",
