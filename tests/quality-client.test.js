@@ -33,6 +33,26 @@ assert.equal(parserRequest(tv).movie.original_name, 'Series');
 assert.equal(parserRequest(tv).movie.number_of_seasons, 1);
 assert.ok(Array.isArray(parserRequest(tv).movie.genres));
 assert.equal(parserRequest(tv).global, false);
+
+const olderShow = normalize({id: 100, name: 'The Long Show', original_name: 'The Long Show', first_air_date: '2008-04-05'});
+assert.equal(bestOf([row('The Long Show S17 (2025) WEB-DL 1080p',
+    {Info: {types: ['series'], relased: 2025}})], olderShow), 'FHD',
+    'A new season of a long-running series is not a new unrelated title');
+assert.equal(bestOf([row('The Long Show (2025) 1080p', {Info: {types: ['series']}})], olderShow), null,
+    'A very different year without a season marker is ambiguous');
+assert.equal(bestOf([row('Other Show S17 (2025) 2160p')], olderShow), null,
+    'A different series must not match on year and resolution alone');
+assert.equal(bestOf([row('The Long Show S17 (2032) 2160p')], olderShow), null,
+    'Reject implausible future seasons');
+assert.equal(qualityOf(row('Example WEB-DL', {Info: {quality: '1080p'}})), 'FHD',
+    'Textual JacRed resolution should count');
+assert.equal(qualityOf(row('Example DVDRip')), 'SD');
+const foreignMovie = normalize({id: 333, title: 'Локальное название', original_title: 'Original Name',
+    release_date: '2024-01-01'});
+assert.equal(bestOf([row('Original Name (2024) WEB-DL 1080p')], foreignMovie), 'FHD');
+assert.equal(parserRequest(foreignMovie, foreignMovie.original).search, 'Original Name');
+assert.equal(parserRequest(foreignMovie, foreignMovie.title).search, 'Локальное название');
+
 console.log('Quality plugin: scoring and Lampa Parser adapter OK');
 
 

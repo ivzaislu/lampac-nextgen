@@ -8,7 +8,9 @@
         var info = release.Info || release.info || {};
         var title = String(release.Title || release.title || '');
         var source = String(info.videotype || release.videotype || '');
-        var video = (source + ' ' + title)
+        // JacRed may report resolution as the text "1080p", not a number.
+        var qualityText = String(info.quality || release.quality || '');
+        var video = (source + ' ' + title + ' ' + qualityText)
             .replace(/\[[^\]]*(?:звук\s+с\s+ts|audio\s+from\s+ts|sound\s+from\s+ts)[^\]]*\]/gi, ' ')
             .replace(/звук\s+с\s+ts|audio\s+from\s+ts|sound\s+from\s+ts/gi, ' ');
         var resolution = Number(info.quality || release.quality || 0);
@@ -19,7 +21,7 @@
             if (/2160p|\b4k\b|4к|\buhd\b/i.test(video)) resolution = 2160;
             else if (/1080p|\b1080\b/i.test(video)) resolution = 1080;
             else if (/720p|\b720\b/i.test(video)) resolution = 720;
-            else if (/480p|\b480\b|web-dlrip|\bbdrip\b|\bhdrip\b/i.test(video)) resolution = 480;
+            else if (/480p|\b480\b|web-dlrip|\bbdrip\b|\bhdrip\b|\bdvdrip\b|\btvrip\b/i.test(video)) resolution = 480;
         }
         return resolution >= 2160 ? '4K' : resolution >= 1080 ? 'FHD'
             : resolution >= 720 ? 'HD' : resolution > 0 ? 'SD' : '';
