@@ -17,12 +17,14 @@ This is NOT a Lampac module: it is an independent MCP process kept in this fork 
 THIS IS AN MVP, NOT COMPLETE MODULE TESTING. Build/manifest checks do
 not prove module functionality. A bounded live Online provider-to-stream probe
 is now implemented and HDVB passed a VPS smoke test on a stock image.
-A SHA-pinned CI test-image build was verified by successful Build #120,
-followed by a manually deployed HDVB VPS test reporting PASS. An
-operator-attended, dry-run-first test-container deployer is now available
-but has not yet been executed; fully autonomous deployment, browser
-life-cycle supervision, complete playback validation, SISI, background
-services and other module-specific profiles remain unfinished.
+Build #120 verified a SHA-pinned CI test image with a manual HDVB
+VPS smoke. Build #121 verified 8 guarded-deployer unit tests and
+an operator-invoked digest-pinned replacement of the test container,
+including a passed automatic HDVB stream probe. The old Build #120
+container was preserved for rollback. An authenticated MCP client
+connection, unattended per-task deployment, complete playback
+validation, browser life-cycle supervision, SISI, background services,
+and other module-specific profiles remain unfinished.
 
 Each MCP instance serves ONE trusted user and ONE GitHub fork. Use separate
 instances, credentials, data directories, and sandbox isolation for different
@@ -94,7 +96,7 @@ For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
 
-## Branch-specific CI test image (stage 2; Build #120 verified)
+## Branch-specific CI test image (stage 2; Builds #120 and #121 verified)
 
 GitHub Actions Build #119 (run 41222012485) on commit
 `0788971f2868ed9010868490060096a15b239323`
@@ -161,8 +163,8 @@ owner. GitHub's `packages: write` permission is required for GHCR, and
 `Actions: write` is needed for MCP-driven dispatch. The dedicated
 test image name prevents overwriting the production Lampac package.
 Registry tags are mutable: the SHA tag is only a pointer; the receipt's
-digest identifies the exact image to pull. The next stage is an
-isolated, SHA-verified VPS deployment without touching production.
+digest identifies the exact image to pull. The isolated, SHA-verified
+VPS deployment has now been confirmed with Build #121 (see below).
 
 FlixCDN's dedicated headed Chromium/Xvfb test is excluded from standard
 resource-limited VPS validation; its previous OOM results do not mean
@@ -178,10 +180,13 @@ Python 3.6-compatible deployer **before** the Docker image job.
 These checks exercise receipt validation, target-container restrictions,
 dry-run safety, media probe result filtering, and rollback behavior
 with mocks; they do **not** interact with a real Docker daemon.
-Build #120 predates this additional job. The first run of the new
-unit-test gate remains **unverified**.
+Build #120 predates this additional job. **Build #121** (run
+`41225481899`, commit `acf30326396075f9876f8cfe2462bb71e7b6d24a`)
+completed all **8 of 8** guarded deployer tests, a .NET build, Docker
+publication, and receipt-artifact upload. This proves the mocked unit
+tests passed; the real deployment was separately observed on the VPS.
 
-## Stage 3 prototype: guarded test-container deployment
+## Stage 3: guarded test-container deployment (Build #121 validated)
 
 `deploy_test_image.py` is a dependency-free Python 3.6+ CLI that
 accepts a **GitHub Actions receipt**, the expected full 40-character
@@ -230,22 +235,29 @@ also in `examples/build120-image-receipt.json`):
 
 The command above only prints the deployment plan. The `probe_online.py`
 and `live_tests.py` files must be present beside the deployer before
-an `--apply` run. **Do not use
-`--apply` for Build #120**: its image is already running and has
-passed HDVB smoke testing. Reserve `--apply` for the **next**
-successfully built SHA and validated receipt. A later operator
-action must first inspect the plan and ensure there is no
-simultaneously running browser-heavy test. If the new image is
-unavailable, the old test container remains untouched.
+an `--apply` run. **Build #121 has already been deployed** using
+`--replace lampac-mcp-build120 --apply`; do not deploy the same image
+again. Before each *subsequent* change, use a new successful CI receipt
+and confirm which test-only container is running. On subsequent
+`--replace lampac-mcp-live` runs, the existing live container is
+renamed `lampac-mcp-live-rollback` on success. The deployer refuses
+overwriting an existing rollback backup.
 
 The deployer now verifies **startup readiness and a bounded HDVB
 media sample** before considering an applied deployment successful.
 If the HDVB sample or codec verification fails, it attempts rollback.
 A complete film or UI playback test is not performed. The script has
-unit tests in `tests/test_deploy.py`, but it has not been run on
-the operator's VPS and no real Docker integration test of its rollback
-path has been executed. The next iteration is to link the MCP server
-to this deployer and capture reports without broad Docker exposure.
+unit tests in `tests/test_deploy.py`, which passed in Build #121.
+The operator ran the deployer on the VPS: it replaced the old
+`lampac-mcp-build120` with `lampac-mcp-live`, bound at
+`127.0.0.1:29118`; Docker showed the new container as `healthy`,
+and the automatic HDVB media probe sampled 262144 MPEG-TS bytes and
+confirmed AAC/H.264 with FFprobe exit 0. The old container remained
+stopped, **not deleted**. See
+`reports/hdvb-vps-build121-2026-10-31.json`. The *failure/rollback*
+path is still untested on a real Docker daemon. The next iteration
+is to link the MCP server to the deployer and capture reports without
+broad Docker exposure.
 
 **Security limit:** the receipt is an attestation of the source SHA
 and registry digest as supplied by the GitHub workflow. It should be
@@ -253,6 +265,60 @@ downloaded from the exact successful Actions run and compared against
 the intended task SHA. The helper is for one trusted operator on a
 test-only VPS; do not expose it over a public unauthenticated API or
 deploy it against production.
+
+## Stage 4: local MCP controller readiness (not yet installed)
+
+The VPS is a small server (970 MiB RAM, 5 GiB swap) with its existing
+system Python 3.6.9. Leave the operating-system Python untouched.
+The FastMCP server in `server.py` requires Python **3.11+**;
+the standalone `probe_online.py` and `deploy_test_image.py`
+have already run using the legacy interpreter.
+
+Start with **read-only** inspection on the VPS:
+
+    echo '--- Python and uv ---'
+    python3 --version
+    command -v python3.11 || true
+    command -v python3.12 || true
+    command -v uv || true
+    echo '--- Service support ---'
+    git --version
+    cat /etc/os-release | head -5
+    echo '--- RAM and test container ---'
+    free -h
+    docker inspect lampac-mcp-live \
+      --format 'Name={{.Name}} Status={{.State.Status}} Memory={{.HostConfig.Memory}}'
+
+If Python 3.11+ is absent, install it *under an unprivileged dedicated
+service account* through an isolated environment, for example
+`uv python install 3.11` and `uv venv --python 3.11`, or via a
+separate user-scoped Python installation. Official uv instructions:
+https://docs.astral.sh/uv/guides/install-python/ .
+Do not replace `/usr/bin/python3` or enable a local .NET build.
+Measure actual MCP RSS before considering a persistent service;
+avoid exhausting RAM when the test Lampac container is running.
+
+**Authentication and transport:** the server defaults to local
+`stdio`, and must remain private. It has no OAuth implementation.
+Do not publicly expose FastMCP's `streamable-http` endpoint or attach
+a raw Docker socket to a remote-facing server. GitHub API credentials
+with Actions write and Contents write are powerful and must stay in
+a dedicated secret store, never in `init.conf`, repository files, logs
+or command-line arguments.
+
+ChatGPT custom MCP *write/modify actions* are currently restricted
+by account/workspace capabilities (OpenAI Help Center, checked
+2026-10-31). Before designing an HTTPS connector for ChatGPT, verify
+the account can actually add a custom write-capable MCP server.
+For a Plus account, **do not assume this capability is available**.
+A local stdio-compatible MCP client can independently use this server
+without exposing it to the Internet.
+
+For now, maintain the verified operator-attended workflow:
+MCP/Git branches -> GitHub Actions -> exact image receipt ->
+`deploy_test_image.py` run by the trusted operator ->
+automatic HDVB smoke -> recorded report. This separates repository
+changes from privileged Docker operations.
 
 ## First live test on an existing test-only Lampac container
 
