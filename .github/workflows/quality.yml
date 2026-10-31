@@ -10,6 +10,7 @@ on:
       - '!Modules/Quality/README.md'
       - 'tests/quality-client.test.js'
       - 'tests/quality-cache-client.test.js'
+      - 'tests/quality-batch-client.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -69,6 +70,7 @@ jobs:
         run: |
           node tests/quality-client.test.js
           node tests/quality-cache-client.test.js
+          node tests/quality-batch-client.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
@@ -169,4 +171,24 @@ jobs:
             --data '{"op":"get","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb"}' \
             http://127.0.0.1:9118/quality/cache)
           [ "$code" = 403 ]
+          curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"put_batch","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","items":[{"movie":"1111111111111111","label":"4K","ttlDays":30},{"movie":"2222222222222222","label":"CAM","ttlDays":2}]}' \
+            http://127.0.0.1:9118/quality/cache > /tmp/quality-batch-put.json
+          curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"get_batch","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","items":[{"movie":"1111111111111111"},{"movie":"2222222222222222"},{"movie":"3333333333333333"}]}' \
+            http://127.0.0.1:9118/quality/cache > /tmp/quality-batch-get.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          assert json.loads(Path('/tmp/quality-batch-put.json').read_text())['saved']==2
+          data=json.loads(Path('/tmp/quality-batch-get.json').read_text())['results']
+          assert data['1111111111111111']['label']=='4K'
+          assert data['2222222222222222']['label']=='CAM'
+          assert '3333333333333333' not in data
+          assert data['1111111111111111']['until']>data['2222222222222222']['until']
+          PY
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"put_batch","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","items":[{"movie":"4444444444444444","label":"4K","ttlDays":999}]}' \
+            http://127.0.0.1:9118/quality/cache)
+          [ "$code" = 400 ]
           echo "Quality runtime plugin, status and SQLite cache: OK"
