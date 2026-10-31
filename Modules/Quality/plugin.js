@@ -288,8 +288,27 @@
         var value;
         try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
         if (!value || value.version !== 3 || value.source !== source
-            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
+            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries)) {
             value = {version: 3, source: source, entries: {}, items: {}};
+            // Preserve previously displayed positive badges during upgrade.
+            // Old negative records must be rechecked with the improved search.
+            try {
+                var legacy = L.Storage.get && L.Storage.get('quality_module_cache_v2');
+                var oldSignature = sourceSignature().slice(algorithmVersion.length + 1);
+                if (legacy && legacy.version === 2
+                    && legacy.source === hashId(oldSignature) && legacy.entries) {
+                    Object.keys(legacy.entries).forEach(function (key) {
+                        var record = legacy.entries[key];
+                        if (record && record.label && recordValid(record)) {
+                            value.entries[key] = record;
+                            if (legacy.items && legacy.items[key])
+                                value.items[key] = legacy.items[key];
+                        }
+                    });
+                    schedulePersistent();
+                }
+            } catch (e) {}
+        }
         if (!value.items || typeof value.items !== 'object') value.items = {};
         persisted = value;
         known = Object.create(null);
