@@ -17,4 +17,17 @@ public class QualityController : BaseController
         string script = FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "quality.js", saveCache: false);
         return ContentTo(script, "application/javascript; charset=utf-8");
     }
+    [HttpGet, AllowAnonymous]
+    [Route("quality/status")]
+    public ActionResult Status()
+    {
+        return Ok(new
+        {
+            module = "Quality",
+            loaded = true,
+            enabled = ModInit.conf?.enable == true,
+            autoinject = ModInit.conf?.autoinject == true,
+            source = "Lampa.Parser.get"
+        });
+    }
 }

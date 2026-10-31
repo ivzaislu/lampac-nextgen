@@ -48,7 +48,7 @@ jobs:
           root = Path("Modules/Quality")
           manifest = json.loads((root / "manifest.json").read_text())
           assert manifest["dynamic"] is True
-          assert manifest["enable"] is False, "Quality must remain disabled until runtime verification"
+          assert manifest["enable"] is True, "Quality must be enabled in the test-ready branch"
           for path in manifest["tree"]:
               assert (root / path).is_file(), path
           assert 'Modules/Quality/Quality.csproj' in Path("NextGen.slnx").read_text()
@@ -80,8 +80,7 @@ jobs:
           manifest = Path('/tmp/lampac-quality-smoke/module/Quality/manifest.json')
           assert manifest.is_file(), 'Quality was not published'
           value = json.loads(manifest.read_text())
-          value['enable'] = True  # CI-only: working-branch manifest remains disabled
-          manifest.write_text(json.dumps(value))
+          assert value['enable'] is True, 'Quality must load with its shipped manifest'
           assert Path('/tmp/lampac-quality-smoke/module/Quality/plugin.js').is_file()
           PY
           cat > /tmp/lampac-quality-smoke/init.yaml <<'YAML'
@@ -123,4 +122,14 @@ jobs:
           fi
           node --check /tmp/quality-serve.js
           grep -Fq 'L.Parser.get(' /tmp/quality-serve.js
-          echo "Quality runtime plugin route: OK"
+          curl -fsS --max-time 3 http://127.0.0.1:9118/quality/status > /tmp/quality-status.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/quality-status.json', encoding='utf-8') as fp:
+              status = json.load(fp)
+          assert status['module'] == 'Quality'
+          assert status['loaded'] is True
+          assert status['enabled'] is True
+          assert status['autoinject'] is True
+          PY
+          echo "Quality runtime plugin and status routes: OK"

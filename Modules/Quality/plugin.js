@@ -105,8 +105,13 @@
         return;
     }
     if (root.__qualityPluginLoaded) return;
-    if (!root.Lampa || !root.Lampa.Parser || !root.Lampa.Storage || !root.Lampa.Listener) return;
+    if (!root.Lampa || !root.Lampa.Parser || !root.Lampa.Storage || !root.Lampa.Listener) {
+        // Visible from DevTools without exposing any JacRed credentials.
+        root.__qualityPluginLoadError = 'Lampa API is not ready';
+        return;
+    }
     root.__qualityPluginLoaded = true;
+    root.__qualityPluginLoadError = null;
     var L = root.Lampa;
     var cache = Object.create(null), pending = Object.create(null), queue = [];
     var active = 0, signature = '', generation = 0;
@@ -132,6 +137,19 @@
     function keyOf(item) {
         return item.source + ':' + item.type + ':' + (item.id || item.title) + ':' + item.year;
     }
+
+    root.LampaQuality = {
+        status: function () {
+            return {
+                loaded: true,
+                parser_type: String(L.Storage.field('parser_torrent_type') || ''),
+                configured: configured(),
+                active_requests: active,
+                queued_requests: queue.length,
+                cache_entries: Object.keys(cache).length
+            };
+        }
+    };
 
     function resolve(item, callback) {
         if (!configured()) { callback(null); return; }

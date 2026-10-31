@@ -96,6 +96,10 @@ const env = {
 };
 vm.runInNewContext(client, env, {filename: 'plugin.js'});
 assert.equal(parserCalls, 1);
+assert.equal(fakeWindow.LampaQuality.status().loaded, true);
+assert.equal(fakeWindow.LampaQuality.status().configured, true);
+assert.equal(fakeWindow.LampaQuality.status().parser_type, 'jackett');
+assert.ok(!JSON.stringify(fakeWindow.LampaQuality.status()).includes('test-secret-only-in-lampa'));
 assert.equal(capturedParserRequest.search, 'Example');
 assert.equal(capturedParserRequest.movie.release_date, '2025-01-01');
 assert.equal(badges.length, 1);
