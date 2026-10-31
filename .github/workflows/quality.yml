@@ -47,3 +47,9 @@ jobs:
 
       - name: Build Quality module
         run: dotnet build Modules/Quality/Quality.csproj --configuration Release --nologo
+
+      - name: Check Lampa plugin syntax
+        run: node --check Modules/Quality/plugin.js
+
+      - name: Run client quality regression checks
+        run: node tests/quality-client.test.js

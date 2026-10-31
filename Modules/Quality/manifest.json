@@ -4,6 +4,6 @@
   "tree": [
     "ModInit.cs",
     "ModuleConf.cs",
-    "QualityScorer.cs"
+    "QualityController.cs"
   ]
 }
