@@ -67,7 +67,10 @@ const southPark = normalize({id: 2003, name: 'Южный парк', original_nam
     first_air_date: '1997-08-13'});
 assert.equal(bestOf([row('The Simpsons S36E01 (2025) WEB-DL 1080p')], simpsons), 'FHD');
 assert.equal(bestOf([row('Симпсоны (1989-2025) 01-36 сезоны 720p')], simpsons), 'HD');
-assert.equal(bestOf([row('Family Guy 2026 1080p', {Info:{types:['serial']}})], familyGuy), 'FHD');
+assert.equal(bestOf([row('Family Guy 2026 1080p', {Info:{types:['serial']}})], familyGuy), null,
+    'Unqualified recent year with no season marker is not enough for an old show');
+assert.equal(bestOf([row('Family Guy Season 26 (2026) 1080p',
+    {Info:{types:['serial']}})], familyGuy), 'FHD');
 assert.equal(bestOf([row('Гриффины S23E01 (2025) WEB-DL 720p')], familyGuy), 'HD');
 assert.equal(bestOf([row('South Park S28E01 (2026) WEB-DL 1080p')], southPark), 'FHD');
 assert.equal(bestOf([row('South Park: Bigger, Longer & Uncut (1999) 720p')], southPark), null,

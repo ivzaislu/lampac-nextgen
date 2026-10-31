@@ -127,7 +127,7 @@
                 // A torrent's release year can be much later than the premiere
                 // of The Simpsons, Family Guy or South Park.
                 if (item.type !== 'tv' || year < item.year
-                    || (!declaredTv && !hasSeriesEvidence(release)))
+                    || !hasSeriesEvidence(release))
                     return;
             }
             var label = qualityOf(release);
