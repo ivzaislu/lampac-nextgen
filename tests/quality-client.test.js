@@ -235,3 +235,75 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
     assert.equal(renderedBadges.length, 0, 'Disabled JacRed parser must remove quality badge');
     console.log('Quality plugin: async card reuse, concurrency and stale-provider guard OK.');
 }
+
+
+// The previous quality_lampa searched original title first and localized title
+// second. Verify the native Lampa.Parser fallback without any private JacRed URL.
+{
+    function testSearchFallback(firstResponse, expected, expectedBadge) {
+        const queries = [], badges = [], listeners = {};
+        const poster = {
+            querySelector(selector) { return selector === '.quality-module-badge' ? badges[0] || null : null; },
+            appendChild(node) {
+                badges.push(node);
+                node.remove = () => { const n = badges.indexOf(node); if (n >= 0) badges.splice(n, 1); };
+            }
+        };
+        const card = {
+            card_data: {id: 456, title: 'Местное название', original_title: 'Original Title',
+                release_date: '2024-01-01'},
+            querySelector(selector) {
+                return selector === '.card__view' ? poster
+                    : selector === '.quality-module-badge' ? poster.querySelector(selector) : null;
+            }
+        };
+        const doc = {
+            body: {contains(n) { return n === card; }},
+            head: {appendChild() {}},
+            createElement() { return {className: '', textContent: ''}; },
+            querySelectorAll(selector) { return selector === '.card' ? [card] : []; }
+        };
+        const mock = {
+            Lampa: {
+                Storage: {
+                    field(name) {
+                        return {parser_torrent_type:'jackett', parser_use_link:'one',
+                            jackett_url:'https://outside.invalid'}[name] || '';
+                    },
+                    listener: {follow() {}}
+                },
+                Parser: {
+                    get(request, done, fail) {
+                        queries.push(request.search);
+                        if (queries.length === 1) {
+                            if (firstResponse === 'network_error') fail('temporary failure');
+                            else done({Results: firstResponse});
+                        } else {
+                            done({Results: [row('Местное название 2024 1080p')]});
+                        }
+                    }
+                },
+                Listener: {follow(name, listener) { listeners[name] = listener; }}
+            }
+        };
+        class Observer {
+            constructor(cb) { this.cb = cb; }
+            observe(n) { this.cb([{isIntersecting: true, target: n}]); }
+            unobserve() {}
+        }
+        class Mutation { observe() {} }
+        vm.runInNewContext(client, {
+            window: mock, document: doc, console, setTimeout, clearTimeout, setInterval,
+            IntersectionObserver: Observer, MutationObserver: Mutation
+        }, {filename:'quality-fallback.js'});
+        assert.deepEqual(queries, expected);
+        assert.equal(badges[0] && badges[0].textContent, expectedBadge);
+    }
+    testSearchFallback([row('Unrelated Film 2024 2160p')],
+        ['Original Title', 'Местное название'], 'FHD');
+    testSearchFallback('network_error',
+        ['Original Title', 'Местное название'], 'FHD');
+    testSearchFallback([row('Original Title (2024) 2160p')],
+        ['Original Title'], '4K');
+    console.log('Quality: original/local title fallback and parser error recovery OK');
+}
