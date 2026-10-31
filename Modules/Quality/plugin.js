@@ -116,6 +116,54 @@
     var cache = Object.create(null), pending = Object.create(null), queue = [];
     var active = 0, signature = '', generation = 0;
     var observed = typeof WeakMap === 'function' ? new WeakMap() : null;
+    var persistentKey = 'quality_module_cache_v2', persistent = null, persistTimer = null;
+    var persistentSource = '';
+
+    // Two 32-bit rolling hashes. Neither JacRed URLs nor keys are persisted.
+    function hashId(value) {
+        var a = 2166136261, b = 2246822507, text = String(value || '');
+        for (var i = 0; i < text.length; i++) {
+            a = Math.imul(a ^ text.charCodeAt(i), 16777619);
+            b = Math.imul(b ^ text.charCodeAt(i), 3266489917);
+        }
+        return ('00000000' + (a >>> 0).toString(16)).slice(-8)
+            + ('00000000' + (b >>> 0).toString(16)).slice(-8);
+    }
+
+    function savePersistent() {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        if (!persistent || !L.Storage.set) return;
+        var keys = Object.keys(persistent.entries);
+        var now = Date.now();
+        keys.forEach(function (key) {
+            if (persistent.entries[key].until <= now) delete persistent.entries[key];
+        });
+        keys = Object.keys(persistent.entries);
+        if (keys.length > 500) {
+            keys.sort(function (a, b) {
+                return persistent.entries[b].until - persistent.entries[a].until;
+            });
+            keys.slice(500).forEach(function (key) { delete persistent.entries[key]; });
+        }
+        try { L.Storage.set(persistentKey, persistent, true); } catch (e) {}
+    }
+
+    function schedulePersistent() {
+        if (!persistTimer && L.Storage.set)
+            persistTimer = setTimeout(savePersistent, 350);
+    }
+
+    function loadPersistent(source) {
+        if (persistent && persistentSource === source) return;
+        savePersistent();
+        persistentSource = source;
+        var value = null;
+        try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
+        if (!value || value.version !== 2 || value.source !== source
+            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
+            value = {version: 2, source: source, entries: {}};
+        persistent = value;
+    }
 
     function configured() {
         var s = L.Storage;
@@ -158,6 +206,7 @@
             signature = current;
             generation++;
             cache = Object.create(null);
+            loadPersistent(hashId(current));
             var abandoned = queue.splice(0);
             abandoned.forEach(function (job) {
                 var waiting = pending[job.key] || [];
@@ -168,6 +217,14 @@
         // Old in-flight and new requests must never share a pending entry.
         var key = generation + ':' + keyOf(item);
         var saved = cache[key];
+        if (!saved && persistent) {
+            var record = persistent.entries[keyOf(item)];
+            if (record && record.until > Date.now()
+                && (record.label === null || Object.prototype.hasOwnProperty.call(rank, record.label))) {
+                saved = {label: record.label, until: record.until};
+                cache[key] = saved;
+            }
+        }
         if (saved && saved.until > Date.now()) { callback(saved.label); return; }
         if (pending[key]) { pending[key].push(callback); return; }
         if (queue.length >= 120) { callback(null); return; }
@@ -180,7 +237,12 @@
         if (job.generation !== generation) { label = null; success = false; }
         if (success) {
             var days = /^(CAM|TS|TC)$/.test(label || '') ? 1 : label === '4K' ? 10 : label ? 5 : 1;
-            cache[job.key] = {label: label, until: Date.now() + days * 86400000};
+            var record = {label: label, until: Date.now() + days * 86400000};
+            cache[job.key] = record;
+            if (persistent) {
+                persistent.entries[keyOf(job.item)] = record;
+                schedulePersistent();
+            }
             if (Object.keys(cache).length > 500) cache = Object.create(null);
         }
         var callbacks = pending[job.key] || [];
@@ -213,18 +275,19 @@
     }
 
     function draw(node, label, full) {
-        // The full/complite event can arrive before its subtree is attached to the document.
+        // Lampa uses .card__quality on the poster and .full-start__status
+        // inside .full-start-new__rate-line on the full page.
         if (!label || !node || !document.body || (!full && !document.body.contains(node))) return;
         var parent = full ? node.querySelector('.full-start-new__rate-line')
-            || node.querySelector('.full-start-new__details')
-            : node.querySelector('.card__view') || node;
+            : node.querySelector('.card__view');
         if (!parent) return;
         var badge = parent.querySelector('.quality-module-badge');
         if (!badge) {
-            badge = document.createElement('span');
-            badge.className = 'quality-module-badge' + (full ? ' quality-module-full' : '');
+            badge = document.createElement('div');
             parent.appendChild(badge);
         }
+        badge.className = (full ? 'full-start__status quality-module-full'
+            : 'card__quality quality-module-poster') + ' quality-module-badge quality-module-' + label.toLowerCase();
         badge.textContent = label;
     }
 
@@ -275,10 +338,20 @@
 
     function start() {
         var style = document.createElement('style');
-        style.textContent = '.quality-module-badge{display:inline-block;position:absolute;right:.4em;top:.4em;'
-            + 'z-index:5;background:#243a56;color:white;border:1px solid #6ca8e8;'
-            + 'border-radius:.3em;font-size:.85em;font-weight:600;padding:.2em .45em;pointer-events:none;}'
-            + '.quality-module-full{position:static;margin-left:.4em;vertical-align:middle;}';
+        style.textContent = '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
+            + 'font-weight:750;text-align:center;white-space:nowrap;line-height:1.35;'
+            + 'letter-spacing:.015em;text-shadow:0 1px 1px rgba(0,0,0,.16);}'
+            + '.card__quality.quality-module-poster{left:-.7em;bottom:3em;top:auto;right:auto;'
+            + 'font-size:.85em;padding:.3em .65em;border-radius:.3em;box-shadow:0 2px 8px #0007;}'
+            + '.full-start__status.quality-module-full{display:inline-flex;align-items:center;'
+            + 'justify-content:center;position:static;flex-shrink:0;min-width:2.5em;'
+            + 'padding:.25em .65em;font-size:1.1em;margin-left:.25em;'
+            + 'border:1px solid currentColor;border-radius:.35em;}'
+            + '.quality-module-cam,.quality-module-ts,.quality-module-tc{background:#b92c36!important;color:#fff!important;}'
+            + '.quality-module-sd{background:#bc681e!important;color:#fff!important;}'
+            + '.quality-module-hd{background:#246eb4!important;color:#fff!important;}'
+            + '.quality-module-fhd{background:#6356b4!important;color:#fff!important;}'
+            + '.quality-module-4k{background:#178553!important;color:#fff!important;}';
         (document.head || document.documentElement).appendChild(style);
         L.Listener.follow('full', function (event) {
             if (!event || event.type !== 'complite' || !event.data || !event.data.movie) return;

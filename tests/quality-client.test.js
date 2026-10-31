@@ -104,6 +104,7 @@ assert.equal(capturedParserRequest.search, 'Example');
 assert.equal(capturedParserRequest.movie.release_date, '2025-01-01');
 assert.equal(badges.length, 1);
 assert.equal(badges[0].textContent, 'FHD');
+assert.match(badges[0].className, /card__quality quality-module-poster quality-module-badge quality-module-fhd/);
 assert.ok(!JSON.stringify(capturedParserRequest).includes('test-secret-only-in-lampa'));
 vm.runInNewContext(client, env, {filename: 'plugin.js'});
 assert.equal(parserCalls, 1, 'Plugin must ignore duplicate injection');
@@ -115,6 +116,7 @@ listenerHandlers.full({
 assert.equal(parserCalls, 1, 'Full page should reuse the film cache');
 assert.equal(fullBadges.length, 1);
 assert.equal(fullBadges[0].textContent, 'FHD');
+assert.match(fullBadges[0].className, /full-start__status quality-module-full quality-module-badge quality-module-fhd/);
 settings.jackett_url = 'https://another.example.invalid';
 storageEvents.change({name: 'jackett_url'});
 assert.equal(parserCalls, 2, 'Changing JacRed endpoint must requery the card');
