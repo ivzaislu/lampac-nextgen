@@ -137,5 +137,61 @@ class TestDeployer(unittest.TestCase):
             self.assertEqual(result["image_ref"], deploy.IMAGE + "@" + DIGEST)
 
 
+    def test_successful_hdvbp_smoke_requires_confirmed_media(self):
+        import subprocess
+        report = {
+            "status": "passed",
+            "steps": [
+                {"stage": "provider", "status": "passed"},
+                {"stage": "stream", "status": "passed",
+                 "sample_retrieved": True,
+                 "codec_confirmed": True,
+                 "codecs": ["aac", "h264"], "bytes_sampled": 262144,
+                 "ffprobe_exit_code": 0}
+            ]
+        }
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(report), stderr="")
+        with patch.object(deploy.subprocess, "run", return_value=completed), \
+                patch.object(deploy.os, "geteuid", return_value=1000):
+            result = deploy.probe_hdvbp()
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["bytes_sampled"], 262144)
+
+    def test_failed_hdvbp_smoke_is_deployment_failure(self):
+        import subprocess
+        incomplete = {
+            "status": "passed",
+            "steps": [{"stage": "stream", "status": "passed",
+                       "sample_retrieved": True, "codec_confirmed": False}]
+        }
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(incomplete), stderr="")
+        with patch.object(deploy.subprocess, "run", return_value=completed), \
+                patch.object(deploy.os, "geteuid", return_value=1000), \
+                self.assertRaises(deploy.DeploymentError):
+            deploy.probe_hdvbp()
+
+    def test_failed_deploy_rolls_back_previous_running_test(self):
+        old_info = old()
+        candidate = {"Config": {"Labels": {"dev.lampac-mcp.source-sha": SHA}}}
+
+        def mocked_container(name):
+            if name == deploy.TARGET:
+                return candidate
+            return None
+
+        with patch.object(deploy, "container", side_effect=mocked_container), \
+                patch.object(deploy, "docker") as docker_call:
+            issues = deploy.rollback(
+                deploy.TARGET, old_info, None, None,
+                deploy.TARGET + "-failed-" + SHA[:12], SHA, True)
+        self.assertEqual(issues, [])
+        commands = [tuple(call.args[0]) for call in docker_call.call_args_list]
+        self.assertIn(("stop", "--time", "5", deploy.TARGET), commands)
+        self.assertIn(("start", "lampac-mcp-build120"), commands)
+
+
+
 if __name__ == "__main__":
     unittest.main()
