@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "source_sha": "acf30326396075f9876f8cfe2462bb71e7b6d24a",
+  "image": "ghcr.io/ivzaislu/lampac-mcp-test",
+  "digest": "sha256:9ce1233f7134335b6d234b76f70f7f4218c8bd5857c36ad1c341bb5550d72952",
+  "image_ref": "ghcr.io/ivzaislu/lampac-mcp-test@sha256:9ce1233f7134335b6d234b76f70f7f4218c8bd5857c36ad1c341bb5550d72952",
+  "tag_ref": "ghcr.io/ivzaislu/lampac-mcp-test:sha-acf30326396075f9876f8cfe2462bb71e7b6d24a",
+  "platform": "linux/amd64",
+  "workflow_run_id": "41225481899"
+}
