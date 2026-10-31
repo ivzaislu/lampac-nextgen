@@ -113,6 +113,8 @@ function boot(movies, sqlHits, delayParser) {
 (async () => {
     const movies = Array.from({length: 12}, (_, i) => ({id: 100+i, title: 'Film ' + (i+1)}));
     const batch = boot(movies, {}, false);
+    // A user preference must reach SQL writes, not just the settings UI.
+    batch.local.set('quality_module_days_hd', '14');
     await sleep(530);
     const get = batch.calls.filter(x => x.op === 'get_batch');
     const put = batch.calls.filter(x => x.op === 'put_batch');
@@ -120,6 +122,7 @@ function boot(movies, sqlHits, delayParser) {
     assert.equal(get[0].items.length, 12);
     assert.equal(put.length, 1, '12 parser responses must use one SQL PUT batch');
     assert.equal(put[0].items.length, 12);
+    put[0].items.forEach(entry => assert.equal(entry.ttlDays, 14));
     assert.equal(batch.parserCount(), 12, 'Lampa.Parser.get is per movie; no imaginary JacRed batch');
     batch.cards.forEach(card => assert.equal(card.badges[0].textContent, 'FHD'));
     assert.equal(batch.settingsComponents[0].component, 'quality');
