@@ -200,9 +200,13 @@ The `--apply` option explicitly opts in to the following sequence:
    `/api/chromium/ping` and startup log messages
    `loaded module: HDVB`, `loaded module: Online`,
    and `Configure complete`.
-7. On readiness failure, stop and rename the new container to
-   `lampac-mcp-live-failed-<sha-prefix>` and restore the prior
-   container to its original running state where possible.
+7. Run exactly one bounded HDVB smoke with the adjacent
+   `probe_online.py` and `live_tests.py` scripts (under the
+   unprivileged `ubuntu` account when the deployer runs as root).
+   Require a `passed` result with sampled media and confirmed codecs.
+8. On readiness **or HDVB smoke** failure, stop and rename the new
+   container to `lampac-mcp-live-failed-<sha-prefix>` and restore
+   the prior container to its original running state where possible.
 
 Example from the VPS after obtaining the receipt artifact from
 Build #120 (a manually reconstructed, log-verified receipt is
@@ -215,7 +219,9 @@ also in `examples/build120-image-receipt.json`):
       --expected-sha ae72e758589903ad74689178b67db52bfb4b3198 \
       --replace lampac-mcp-build120
 
-The command above only prints the deployment plan. **Do not use
+The command above only prints the deployment plan. The `probe_online.py`
+and `live_tests.py` files must be present beside the deployer before
+an `--apply` run. **Do not use
 `--apply` for Build #120**: its image is already running and has
 passed HDVB smoke testing. Reserve `--apply` for the **next**
 successfully built SHA and validated receipt. A later operator
@@ -223,15 +229,14 @@ action must first inspect the plan and ensure there is no
 simultaneously running browser-heavy test. If the new image is
 unavailable, the old test container remains untouched.
 
-The deployer currently verifies **startup readiness**, not complete
-HDVB playback. A separate `probe_online.py --provider hdvb`
-check remains required after deployment. Live-probe failure after
-readiness does not yet cause automatic rollback. The script has
+The deployer now verifies **startup readiness and a bounded HDVB
+media sample** before considering an applied deployment successful.
+If the HDVB sample or codec verification fails, it attempts rollback.
+A complete film or UI playback test is not performed. The script has
 unit tests in `tests/test_deploy.py`, but it has not been run on
-the operator's VPS and no integration test of its rollback path
-has been executed. The next iteration is to integrate the
-HDVB probe, attach reports, and link the MCP server to this deployer
-without broad Docker exposure.
+the operator's VPS and no real Docker integration test of its rollback
+path has been executed. The next iteration is to link the MCP server
+to this deployer and capture reports without broad Docker exposure.
 
 **Security limit:** the receipt is an attestation of the source SHA
 and registry digest as supplied by the GitHub workflow. It should be
