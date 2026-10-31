@@ -225,6 +225,7 @@
     var cache = Object.create(null), pending = Object.create(null);
     var queue = [], backgroundQueue = [], sqlPending = [], sqlWrites = [];
     var active = 0, signature = '', generation = 0, sqlUnavailable = false;
+    var sqlRetryAt = 0, sqlActive = 0, sqlWriteActive = 0;
     var sqlBatchTimer = null, sqlWriteTimer = null, persistTimer = null;
     var persisted = null, persistentSource = '', lastFull = null;
     var known = Object.create(null), observed = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -297,6 +298,16 @@
         } catch (e) { sqlScope = ''; }
     }
     initSqlScope();
+    function sqlReady() {
+        if (!sqlEndpoint || !sqlScope || typeof root.fetch !== 'function') return false;
+        if (sqlUnavailable && Date.now() >= sqlRetryAt) sqlUnavailable = false;
+        return !sqlUnavailable;
+    }
+    function failSql() {
+        // Retry after a temporary outage without requiring a Lampa restart.
+        sqlUnavailable = true;
+        sqlRetryAt = Date.now() + 60000;
+    }
     function configured() {
         var s = L.Storage;
         if (!badgeEnabled() || s.field('parser_torrent_type') !== 'jackett') return false;
@@ -460,7 +471,8 @@
                 queued_requests: queue.length + backgroundQueue.length + sqlPending.length,
                 cache_entries: Object.keys(cache).length,
                 persistent_entries: persisted ? Object.keys(persisted.entries).length : 0,
-                sql_cache: !!(sqlScope && !sqlUnavailable),
+                sql_cache: sqlReady(), sql_active_requests: sqlActive + sqlWriteActive,
+                sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled()};
         },
         refresh: function () { refreshKnown(true); }
@@ -482,11 +494,13 @@
             return;
         }
         if (pending[job.key]) { pending[job.key].push(callback); return; }
-        if (queue.length + backgroundQueue.length + sqlPending.length >= 120) {
+        // Keep a bounded backlog, but do not drop a 100–200 card catalogue
+        // merely because SQL lookups are limited to two HTTP batches.
+        if (queue.length + backgroundQueue.length + sqlPending.length >= 300) {
             callback(null); return;
         }
         pending[job.key] = [callback];
-        if (sqlScope && !sqlUnavailable) {
+        if (sqlReady()) {
             sqlPending.push(job);
             scheduleSqlBatch();
         } else {
@@ -494,7 +508,7 @@
         }
     }
     function sendSqlBatch(op, jobs, done) {
-        if (!sqlScope || !sqlEndpoint || sqlUnavailable || !root.fetch) {
+        if (!sqlReady()) {
             done(null, false); return;
         }
         var payload = {op: op, scope: sqlScope, source: jobs[0].sourceHash,
@@ -507,33 +521,43 @@
                 return result;
             })};
         var settled = false;
-        var timer = setTimeout(function () { finish(null, false); }, 2500);
+        var timer = setTimeout(function () {
+            failSql();
+            finish(null, false);
+        }, 2500);
         function finish(response, ok) {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
             done(response, ok);
         }
-        root.fetch(sqlEndpoint, {method: 'POST', credentials: 'same-origin',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload)})
-            .then(function (response) {
-                if (!response.ok) throw new Error('Quality SQL batch unavailable');
-                return response.json();
-            }).then(function (response) { finish(response, true); })
-            .catch(function () { sqlUnavailable = true; finish(null, false); });
+        try {
+            root.fetch(sqlEndpoint, {method: 'POST', credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)})
+                .then(function (response) {
+                    if (!response.ok) throw new Error('Quality SQL batch unavailable');
+                    return response.json();
+                }).then(function (response) { finish(response, true); })
+                .catch(function () { failSql(); finish(null, false); });
+        } catch (e) {
+            failSql();
+            finish(null, false);
+        }
     }
     function scheduleSqlBatch() {
-        if (sqlBatchTimer || !sqlPending.length) return;
+        if (sqlBatchTimer || !sqlPending.length || sqlActive >= 2) return;
         if (sqlPending.length >= sqlBatchSize()) { flushSqlBatch(); return; }
         sqlBatchTimer = setTimeout(flushSqlBatch, batchDelayMs);
     }
     function flushSqlBatch() {
         if (sqlBatchTimer) { clearTimeout(sqlBatchTimer); sqlBatchTimer = null; }
-        if (!sqlPending.length) return;
+        if (!sqlPending.length || sqlActive >= 2) return;
         var jobs = sqlPending.splice(0, sqlBatchSize());
+        sqlActive++;
         var currentGeneration = generation;
         sendSqlBatch('get_batch', jobs, function (response, ok) {
+            sqlActive--;
             jobs.forEach(function (job) {
                 if (job.generation !== generation || currentGeneration !== generation) {
                     dropPending(job, null); return;
@@ -547,11 +571,12 @@
                 }
             });
             runQueue();
+            if (sqlPending.length) scheduleSqlBatch();
         });
         if (sqlPending.length) scheduleSqlBatch();
     }
     function enqueueSqlWrite(job, label, days) {
-        if (!sqlScope || sqlUnavailable || !root.fetch) return;
+        if (!sqlReady()) return;
         sqlWrites.push({sourceHash: job.sourceHash, movieHash: job.movieHash,
             label: label, ttlDays: days});
         if (sqlWrites.length >= sqlBatchSize()) flushSqlWrites();
@@ -559,15 +584,18 @@
     }
     function flushSqlWrites() {
         if (sqlWriteTimer) { clearTimeout(sqlWriteTimer); sqlWriteTimer = null; }
-        if (!sqlWrites.length) return;
+        if (!sqlWrites.length || sqlWriteActive >= 1) return;
         var first = sqlWrites[0].sourceHash, jobs = [];
         for (var i = 0; i < sqlWrites.length && jobs.length < sqlBatchSize();) {
             if (sqlWrites[i].sourceHash === first) jobs.push(sqlWrites.splice(i, 1)[0]);
             else i++;
         }
-        sendSqlBatch('put_batch', jobs, function () {});
-        if (sqlWrites.length)
-            sqlWriteTimer = setTimeout(flushSqlWrites, batchDelayMs);
+        sqlWriteActive++;
+        sendSqlBatch('put_batch', jobs, function () {
+            sqlWriteActive--;
+            if (sqlWrites.length)
+                sqlWriteTimer = setTimeout(flushSqlWrites, batchDelayMs);
+        });
     }
     function runQueue() {
         while (active < 2 && (queue.length || backgroundQueue.length)) {
