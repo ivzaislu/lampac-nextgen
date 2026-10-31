@@ -76,5 +76,22 @@
     "Runtime status and memory are snapshots only, not stress/soak test",
     "FlixCDN dedicated headed browser was intentionally excluded",
     "This validates the exact built commit ae72e758..., not source changes made after Build #120"
-  ]
+  ],
+  "deployer_preflight": {
+    "source": "operator-provided VPS CLI output",
+    "script_revision": "1fe3506806f30b57ed78e5d4d6d66eb4be8190e1",
+    "python_compile": "passed (Python 3.6.9)",
+    "command_mode": "dry-run (no --apply)",
+    "result": "dry-run",
+    "proposed_target": "lampac-mcp-live",
+    "replace": "lampac-mcp-build120",
+    "expected_source_sha": "ae72e758589903ad74689178b67db52bfb4b3198",
+    "image_ref": "ghcr.io/ivzaislu/lampac-mcp-test@sha256:d99cb0f96c6b3d10b8d95455dd106b37cbac0405028b5540bd3244bdd76b3105",
+    "changes_made": false,
+    "limitations": [
+      "Dry-run validates receipt/config/name/host Docker inspect; it does not download image, create/stop containers or execute rollback",
+      "CI tests for deployer not yet executed",
+      "Actual --apply must wait for a newly built image rather than redeploy already validated Build #120"
+    ]
+  }
 }
