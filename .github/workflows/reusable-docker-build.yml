@@ -9,12 +9,6 @@ on:
         type: string
         required: true
 
-      registry:
-        description: "Explicit registry override; empty preserves GHCR_REGISTRY variable/default"
-        type: string
-        required: false
-        default: ""
-
       version:
         description: "Release version (semver) to tag and pass as LAMPAC_VERSION build-arg. Empty = branch/SHA tags and LAMPAC_VERSION=dev"
         type: string
@@ -50,12 +44,6 @@ on:
         type: string
         required: false
         default: ""
-
-      sha_only_tags:
-        description: "When true, publish only extra_raw_tags (no mutable branch/latest or abbreviated-SHA tags)"
-        type: boolean
-        required: false
-        default: false
 
       sbom:
         description: "Generate and attach SBOM attestation via BuildKit"
@@ -122,7 +110,7 @@ jobs:
       attestations: write
       artifact-metadata: write
     env:
-      GHCR_REGISTRY: ${{ inputs.registry != '' && inputs.registry || vars.GHCR_REGISTRY || 'ghcr.io' }}
+      GHCR_REGISTRY: ${{ vars.GHCR_REGISTRY || 'ghcr.io' }}
       GHCR_IMAGE: ${{ vars.GHCR_REGISTRY || 'ghcr.io' }}/${{ github.repository_owner }}/${{ inputs.image }}
     outputs:
       tags: ${{ steps.meta.outputs.tags }}
@@ -156,14 +144,14 @@ jobs:
           images: ${{ env.GHCR_IMAGE }}
           tags: |
             # Semver pattern (e.g., 2.0.0-dev10)
-            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ inputs.version != '' && !inputs.sha_only_tags }}
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             # Raw tag without 'v' prefix (e.g., 2.0.0-dev10)
-            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' && !inputs.sha_only_tags }}
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             # Raw tag with 'v' prefix (e.g., v2.0.0-dev10)
-            type=raw,value=v${{ inputs.version }},enable=${{ inputs.version != '' && !inputs.sha_only_tags }}
-            type=ref,event=branch,enable=${{ inputs.version == '' && !inputs.sha_only_tags }}
-            type=sha,enable=${{ inputs.version == '' && !inputs.sha_only_tags }}
-            type=raw,value=latest,enable=${{ inputs.tag_latest == 'true' && !inputs.sha_only_tags }}
+            type=raw,value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
+            type=ref,event=branch,enable=${{ inputs.version == '' }}
+            type=sha,enable=${{ inputs.version == '' }}
+            type=raw,value=latest,enable=${{ inputs.tag_latest == 'true' }}
             ${{ inputs.extra_raw_tags }}
           labels: |
             org.opencontainers.image.title=${{ inputs.image }}
