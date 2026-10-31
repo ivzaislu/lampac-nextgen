@@ -437,7 +437,9 @@ console.log('Quality plugin: mocked Lampa Parser and badge integration OK.');
             {search:local,broad:false},
             {search:original,broad:true}
         ];
-        if(expectBroadLocalized) planned.push({search:local,broad:true});
+        // Search compares all aliases, even if the first one found FHD/HD:
+        // another localized title may expose 4K.
+        planned.push({search:local,broad:true});
         assert.deepEqual(calls,planned,
             'TV fallback should remove the year restriction only after normal lookups fail');
     }
