@@ -154,12 +154,16 @@ def readiness(name, max_seconds=120):
     raise DeploymentError("Test container HTTP+module readiness timed out")
 
 
-def rollback(name, old, rename_from, backup_name, failed_name, created):
+def rollback(name, old, rename_from, backup_name, failed_name, expected_sha, created):
     errors = []
     if created:
         try:
-            if container(name):
-                docker(["stop", "--time", "5", name], ok=False, timeout=25)
+            candidate = container(name)
+            if candidate:
+                labels = candidate.get("Config", {}).get("Labels") or {}
+                if labels.get("dev.lampac-mcp.source-sha") != expected_sha:
+                    raise DeploymentError("Rollback refused to modify container without matching source label")
+                docker(["stop", "--time", "5", name], timeout=25)
                 if container(failed_name):
                     errors.append("failed-container name reserved; leaving candidate as " + name)
                 else:
@@ -230,16 +234,17 @@ def main(argv=None):
 
         if old:
             if old["State"].get("Running"):
-                docker(["stop", "--time", "15", old_name], timeout=40)
                 touched_old = True
+                docker(["stop", "--time", "15", old_name], timeout=40)
             if old_name == TARGET:
                 backup_name = TARGET + "-rollback"
                 if container(backup_name) is not None:
                     raise DeploymentError("Existing rollback backup must be handled manually")
-                docker(["rename", TARGET, backup_name])
                 renamed_from = TARGET
                 touched_old = True
+                docker(["rename", TARGET, backup_name])
 
+        created = True
         docker(["create",
                 "--name", TARGET,
                 "--label", "dev.lampac-mcp.test=true",
@@ -251,7 +256,6 @@ def main(argv=None):
                 "--restart", "no",
                 "-p", "127.0.0.1:29118:9118",
                 image_ref], timeout=90)
-        created = True
         docker(["cp", options.config, TARGET + ":/lampac/init.conf"], timeout=30)
         docker(["start", TARGET], timeout=90)
         readiness(TARGET)
@@ -268,7 +272,8 @@ def main(argv=None):
     except (DeploymentError, ValueError, KeyError, TypeError, OSError) as exc:
         recovery = []
         if created or touched_old or renamed_from:
-            recovery = rollback(TARGET, old, renamed_from, backup_name, failed_name, created)
+            recovery = rollback(
+                TARGET, old, renamed_from, backup_name, failed_name, options.expected_sha, created)
         print(json.dumps({
             "status": "blocked" if not (created or touched_old or renamed_from) else "deployment-failed",
             "error": str(exc), "rollback_issues": recovery
