@@ -41,6 +41,41 @@
         return candidates.some(function (name) { return title.indexOf(' ' + name + ' ') >= 0; });
     }
 
+    // Only whole promotional markers outside the requested title count.
+    // For example, "The Trailer Park Boys" is a show title, not a trailer.
+    function promotionalRelease(release, item) {
+        var info = release.Info || release.info || {};
+        var text = ' ' + normalizedTitle(release.Title || release.title) + ' ';
+        var aliases = item ? [normalizedTitle(item.title), normalizedTitle(item.original)] : [];
+        aliases.filter(Boolean).sort(function (a, b) { return b.length - a.length; })
+            .forEach(function (name) {
+                if (name.length < 3) return;
+                var match = ' ' + name + ' ';
+                while (text.indexOf(match) >= 0) text = text.replace(match, ' ');
+            });
+        text += ' ' + normalizedTitle(info.videotype || release.videotype || '');
+        var markers = /(?:^|\s)(?:trailer(?:s)?|teaser(?:s)?|promo(?:s|tional)?|advert(?:s|isement|ising)?|commercial(?:s)?|preview(?:s)?|featurette(?:s)?|sample(?:s)?|clip(?:s)?|sneak\s+peek|tv\s+spots?|behind\s+the\s+scenes|making\s+of|trailer\s+cut|трейлер(?:ы|а|ов)?|тизер(?:ы|а|ов)?|промо(?:ролик(?:и|ов)?)?|реклам(?:а|ный|ная|ное|ные|ного|ных)|анонс(?:ы|а)?|сэмпл(?:ы|а)?|отрывок|фрагмент(?:ы|а)?|нарезка)(?:\s|$)/i;
+        return markers.test(text);
+    }
+
+    function releaseTypes(release) {
+        var info = release.Info || release.info || {};
+        var types = info.types || release.types || [];
+        if (!Array.isArray(types)) types = [types];
+        return types.map(function (type) { return String(type || '').toLowerCase().trim(); })
+            .filter(Boolean);
+    }
+
+    function hasSeriesEvidence(release) {
+        if (seasonRelease(release)) return true;
+        var text = normalizedTitle(release.Title || release.title);
+        if (/(?:^| )(?:сериал|телесериал|мультсериал|все серии|полный сериал|эпизод(?:ы|ов)?|серии|эпизоды|complete series|full series|all episodes|episode(?:s)?)(?: |$)/.test(text))
+            return true;
+        // A year span is characteristic of a multi-season collection,
+        // unlike a feature-film release year.
+        return /(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}/.test(String(release.Title || release.title || ''));
+    }
+
     function yearOf(release) {
         var info = release.Info || release.info || {};
         var reported = Number(info.relased || release.relased || 0);
@@ -56,7 +91,7 @@
     }
     function seasonRelease(release) {
         var title = String(release.Title || release.title || '');
-        return /(?:^|[^a-z\d])s\d{1,2}(?:e\d{1,3})?(?:[^a-z\d]|$)|\bseason[\s._-]*\d{1,2}\b|сезон[\s._-]*\d{1,2}|\d{1,2}[\s._-]*(?:сезон|season)|\b\d{1,2}[xх]\d{1,3}\b/i.test(title);
+        return /(?:^|[^a-z\d])s\d{1,2}(?:e\d{1,3})?(?:[^a-z\d]|$)|\bseasons?[\s._-]*\d{1,2}\b|сезон(?:ы|ов)?[\s._-]*\d{1,2}|\d{1,2}[\s._-]*(?:сезон(?:ы|ов)?|seasons?)|\b\d{1,2}[xх]\d{1,3}\b/i.test(title);
     }
 
     function bestOf(results, item) {
@@ -65,24 +100,34 @@
         results.forEach(function (release) {
             if (!release) return;
             var title = String(release.Title || release.title || '');
-            if (!title || /\b(?:trailer|teaser|sample)\b|трейлер|тизер/i.test(title)) return;
-            if (!matchesTitle(release, item)) return;
-            var info = release.Info || release.info || {};
-            var types = info.types || release.types;
-            if (Array.isArray(types) && types.length && !types.some(function (type) {
-                var value = String(type || '').toLowerCase();
-                return item.type === 'tv'
-                    ? /^(serial|docuserial|tvshow|anime|series|tv|anime_serial)$/.test(value)
-                    : /^(movie|documovie|film)$/.test(value);
-            })) return;
+            if (!title || !matchesTitle(release, item)) return;
+            if (promotionalRelease(release, item)) return;
+            var types = releaseTypes(release);
+            var declaredTv = types.some(function (type) {
+                return /^(serial|docuserial|tvshow|series|tv|anime_serial)$/.test(type);
+            });
+            var declaredMovie = types.some(function (type) {
+                return /^(movie|documovie|film|anime_movie)$/.test(type);
+            });
+            if (item.type === 'tv') {
+                if (declaredMovie) return;
+                // JacRed's generic search can return a feature film, game,
+                // advertisement or spin-off sharing the series name.
+                // A series label or season/episode evidence is required.
+                if (!declaredTv && !hasSeriesEvidence(release)) return;
+                var afterName = ' ' + normalizedTitle(title) + ' ';
+                if (/(?:^|\s)(?:movie|feature\s+film|полнометражный\s+фильм)(?:\s|$)/.test(afterName)
+                    && !hasSeriesEvidence(release)) return;
+            } else if (types.length && !declaredMovie) {
+                return;
+            }
             var year = yearOf(release);
             if (year > new Date().getFullYear() + 1) return;
             if (year && item.year && Math.abs(year - item.year) > (item.type === 'tv' ? 5 : 1)) {
-                // For a long-running series the torrent year may be a season
-                // release date, not the show's premiere year. Don't accept
-                // an unrelated remake or a future date as a season.
+                // A torrent's release year can be much later than the premiere
+                // of The Simpsons, Family Guy or South Park.
                 if (item.type !== 'tv' || year < item.year
-                    || year > new Date().getFullYear() + 1 || !seasonRelease(release))
+                    || (!declaredTv && !hasSeriesEvidence(release)))
                     return;
             }
             var label = qualityOf(release);
@@ -119,9 +164,13 @@
             return titles.map(normalizedTitle).indexOf(normalizedTitle(value)) === index;
         });
     }
-    function parserRequest(item, search) {
+    function parserRequest(item, search, broad) {
         return {
             search: search || item.title,
+            // TV shows premiered decades ago are frequently excluded when
+            // the Jackett endpoint filters by the show's original year.
+            // One last, title-only lookup removes that year restriction.
+            from_search: broad === true,
             movie: {
                 title: item.title,
                 original_title: item.original,
@@ -155,8 +204,9 @@
     var sqlBatchTimer = null, sqlWriteTimer = null, persistTimer = null;
     var persisted = null, persistentSource = '', lastFull = null;
     var known = Object.create(null), observed = typeof WeakMap === 'function' ? new WeakMap() : null;
-    // Bump on scoring/search changes: old false-negative SQL entries must be skipped.
-    var persistentKey = 'quality_module_cache_v3', algorithmVersion = 'search-v3';
+    // v4 rechecks all earlier labels: older positive hits can be trailers or
+    // South Park feature films. Never silently inherit unverified positives.
+    var persistentKey = 'quality_module_cache_v4', algorithmVersion = 'verified-video-v4';
     var scriptSource = document.currentScript && document.currentScript.src || '';
     var sqlEndpoint = /\/quality\.js(?:\?.*)?$/i.test(scriptSource)
         ? scriptSource.replace(/\/quality\.js(?:\?.*)?$/i, '/quality/cache') : '';
@@ -287,28 +337,9 @@
         persistentSource = source;
         var value;
         try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
-        if (!value || value.version !== 3 || value.source !== source
-            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries)) {
-            value = {version: 3, source: source, entries: {}, items: {}};
-            // Preserve previously displayed positive badges during upgrade.
-            // Old negative records must be rechecked with the improved search.
-            try {
-                var legacy = L.Storage.get && L.Storage.get('quality_module_cache_v2');
-                var oldSignature = sourceSignature().slice(algorithmVersion.length + 1);
-                if (legacy && legacy.version === 2
-                    && legacy.source === hashId(oldSignature) && legacy.entries) {
-                    Object.keys(legacy.entries).forEach(function (key) {
-                        var record = legacy.entries[key];
-                        if (record && record.label && recordValid(record)) {
-                            value.entries[key] = record;
-                            if (legacy.items && legacy.items[key])
-                                value.items[key] = legacy.items[key];
-                        }
-                    });
-                    schedulePersistent();
-                }
-            } catch (e) {}
-        }
+        if (!value || value.version !== 4 || value.source !== source
+            || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
+            value = {version: 4, source: source, entries: {}, items: {}};
         if (!value.items || typeof value.items !== 'object') value.items = {};
         persisted = value;
         known = Object.create(null);
@@ -530,16 +561,20 @@
                 }
                 if (job.generation !== generation) { finish(null, false); return; }
                 var titles = searchTitles(job.item), attempt = 0, anySuccess = false;
+                var plans = titles.map(function (title) { return {title: title, broad: false}; });
+                if (job.item.type === 'tv') titles.forEach(function (title) {
+                    plans.push({title: title, broad: true});
+                });
                 function requestNext() {
                     if (finished) return;
                     if (job.generation !== generation) { finish(null, false); return; }
-                    if (attempt >= titles.length) {
+                    if (attempt >= plans.length) {
                         finish(null, anySuccess);
                         return;
                     }
-                    var search = titles[attempt++];
+                    var plan = plans[attempt++];
                     try {
-                        L.Parser.get(parserRequest(job.item, search), function (response) {
+                        L.Parser.get(parserRequest(job.item, plan.title, plan.broad), function (response) {
                             if (finished) return;
                             if (job.generation !== generation) { finish(null, false); return; }
                             if (response && Array.isArray(response.Results)) {
