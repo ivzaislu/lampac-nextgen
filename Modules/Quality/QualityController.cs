@@ -87,7 +87,8 @@ public class QualityController : BaseController
                 return StatusCode(403);
         }
         if (Request.ContentLength is > 12288 || request == null
-            || !QualityCache.ValidIds(request.scope, request.source, request.movie))
+            || !QualityCache.ValidScopeSource(request.scope, request.source)
+            || (request.op is "get" or "put" && !QualityCache.ValidMovie(request.movie)))
             return BadRequest();
 
         try

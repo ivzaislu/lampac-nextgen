@@ -23,10 +23,12 @@ public static class QualityCache
         => Regex.IsMatch(movie ?? "", @"\A[a-f0-9]{16}\z");
     private static string FileName => Path.Combine(Environment.CurrentDirectory, "database", "quality-cache.db");
 
-    public static bool ValidIds(string? scope, string? source, string? movie)
+    public static bool ValidScopeSource(string? scope, string? source)
         => Regex.IsMatch(scope ?? "", @"\A[a-f0-9]{32}\z")
-            && Regex.IsMatch(source ?? "", @"\A[a-f0-9]{16}\z")
-            && ValidMovie(movie);
+            && Regex.IsMatch(source ?? "", @"\A[a-f0-9]{16}\z");
+
+    public static bool ValidIds(string? scope, string? source, string? movie)
+        => ValidScopeSource(scope, source) && ValidMovie(movie);
 
     public static bool ValidLabel(string? label)
         => label == null || label is "CAM" or "TS" or "TC" or "SD" or "HD" or "FHD" or "4K";
