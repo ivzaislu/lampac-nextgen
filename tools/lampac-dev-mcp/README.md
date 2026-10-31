@@ -17,10 +17,12 @@ This is NOT a Lampac module: it is an independent MCP process kept in this fork 
 THIS IS AN MVP, NOT COMPLETE MODULE TESTING. Build/manifest checks do
 not prove module functionality. A bounded live Online provider-to-stream probe
 is now implemented and HDVB passed a VPS smoke test on a stock image.
-A SHA-pinned CI test-image build path is configured but has not yet been
-triggered or verified; automated per-task deployment, browser life-cycle
-supervision, complete playback validation, SISI, background services and
-other module-specific profiles remain unfinished.
+A SHA-pinned CI test-image build was verified by successful Build #120,
+followed by a manually deployed HDVB VPS test reporting PASS. An
+operator-attended, dry-run-first test-container deployer is now available
+but has not yet been executed; fully autonomous deployment, browser
+life-cycle supervision, complete playback validation, SISI, background
+services and other module-specific profiles remain unfinished.
 
 Each MCP instance serves ONE trusted user and ONE GitHub fork. Use separate
 instances, credentials, data directories, and sandbox isolation for different
@@ -92,7 +94,7 @@ For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
 
-## Branch-specific CI test image (stage 2; retry after startup failure)
+## Branch-specific CI test image (stage 2; Build #120 verified)
 
 GitHub Actions Build #119 (run 41222012485) on commit
 `0788971f2868ed9010868490060096a15b239323`
@@ -108,7 +110,11 @@ release-grade scopes to test builds, the fix makes
 runs Docker Buildx, pushes one SHA-tagged `linux/amd64` image,
 checks the resulting digest, and uploads the receipt itself. The
 original reusable release Docker workflow was restored unchanged.
-**The corrected workflow has not yet run; no successful image is claimed.**
+The corrected workflow subsequently **succeeded in Build #120**
+(run 41222449253, source commit
+`ae72e758589903ad74689178b67db52bfb4b3198`). The .NET build,
+SHA-pinned test Docker build and registry push, digest receipt creation,
+and receipt artifact upload all completed successfully.
 
 
 
@@ -142,7 +148,13 @@ Actions-write token; the existing `get_ci_build_status` tool checks
 the matching workflow run and exposes the receipt artifact name on
 success. Creating a workflow file/commit does not prove that it runs
 or that GHCR publication is permitted by the fork's package settings.
-This image has **not yet been built or deployed**.
+This image **was built and manually deployed** to the isolated VPS
+container `lampac-mcp-build120`. Its HDVB provider stream smoke returned
+`passed` / CLI exit 0, with 262144 media bytes, 2 HLS manifests,
+1394 MPEG-TS packets, PAT and AAC/H.264 detected by FFprobe.
+The container remained running with 319.4 MiB of its 700 MiB cap.
+See `reports/hdvb-vps-build120-2026-10-31.json`. This was operator
+output, not an MCP-run end-to-end automation.
 
 Only use this build path on trusted branches controlled by the fork
 owner. GitHub's `packages: write` permission is required for GHCR, and
@@ -159,6 +171,74 @@ the HDVB test infrastructure failed. The probe now explicitly reports
 requests; skipped must never be mistaken for passed playback. On the
 test VPS, keep only one test container and do not attempt FlixCDN headed
 playback by default.
+
+## Stage 3 prototype: guarded test-container deployment
+
+`deploy_test_image.py` is a dependency-free Python 3.6+ CLI that
+accepts a **GitHub Actions receipt**, the expected full 40-character
+source commit SHA, and a minimal HDVB-only `init.conf`. It only
+manages named `lampac-mcp-*` test containers with exact memory and
+loopback port guards. Default mode is a **read-only dry-run**, with no
+image pull, Docker stop, Docker create or network provider test.
+
+The `--apply` option explicitly opts in to the following sequence:
+
+1. Validate receipt SHA/digest/image and exact `linux/amd64`
+   platform; validate HDVB-only low-memory profile.
+2. Inspect and restrict the explicitly named previous container
+   (name, exact loopback port, 700 MiB memory cap, no mounts,
+   nonprivileged, known test image).
+3. Pull the image by immutable GHCR SHA256 **digest**, verify platform
+   and pulled repository digest.
+4. Stop the old test container **without deleting it**; when replacing
+   `lampac-mcp-live` itself, rename it to
+   `lampac-mcp-live-rollback`. Require an empty backup slot.
+5. Create exactly one replacement test container
+   `lampac-mcp-live` on `127.0.0.1:29118:9118`, cap CPU at 1,
+   memory at 700 MiB and PIDs at 256; copy config before startup.
+6. Wait for HTTP 200 / `pong` at
+   `/api/chromium/ping` and startup log messages
+   `loaded module: HDVB`, `loaded module: Online`,
+   and `Configure complete`.
+7. On readiness failure, stop and rename the new container to
+   `lampac-mcp-live-failed-<sha-prefix>` and restore the prior
+   container to its original running state where possible.
+
+Example from the VPS after obtaining the receipt artifact from
+Build #120 (a manually reconstructed, log-verified receipt is
+also in `examples/build120-image-receipt.json`):
+
+    cd /home/ubuntu/lampac-online-test
+    python3 deploy_test_image.py \
+      --receipt build120-image-receipt.json \
+      --config hdvb-vps-low-memory.init.conf \
+      --expected-sha ae72e758589903ad74689178b67db52bfb4b3198 \
+      --replace lampac-mcp-build120
+
+The command above only prints the deployment plan. **Do not use
+`--apply` for Build #120**: its image is already running and has
+passed HDVB smoke testing. Reserve `--apply` for the **next**
+successfully built SHA and validated receipt. A later operator
+action must first inspect the plan and ensure there is no
+simultaneously running browser-heavy test. If the new image is
+unavailable, the old test container remains untouched.
+
+The deployer currently verifies **startup readiness**, not complete
+HDVB playback. A separate `probe_online.py --provider hdvb`
+check remains required after deployment. Live-probe failure after
+readiness does not yet cause automatic rollback. The script has
+unit tests in `tests/test_deploy.py`, but it has not been run on
+the operator's VPS and no integration test of its rollback path
+has been executed. The next iteration is to integrate the
+HDVB probe, attach reports, and link the MCP server to this deployer
+without broad Docker exposure.
+
+**Security limit:** the receipt is an attestation of the source SHA
+and registry digest as supplied by the GitHub workflow. It should be
+downloaded from the exact successful Actions run and compared against
+the intended task SHA. The helper is for one trusted operator on a
+test-only VPS; do not expose it over a public unauthenticated API or
+deploy it against production.
 
 ## First live test on an existing test-only Lampac container
 
