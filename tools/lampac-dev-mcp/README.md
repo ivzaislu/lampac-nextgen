@@ -16,10 +16,11 @@ This is NOT a Lampac module: it is an independent MCP process kept in this fork 
 
 THIS IS AN MVP, NOT COMPLETE MODULE TESTING. Build/manifest checks do
 not prove module functionality. A bounded live Online provider-to-stream probe
-is now implemented, but automated per-task deployment, browser life-cycle
+is now implemented and HDVB passed a VPS smoke test on a stock image.
+A SHA-pinned CI test-image build path is configured but has not yet been
+triggered or verified; automated per-task deployment, browser life-cycle
 supervision, complete playback validation, SISI, background services and
-other module-specific profiles remain unfinished. No actual VPS live-test
-result has been obtained from this code yet.
+other module-specific profiles remain unfinished.
 
 Each MCP instance serves ONE trusted user and ONE GitHub fork. Use separate
 instances, credentials, data directories, and sandbox isolation for different
@@ -90,6 +91,52 @@ proof that the module is broken. Do not run local builds alongside Lampac.
 For actual runtime smoke tests on VPS, a separate test-only Lampac process
 and per-module profiles still need implementing and RAM benchmarking. Avoid
 starting a full instance, Chromium, GStreamer, and transcoding together.
+
+## Branch-specific CI test image (stage 2; not yet verified by a run)
+
+`build.yml` is an **existing** dispatchable workflow in the fork. When
+manually dispatched on `dev/feature/*` or `dev/fix/*`, it now:
+
+1. Publishes the .NET application from the dispatch event's exact
+   `github.sha` (not a moving branch ref).
+2. Builds the Docker image on a GitHub runner, **only linux/amd64**,
+   after the .NET build job succeeds. No Docker SDK build on the 1 GB VPS.
+3. Pushes **only** `ghcr.io/ivzaislu/lampac-mcp-test:sha-<40-character SHA>`;
+   no branch tag, release tag or `latest` is written by the test job.
+   Normal release and `main` publish logic is unchanged.
+4. Uploads a small JSON artifact named
+   `lampac-mcp-image-<40-character SHA>` containing the image's SHA256
+   registry **digest**, full source SHA, full digest-based image reference,
+   platform and GitHub Actions run ID. Future VPS deployment should use
+   `image_ref` from this receipt, NOT the tag.
+5. Leaves the existing release upload job unchanged. A feature
+   `workflow_dispatch` skips the old redundant multi-platform Docker
+   job; normal `main`, tag, PR and release workflows keep the previous
+   path.
+
+To trigger the first test without touching `main`, open GitHub →
+**Actions** → **Build** → **Run workflow** → select branch
+`dev/feature/lampac-dev-mcp-20261024` → **Run workflow**.
+An MCP task created via `start_task` may instead call
+`publish_branch` and then `request_ci_build` using a securely provided
+Actions-write token; the existing `get_ci_build_status` tool checks
+the matching workflow run and exposes the receipt artifact name on
+success. Creating a workflow file/commit does not prove that it runs
+or that GHCR publication is permitted by the fork's package settings.
+This image has **not yet been built or deployed**.
+
+Only use this build path on trusted branches controlled by the fork
+owner. GitHub's `packages: write` permission is required for GHCR, and
+`Actions: write` is needed for MCP-driven dispatch. The dedicated
+test image name prevents overwriting the production Lampac package.
+Registry tags are mutable: the SHA tag is only a pointer; the receipt's
+digest identifies the exact image to pull. The next stage is an
+isolated, SHA-verified VPS deployment without touching production.
+
+FlixCDN's dedicated headed Chromium/Xvfb test is excluded from standard
+resource-limited VPS validation; its previous OOM results do not mean
+the HDVB test infrastructure failed. On the test VPS, keep only one
+test container and do not attempt FlixCDN headed playback by default.
 
 ## First live test on an existing test-only Lampac container
 
