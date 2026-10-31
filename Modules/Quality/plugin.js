@@ -33,10 +33,28 @@
     function matchesTitle(release, item) {
         var info = release.Info || release.info || {};
         var candidates = [normalizedTitle(item.title), normalizedTitle(item.original)].filter(Boolean);
-        var names = [info.name, info.originalname].map(normalizedTitle).filter(Boolean);
+        var names = [info.name, info.originalname, info.original_name].map(normalizedTitle).filter(Boolean);
         if (names.some(function (name) { return candidates.indexOf(name) >= 0; })) return true;
         var title = ' ' + normalizedTitle(release.Title || release.title) + ' ';
         return candidates.some(function (name) { return title.indexOf(' ' + name + ' ') >= 0; });
+    }
+
+    function yearOf(release) {
+        var info = release.Info || release.info || {};
+        var reported = Number(info.relased || release.relased || 0);
+        if (reported >= 1900 && reported <= new Date().getFullYear() + 1) return reported;
+        var title = String(release.Title || release.title || '');
+        var matches = title.match(/(?:^|\D)(?:19|20)\d\d(?=\D|$)/g) || [];
+        for (var i = 0; i < matches.length; i++) {
+            var candidate = Number(matches[i].replace(/\D/g, ''));
+            if (candidate >= 1900 && candidate <= new Date().getFullYear() + 1)
+                return candidate;
+        }
+        return 0;
+    }
+    function seasonRelease(release) {
+        var title = String(release.Title || release.title || '');
+        return /(?:^|[^a-z\d])s\d{1,2}(?:e\d{1,3})?(?:[^a-z\d]|$)|\bseason[\s._-]*\d{1,2}\b|сезон[\s._-]*\d{1,2}|\d{1,2}[\s._-]*(?:сезон|season)/i.test(title);
     }
 
     function bestOf(results, item) {
@@ -50,15 +68,20 @@
             var info = release.Info || release.info || {};
             var types = info.types || release.types;
             if (Array.isArray(types) && types.length && !types.some(function (type) {
-                return item.type === 'tv' ? /^(serial|docuserial|tvshow|anime)$/.test(type)
-                    : /^(movie|documovie)$/.test(type);
+                var value = String(type || '').toLowerCase();
+                return item.type === 'tv'
+                    ? /^(serial|docuserial|tvshow|anime|series|tv|anime_serial)$/.test(value)
+                    : /^(movie|documovie|film)$/.test(value);
             })) return;
-            var year = Number(info.relased || release.relased || 0);
-            if (!year) {
-                var found = title.match(/(?:^|\D)((?:19|20)\d\d)(?:\D|$)/);
-                if (found) year = Number(found[1]);
+            var year = yearOf(release);
+            if (year && item.year && Math.abs(year - item.year) > (item.type === 'tv' ? 5 : 1)) {
+                // For a long-running series the torrent year may be a season
+                // release date, not the show's premiere year. Don't accept
+                // an unrelated remake or a future date as a season.
+                if (item.type !== 'tv' || year < item.year
+                    || year > new Date().getFullYear() + 1 || !seasonRelease(release))
+                    return;
             }
-            if (year && item.year && Math.abs(year - item.year) > (item.type === 'tv' ? 5 : 1)) return;
             var label = qualityOf(release);
             if (!label) return;
             var score = rank[label] * 10000000
@@ -83,9 +106,19 @@
         };
     }
 
-    function parserRequest(item) {
+    function searchTitles(item) {
+        // The original qulity_lampa tries the original name first, then the
+        // local title. Lampa.Parser.get accepts one title per call.
+        var titles = [item.original, item.title].filter(function (value) {
+            return !!String(value || '').trim();
+        });
+        return titles.filter(function (value, index) {
+            return titles.map(normalizedTitle).indexOf(normalizedTitle(value)) === index;
+        });
+    }
+    function parserRequest(item, search) {
         return {
-            search: item.title,
+            search: search || item.title,
             movie: {
                 title: item.title,
                 original_title: item.original,
@@ -119,7 +152,8 @@
     var sqlBatchTimer = null, sqlWriteTimer = null, persistTimer = null;
     var persisted = null, persistentSource = '', lastFull = null;
     var known = Object.create(null), observed = typeof WeakMap === 'function' ? new WeakMap() : null;
-    var persistentKey = 'quality_module_cache_v2';
+    // Bump on scoring/search changes: old false-negative SQL entries must be skipped.
+    var persistentKey = 'quality_module_cache_v3', algorithmVersion = 'search-v3';
     var scriptSource = document.currentScript && document.currentScript.src || '';
     var sqlEndpoint = /\/quality\.js(?:\?.*)?$/i.test(scriptSource)
         ? scriptSource.replace(/\/quality\.js(?:\?.*)?$/i, '/quality/cache') : '';
@@ -197,9 +231,9 @@
     function sourceSignature() {
         var s = L.Storage;
         // Hash in memory; no JacRed URL or key enters persistent storage or HTTP.
-        return [s.field('jackett_url'), s.field('jackett_key'), s.field('jackett_url_two'),
-            s.field('jackett_key_two'), s.field('parser_use_link'),
-            s.field('jackett_interview')].join('|');
+        return [algorithmVersion, s.field('jackett_url'), s.field('jackett_key'),
+            s.field('jackett_url_two'), s.field('jackett_key_two'),
+            s.field('parser_use_link'), s.field('jackett_interview')].join('|');
     }
     function keyOf(item) {
         return item.source + ':' + item.type + ':' + (item.id || item.title) + ':' + item.year;
@@ -250,9 +284,9 @@
         persistentSource = source;
         var value;
         try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
-        if (!value || value.version !== 2 || value.source !== source
+        if (!value || value.version !== 3 || value.source !== source
             || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
-            value = {version: 2, source: source, entries: {}, items: {}};
+            value = {version: 3, source: source, entries: {}, items: {}};
         if (!value.items || typeof value.items !== 'object') value.items = {};
         persisted = value;
         known = Object.create(null);
@@ -463,7 +497,7 @@
             (function (job) {
                 active++;
                 var finished = false;
-                var timeout = setTimeout(function () { finish(null, false); }, 20000);
+                var timeout = setTimeout(function () { finish(null, false); }, 35000);
                 function finish(label, success) {
                     if (finished) return;
                     finished = true;
@@ -473,12 +507,27 @@
                     runQueue();
                 }
                 if (job.generation !== generation) { finish(null, false); return; }
-                try {
-                    L.Parser.get(parserRequest(job.item), function (response) {
-                        if (!response || !Array.isArray(response.Results)) return finish(null, false);
-                        finish(bestOf(response.Results, job.item), true);
-                    }, function () { finish(null, false); });
-                } catch (e) { finish(null, false); }
+                var titles = searchTitles(job.item), attempt = 0, anySuccess = false;
+                function requestNext() {
+                    if (finished || job.generation !== generation) return;
+                    if (attempt >= titles.length) {
+                        finish(null, anySuccess);
+                        return;
+                    }
+                    var search = titles[attempt++];
+                    try {
+                        L.Parser.get(parserRequest(job.item, search), function (response) {
+                            if (finished || job.generation !== generation) return;
+                            if (response && Array.isArray(response.Results)) {
+                                anySuccess = true;
+                                var label = bestOf(response.Results, job.item);
+                                if (label) { finish(label, true); return; }
+                            }
+                            requestNext();
+                        }, function () { requestNext(); });
+                    } catch (e) { requestNext(); }
+                }
+                requestNext();
             })(queue.length ? queue.shift() : backgroundQueue.shift());
         }
     }

@@ -99,8 +99,8 @@ function boot(remoteGet) {
     assert.equal(first.status().sql_cache, true);
 
     await pause(430);
-    const disk = saved.get('quality_module_cache_v2');
-    assert.equal(disk.version, 2);
+    const disk = saved.get('quality_module_cache_v3');
+    assert.equal(disk.version, 3);
     assert.equal(Object.keys(disk.entries).length, 1, 'Lampa cache should be persisted');
 
     const second = boot({hit: false});
