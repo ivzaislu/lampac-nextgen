@@ -78,44 +78,58 @@ jobs:
     secrets: inherit
 
   build-mcp-test-image:
-    name: Build isolated MCP test image (SHA only)
-    # Never run on main, tags, PRs or automatic pushes.
+    name: Build isolated MCP test image and record digest
+    # This job is intentionally self-contained: reusing the release Docker
+    # workflow would demand its broader contents/attestation permissions.
     if: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) }}
-    needs:
-      - extract-version
-      - build
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/reusable-docker-build.yml
-    with:
-      image: lampac-mcp-test
-      registry: ghcr.io
-      checkout_ref: ${{ github.sha }}
-      platforms: linux/amd64
-      push: true
-      sha_only_tags: true
-      extra_raw_tags: type=raw,value=sha-${{ github.sha }}
-      tag_latest: 'false'
-      attest_github: false
-      sbom: false
-      generate_syft_sbom: false
-      provenance: "mode=min"
-    secrets: inherit
-
-  mcp-test-image-receipt:
-    name: Record immutable test image digest
-    if: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) }}
-    needs: build-mcp-test-image
+    needs: build
     runs-on: ubuntu-26.04
     permissions:
       contents: read
+      packages: write
+    env:
+      TEST_IMAGE: ghcr.io/${{ github.repository_owner }}/lampac-mcp-test
     steps:
+      - name: Checkout exact dispatched commit
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push SHA-only test image
+        id: docker
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.TEST_IMAGE }}:sha-${{ github.sha }}
+          build-args: |
+            LAMPAC_VERSION=dev
+            GIT_COMMIT=${{ github.sha }}
+            GITHUB_SERVER_URL=${{ github.server_url }}
+            GITHUB_REPOSITORY=${{ github.repository }}
+            GITHUB_REF=${{ github.ref }}
+            GITHUB_RUN_ID=${{ github.run_id }}
+          sbom: false
+          provenance: mode=min
+
       - name: Verify digest and write deployment receipt
         env:
           SOURCE_SHA: ${{ github.sha }}
-          IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/lampac-mcp-test
-          IMAGE_DIGEST: ${{ needs.build-mcp-test-image.outputs.digest }}
+          IMAGE_REPO: ${{ env.TEST_IMAGE }}
+          IMAGE_DIGEST: ${{ steps.docker.outputs.digest }}
           WORKFLOW_RUN: ${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -136,7 +150,8 @@ jobs:
               platform: "linux/amd64",
               workflow_run_id: $run
             }' > lampac-mcp-test-image.json
-      - name: Upload test image deployment receipt
+
+      - name: Upload test-image deployment receipt
         uses: actions/upload-artifact@v7.0.2
         with:
           name: lampac-mcp-image-${{ github.sha }}
