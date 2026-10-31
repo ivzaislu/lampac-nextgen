@@ -99,8 +99,8 @@ function boot(remoteGet) {
     assert.equal(first.status().sql_cache, true);
 
     await pause(430);
-    const disk = saved.get('quality_module_cache_v5');
-    assert.equal(disk.version, 5);
+    const disk = saved.get('quality_module_cache_v6');
+    assert.equal(disk.version, 6);
     assert.equal(Object.keys(disk.entries).length, 1, 'Lampa cache should be persisted');
 
     const second = boot({hit: false});
@@ -115,11 +115,11 @@ function boot(remoteGet) {
     assert.equal(third.badges[0].textContent, 'FHD');
     assert.deepEqual(third.requests.map(r => r.op), ['get_batch', 'put_batch']);
     assert.notEqual(third.requests[0].source, first.requests[0].source);
-    // v5 must ignore earlier positive AND negative cache entries.
+    // v6 must ignore earlier positive AND negative cache entries.
     // South Park's previous false HD must not survive the stricter check.
     const oldKey = 'tmdb:movie:22:2025';
     const oldRecord = {label: 'HD', until: Date.now() + 86400000};
-    saved.delete('quality_module_cache_v5');
+    saved.delete('quality_module_cache_v6');
     saved.set('quality_module_cache_v4', {version:4, source: 'old-hash',
         entries: {[oldKey]:oldRecord}, items:{}});
     const stalePositive = boot({hit:false});
@@ -129,7 +129,7 @@ function boot(remoteGet) {
     assert.equal(stalePositive.badges[0].textContent, 'FHD');
     assert.notEqual(stalePositive.requests[0].source, first.requests[0].source,
         'Changed source signatures must bypass older server SQL rows');
-    saved.delete('quality_module_cache_v5');
+    saved.delete('quality_module_cache_v6');
     saved.set('quality_module_cache_v4', {version:4, source:'old-hash',
         entries: {[oldKey]: {label:null,until:Date.now()+86400000}},items:{}});
     const staleNegative = boot({hit:false});
@@ -138,5 +138,5 @@ function boot(remoteGet) {
         'Version 4 negative results must be rechecked for long-running series');
     assert.equal(staleNegative.badges[0].textContent, 'FHD');
 
-    console.log('Quality: batched SQL hit, Lampa persistence, source isolation and visual classes and v5 revalidation OK');
+    console.log('Quality: batched SQL hit, Lampa persistence, source isolation and visual classes and v6 revalidation OK');
 })().catch(e => { console.error(e); process.exitCode = 1; });

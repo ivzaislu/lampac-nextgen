@@ -228,9 +228,9 @@
     var sqlBatchTimer = null, sqlWriteTimer = null, persistTimer = null;
     var persisted = null, persistentSource = '', lastFull = null;
     var known = Object.create(null), observed = typeof WeakMap === 'function' ? new WeakMap() : null;
-    // v5 fixes early HD selection before checking an alternate name and
-    // bypasses previously cached HD results in both local and SQL storage.
-    var persistentKey = 'quality_module_cache_v5', algorithmVersion = 'best-across-titles-v5';
+    // v6 rechecks HD/FHD/4K after fixing JacRed's multfilm category. Previous
+    // SQL/local results may have excluded real 4K cartoon releases.
+    var persistentKey = 'quality_module_cache_v6', algorithmVersion = 'jacred-animation-v6';
     var scriptSource = document.currentScript && document.currentScript.src || '';
     var sqlEndpoint = /\/quality\.js(?:\?.*)?$/i.test(scriptSource)
         ? scriptSource.replace(/\/quality\.js(?:\?.*)?$/i, '/quality/cache') : '';
@@ -361,9 +361,9 @@
         persistentSource = source;
         var value;
         try { if (L.Storage.get) value = L.Storage.get(persistentKey); } catch (e) {}
-        if (!value || value.version !== 5 || value.source !== source
+        if (!value || value.version !== 6 || value.source !== source
             || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries))
-            value = {version: 5, source: source, entries: {}, items: {}};
+            value = {version: 6, source: source, entries: {}, items: {}};
         if (!value.items || typeof value.items !== 'object') value.items = {};
         persisted = value;
         known = Object.create(null);
