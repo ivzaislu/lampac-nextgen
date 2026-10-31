@@ -43,7 +43,8 @@ jobs:
     needs: extract-version
     uses: ./.github/workflows/reusable-build.yml
     with:
-      checkout_ref: ${{ needs.extract-version.outputs.checkout_ref }}
+      # Pin the build to the exact dispatch commit, even if the dev branch moves.
+      checkout_ref: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) && github.sha || needs.extract-version.outputs.checkout_ref }}
       dotnet_version: ${{ vars.DOTNET_VERSION || '10.0.x' }}
       retention_days: ${{ needs.extract-version.outputs.is_release == 'true' && 30 || 7 }}
     secrets: inherit
@@ -51,6 +52,9 @@ jobs:
   # push/attest stay false on pull_request refs; write perms only used when push is true.
   build-docker-image:
     name: Build and push Docker image
+    # Dev workflow_dispatch builds a separate, SHA-addressed test image below.
+    # Skip this second multi-architecture Docker build for those requests.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/'))) }}
     needs: extract-version
     permissions:
       actions: read
@@ -72,6 +76,71 @@ jobs:
       generate_syft_sbom: true
       sbom_artifact_retention_days: ${{ (inputs.tag != '' || startsWith(github.ref, 'refs/tags/')) && 30 || 7 }}
     secrets: inherit
+
+  build-mcp-test-image:
+    name: Build isolated MCP test image (SHA only)
+    # Never run on main, tags, PRs or automatic pushes.
+    if: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) }}
+    needs:
+      - extract-version
+      - build
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/reusable-docker-build.yml
+    with:
+      image: lampac-mcp-test
+      checkout_ref: ${{ github.sha }}
+      platforms: linux/amd64
+      push: true
+      sha_only_tags: true
+      extra_raw_tags: type=raw,value=sha-${{ github.sha }}
+      tag_latest: 'false'
+      attest_github: false
+      sbom: false
+      generate_syft_sbom: false
+      provenance: "mode=min"
+    secrets: inherit
+
+  mcp-test-image-receipt:
+    name: Record immutable test image digest
+    if: ${{ github.event_name == 'workflow_dispatch' && (startsWith(github.ref, 'refs/heads/dev/feature/') || startsWith(github.ref, 'refs/heads/dev/fix/')) }}
+    needs: build-mcp-test-image
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Verify digest and write deployment receipt
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          IMAGE_REPO: ghcr.io/${{ github.repository_owner }}/lampac-mcp-test
+          IMAGE_DIGEST: ${{ needs.build-mcp-test-image.outputs.digest }}
+          WORKFLOW_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n \
+            --arg commit "$SOURCE_SHA" \
+            --arg image "$IMAGE_REPO" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg run "$WORKFLOW_RUN" \
+            '{
+              schema_version: 1,
+              source_sha: $commit,
+              image: $image,
+              digest: $digest,
+              image_ref: ($image + "@" + $digest),
+              tag_ref: ($image + ":sha-" + $commit),
+              platform: "linux/amd64",
+              workflow_run_id: $run
+            }' > lampac-mcp-test-image.json
+      - name: Upload test image deployment receipt
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: lampac-mcp-image-${{ github.sha }}
+          path: lampac-mcp-test-image.json
+          retention-days: 7
 
   upload-release-assets:
     name: Attach artifacts to release
