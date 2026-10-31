@@ -53,3 +53,61 @@ jobs:
 
       - name: Run client quality regression checks
         run: node tests/quality-client.test.js
+
+      - name: Publish Lampac for dynamic module smoke
+        run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
+
+      - name: Check dynamic load and HTTP plugin endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = Path('/tmp/lampac-quality-smoke/module/Quality/manifest.json')
+          assert manifest.is_file(), 'Quality was not published'
+          value = json.loads(manifest.read_text())
+          value['enable'] = True  # CI-only: working-branch manifest remains disabled
+          manifest.write_text(json.dumps(value))
+          assert Path('/tmp/lampac-quality-smoke/module/Quality/plugin.js').is_file()
+          PY
+          cat > /tmp/lampac-quality-smoke/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - Quality
+          listen:
+            port: 9118
+          YAML
+          printf '%s\n' '{"Quality":{"enable":true}}' >/tmp/lampac-quality-smoke/init.conf
+          (cd /tmp/lampac-quality-smoke && exec dotnet Core.dll >/tmp/lampac-quality-smoke.log 2>&1) &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          found=0
+          for i in $(seq 1 180); do
+            if curl -fsS --max-time 2 http://127.0.0.1:9118/quality.js >/tmp/quality-serve.js 2>/dev/null; then
+              found=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              tail -n 200 /tmp/lampac-quality-smoke.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$found" -ne 1 ]; then
+            tail -n 200 /tmp/lampac-quality-smoke.log
+            exit 1
+          fi
+          node --check /tmp/quality-serve.js
+          grep -Fq 'L.Parser.get(' /tmp/quality-serve.js
+          echo "Quality runtime plugin route: OK"
