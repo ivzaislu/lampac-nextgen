@@ -110,7 +110,14 @@ function boot(count, storage, behavior) {
     class PassiveMutations {observe() {}}
     vm.runInNewContext(source, {
         window:w, document, console, Date:Clock,
-        setTimeout, clearTimeout,
+        setTimeout(fn,delay) {
+            const timer=setTimeout(fn,delay);
+            // Held mock JacRed callbacks are controlled by the test. Do not
+            // keep CI alive for each 35s production timeout on assertion failure.
+            if (behavior.holdParser && delay>=30000 && timer.unref) timer.unref();
+            return timer;
+        },
+        clearTimeout,
         setInterval(fn,interval) {
             periodic.push({fn,interval});
             return {unref() {}};
@@ -168,8 +175,19 @@ function boot(count, storage, behavior) {
     // may be admitted each minute, with two parser calls in flight.
     clockShift=0;
     const stale=boot(100,new Map(),{delay:35,stale:true,holdParser:true});
-    await wait(380);
-    assert.ok(stale.cards.every(c=>c.badges.length===1 && c.badges[0].textContent==='CAM'));
+    for (let attempt=0;attempt<20;attempt++) {
+        if (stale.cards.every(c=>c.badges.length===1 && c.badges[0].textContent==='CAM'))
+            break;
+        await wait(100);
+    }
+    const missing=stale.cards.map((card,i)=>({
+        card:i, badges:card.badges.map(x=>x.textContent)
+    })).filter(x=>x.badges.length!==1||x.badges[0]!=='CAM');
+    assert.equal(missing.length,0,JSON.stringify({
+        missing:missing.slice(0,15),
+        sqlBatches:stale.sqlCalls.map(x=>({op:x.op,count:x.items.length})),
+        status:stale.status()
+    }));
     assert.equal(stale.parserCalls(),2);
     assert.equal(stale.status().queued_requests,1);
     assert.equal(stale.pendingParsers.length,2);
