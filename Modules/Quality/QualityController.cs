@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System;
+using System.Security.Cryptography;
+using System.Text;
 using Shared;
 using Shared.Services;
 
@@ -41,6 +43,20 @@ public class QualityController : BaseController
         public string? label { get; set; }
     }
 
+    private string TrustedCacheScope(string browserScope)
+    {
+        // Authenticated Lampac accounts can share cached results across devices
+        // without placing email, user IDs, or credentials in the database.
+        var user = requestInfo?.user;
+        if (user == null || user.ban || user.expires < DateTime.UtcNow
+            || string.IsNullOrWhiteSpace(user.id) || string.IsNullOrEmpty(CoreInit.rootPasswd))
+            return browserScope;
+
+        var value = "quality:v1:" + CoreInit.rootPasswd + ":" + user.id;
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexString(digest, 0, 16).ToLowerInvariant();
+    }
+
     [HttpPost, AllowAnonymous]
     [Route("quality/cache")]
     public ActionResult Cache([FromBody] CacheRequest? request)
@@ -64,15 +80,16 @@ public class QualityController : BaseController
 
         try
         {
+            string scope = TrustedCacheScope(request.scope);
             if (request.op == "get")
             {
-                var cached = QualityCache.Get(request.scope, request.source, request.movie);
+                var cached = QualityCache.Get(scope, request.source, request.movie);
                 return Ok(new {hit = cached.hit, label = cached.label, until = cached.until});
             }
             if (request.op == "put")
             {
                 if (!QualityCache.ValidLabel(request.label)) return BadRequest();
-                QualityCache.Put(request.scope, request.source, request.movie, request.label);
+                QualityCache.Put(scope, request.source, request.movie, request.label);
                 return Ok(new {saved = true});
             }
             return BadRequest();
