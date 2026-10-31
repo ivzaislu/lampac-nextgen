@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Shared;
 using Shared.Services;
 
@@ -84,7 +86,8 @@ public class QualityController : BaseController
             if (request.op == "get")
             {
                 var cached = QualityCache.Get(scope, request.source, request.movie);
-                return Ok(new {hit = cached.hit, label = cached.label, until = cached.until});
+                return new JsonResult(new {hit = cached.hit, label = cached.label, until = cached.until},
+                    new JsonSerializerOptions {DefaultIgnoreCondition = JsonIgnoreCondition.Never});
             }
             if (request.op == "put")
             {
