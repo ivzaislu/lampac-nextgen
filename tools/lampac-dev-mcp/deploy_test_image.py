@@ -154,6 +154,46 @@ def readiness(name, max_seconds=120):
     raise DeploymentError("Test container HTTP+module readiness timed out")
 
 
+
+def probe_hdvbp(probe_user="ubuntu"):
+    """Bounded HDVB network+media smoke; sanitize output through probe_online."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    script = os.path.join(script_dir, "probe_online.py")
+    live_lib = os.path.join(script_dir, "live_tests.py")
+    if not (os.path.isfile(script) and os.path.isfile(live_lib)):
+        raise DeploymentError("Missing probe_online.py/live_tests.py next to deployer")
+    command = [sys.executable, script, "--provider", "hdvb",
+               "--param", "kinopoisk_id=258687",
+               "--param", "title=Интерстеллар"]
+    if os.geteuid() == 0:
+        # Network probing must not run as root when the operator uses sudo.
+        command = ["runuser", "-u", probe_user, "--"] + command
+    try:
+        p = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True, timeout=150, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise DeploymentError("HDVB smoke probe unavailable or timed out: " + str(exc))
+    if p.returncode != 0:
+        raise DeploymentError("HDVB smoke failed (exit code {})".format(p.returncode))
+    try:
+        report = json.loads(p.stdout)
+    except ValueError:
+        raise DeploymentError("HDVB smoke did not produce JSON")
+    stages = report.get("steps", [])
+    stream = next((step for step in stages if step.get("stage") == "stream"), {})
+    if (report.get("status") != "passed" or stream.get("status") != "passed"
+            or not stream.get("sample_retrieved") or not stream.get("codec_confirmed")):
+        raise DeploymentError("HDVB smoke did not confirm media sample and codecs")
+    return {
+        "provider": "hdvb",
+        "status": "passed",
+        "bytes_sampled": stream.get("bytes_sampled"),
+        "codec_confirmed": True,
+        "codecs": stream.get("codecs", []),
+        "ffprobe_exit_code": stream.get("ffprobe_exit_code")
+    }
+
+
 def rollback(name, old, rename_from, backup_name, failed_name, expected_sha, created):
     errors = []
     if created:
@@ -213,6 +253,11 @@ def main(argv=None):
             raise DeploymentError("Target test container exists: pass --replace lampac-mcp-live")
         if old_name and old is None:
             raise DeploymentError("Explicit --replace container was not found")
+        if options.apply:
+            base = os.path.dirname(os.path.realpath(__file__))
+            if not (os.path.isfile(os.path.join(base, "probe_online.py"))
+                    and os.path.isfile(os.path.join(base, "live_tests.py"))):
+                raise DeploymentError("Missing HDVB probe dependencies; refusing deployment")
         if old:
             verify_old_container(old_name, old)
         elif target:
@@ -259,14 +304,16 @@ def main(argv=None):
         docker(["cp", options.config, TARGET + ":/lampac/init.conf"], timeout=30)
         docker(["start", TARGET], timeout=90)
         readiness(TARGET)
+        smoke = probe_hdvbp()
         after = container(TARGET)
+        if not after or not after["State"].get("Running") or after["State"].get("OOMKilled"):
+            raise DeploymentError("Container unhealthy after successful HDVB smoke")
         print(json.dumps({
-            "status": "deployed-ready", "container": TARGET,
+            "status": "deployed-and-smoke-passed", "container": TARGET,
             "source_sha": options.expected_sha, "image_ref": image_ref,
             "old_container": old_name, "old_backup": backup_name,
-            "running": bool(after["State"].get("Running")),
-            "oom_killed": bool(after["State"].get("OOMKilled")),
-            "note": "Startup readiness only; run a separate HDVB live probe next"
+            "running": True, "oom_killed": False, "smoke": smoke,
+            "note": "Only a bounded media sample was validated, not a complete film"
         }, indent=2))
         return 0
     except (DeploymentError, ValueError, KeyError, TypeError, OSError) as exc:
