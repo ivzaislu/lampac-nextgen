@@ -187,7 +187,7 @@ class TestDeployer(unittest.TestCase):
                 deploy.TARGET, old_info, None, None,
                 deploy.TARGET + "-failed-" + SHA[:12], SHA, True)
         self.assertEqual(issues, [])
-        commands = [tuple(call.args[0]) for call in docker_call.call_args_list]
+        commands = [tuple(call[0][0]) for call in docker_call.call_args_list]
         self.assertIn(("stop", "--time", "5", deploy.TARGET), commands)
         self.assertIn(("start", "lampac-mcp-build120"), commands)
 
