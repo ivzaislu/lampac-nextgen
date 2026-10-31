@@ -4,6 +4,10 @@
   "tree": [
     "ModInit.cs",
     "ModuleConf.cs",
-    "QualityController.cs"
+    "QualityController.cs",
+    "QualityCache.cs"
+  ],
+  "references": [
+    "Microsoft.Data.Sqlite"
   ]
 }

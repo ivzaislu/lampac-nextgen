@@ -131,5 +131,20 @@ jobs:
           assert status['loaded'] is True
           assert status['enabled'] is True
           assert status['autoinject'] is True
+          assert status['sqlcache'] is True
           PY
-          echo "Quality runtime plugin and status routes: OK"
+          curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"put","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb","label":"4K"}' \
+            http://127.0.0.1:9118/quality/cache > /tmp/quality-cache-put.json
+          curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"get","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb"}' \
+            http://127.0.0.1:9118/quality/cache > /tmp/quality-cache-get.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          assert json.loads(Path('/tmp/quality-cache-put.json').read_text())['saved'] is True
+          cached=json.loads(Path('/tmp/quality-cache-get.json').read_text())
+          assert cached['hit'] is True and cached['label']=='4K'
+          assert Path('/tmp/lampac-quality-smoke/database/quality-cache.db').is_file()
+          PY
+          echo "Quality runtime plugin, status and SQLite cache: OK"

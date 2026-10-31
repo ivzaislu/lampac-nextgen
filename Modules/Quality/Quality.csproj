@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../Shared/Shared.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <None Update="plugin.js">
       <CopyToPublishDirectory>Always</CopyToPublishDirectory>
     </None>
