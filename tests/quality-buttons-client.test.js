@@ -26,7 +26,7 @@ class Q {
     }
     children(selector){
         const list=this.nodes.flatMap(x=>x.children);
-        return new Q(selector?list.filter(x=>matches(x,selector)):list);
+        return new Q(selector?list.filter(x=>selector.split(',').some(part=>matches(x,part.trim()))):list);
     }
     not(selectors){const excluded=selectors.split(',').map(s=>s.trim());
         return new Q(this.nodes.filter(x=>!excluded.some(s=>matches(x,s))));}
@@ -91,8 +91,13 @@ const nativeOnline=nativeSource('lampac--button','Онлайн');
 const nativeTrailer=nativeSource('view--trailer','Трейлеры');
 const sourceHolder=node('hide buttons--container',[nativeTorrent,nativeOnline,nativeTrailer]);
 const page=node('full-page',[line,sourceHolder]);
+// In actual Lampa, ActivitySlide.render() is an OUTER slide; the event.body
+// of Full.complite is the nested Full component root, not that slide.
+const slide=node('activity-slide',[page]);
+const nativeStart={last:playButton}, fullComponent={items:[nativeStart]};
 const storage=new Map(),events={},params=[],selected=[];
-let active={component:'full',activity:{render(){return $(page);}}},focus='full_start',toggles=0;
+let active={component:'full',activity:{component:fullComponent,render(){return $(slide);}}},
+    focus='full_start',toggles=0;
 const L={Storage:{get(k,def){return storage.has(k)?storage.get(k):def;},set(k,v){storage.set(k,v);},
     listener:{follow(n,fn){events['storage:'+n]=fn;}}},
     Listener:{follow(n,fn){events[n]=fn;}},
@@ -105,15 +110,24 @@ const L={Storage:{get(k,def){return storage.has(k)?storage.get(k):def;},set(k,v)
 };
 const document={body:{},head:{appendChild(){}},createElement(){return {};}};
 const window={Lampa:L,$};
-class Mutation{constructor(cb){this.cb=cb;}observe(){}disconnect(){}}
-vm.runInNewContext(script,{window,document,console,setTimeout,clearTimeout,MutationObserver:Mutation});
+const mutations=[],deferred=[];
+class Mutation{
+    constructor(cb){this.cb=cb;this.targets=[];mutations.push(this);}
+    observe(target,opts){this.targets.push(target);}
+    disconnect(){this.targets=[];}
+}
+vm.runInNewContext(script,{window,document,console,
+    setTimeout:(fn,ms)=>{
+        if(ms===100){deferred.push(fn);return deferred.length;}
+        return setTimeout(fn,ms);
+    },clearTimeout,MutationObserver:Mutation});
 const setting=(name)=>params.find(x=>x.param.name===name);
 assert.equal(window.LampaQualityButtons.status().loaded,true);
 assert.ok(setting('quality_buttons_open'));
 assert.ok(setting('quality_buttons_pencil'));
 assert.equal(setting('quality_buttons_pencil').param.default,false);
-const nativeStart={last:playButton};
-events.full({type:'complite',body:[page],link:{items:[nativeStart]}});
+events.full({type:'complite',body:[page],link:fullComponent});
+assert.equal(mutations.length,1,'The real Lampa full card must be observed for late plugins');
 assert.strictEqual(nativeStart.last,nativeTorrent,
     'Native remembered focus cannot target Play after exposing sources');
 assert.strictEqual(sourceHolder.parent,line,
@@ -137,12 +151,26 @@ assert.strictEqual(nativeStart.last,nativeTrailer,
 assert.equal(toggles,0,'Unfolding must not switch the TV controller');
 const lateSource=nativeSource('view--added-plugin','Доп. источник');
 sourceHolder.children.push(lateSource);lateSource.parent=sourceHolder;
-window.LampaQualityButtons.refresh();
+const thirdParty=node('selector foreign-button',[]);
+thirdParty.attrs['aria-label']='Сторонний плагин';
+thirdParty.events['hover:enter']=()=>{thirdParty.clicked=(thirdParty.clicked||0)+1;};
+line.children.push(thirdParty);thirdParty.parent=line;
+// No explicit refresh: the MutationObserver must discover BOTH late sources.
+mutations[0].cb();
+assert.equal(deferred.length,1,'Late plugin insertion must schedule one refresh');
+deferred.shift()();
 assert.equal(lateSource.attrs['data-quality-buttons-id'],'b:view--added-plugin',
     'A source added after initial full render is also extracted');
 $(lateSource).trigger('hover:enter');
 assert.equal(lateSource.clicked,1,'Late plugin handler must remain bound');
 assert.strictEqual(nativeStart.last,lateSource);
+assert.ok(thirdParty.attrs['data-quality-buttons-id'],
+    'Plugin-only .selector button must be discovered even without .full-start__button');
+setting('quality_buttons_open').onChange();
+assert.ok(selected[selected.length-1].items.some(item=>item.title==='Сторонний плагин'),
+    'Editor reflects buttons from other plugins added after full:complite');
+$(thirdParty).trigger('hover:enter');
+assert.equal(thirdParty.clicked,1,'Never replace a third-party click handler');
 assert.equal(Object.keys(nativeOnline.events)
     .filter(k=>k.endsWith('.qualityButtonsFocus')).length,4,
     'Repeated refresh must never duplicate custom focus hooks');
