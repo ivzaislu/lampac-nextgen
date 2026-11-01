@@ -42,8 +42,13 @@ class Q {
         this.nodes.forEach(n=>n.textValue=v);return this;}
     toggleClass(c,enabled){this.nodes.forEach(n=>{if(enabled)n.classes.add(c);else n.classes.delete(c);});return this;}
     removeClass(names){this.nodes.forEach(n=>names.split(' ').forEach(s=>n.classes.delete(s)));return this;}
-    on(event,fn){this.nodes.forEach(n=>n.events[event]=fn);return this;}
-    trigger(event){this.nodes.forEach(n=>{if(n.events[event])n.events[event]();});return this;}
+    on(events,fn){this.nodes.forEach(n=>events.split(/\s+/).forEach(k=>n.events[k]=fn));return this;}
+    off(namespace){this.nodes.forEach(n=>Object.keys(n.events).forEach(k=>{
+        if(k.endsWith(namespace))delete n.events[k];
+    }));return this;}
+    trigger(event){this.nodes.forEach(n=>Object.keys(n.events).forEach(k=>{
+        if(k===event||k.startsWith(event+'.'))n.events[k].call(n,{target:n,type:event});
+    }));return this;}
     append(item){this.nodes.forEach(n=>(item instanceof Q?item.nodes:[item]).forEach(x=>{
         if(x.parent)x.parent.children=x.parent.children.filter(a=>a!==x);
         n.children.push(x);x.parent=n;}));return this;}
@@ -124,6 +129,11 @@ assert.strictEqual(sourceHolder.children[0],nativeTorrent,
     'Unfold uses original plugin nodes rather than clones');
 $(nativeOnline).trigger('hover:enter');
 assert.equal(nativeOnline.clicked,1,'Original Online click handler survives unfolding');
+assert.strictEqual(nativeStart.last,nativeOnline,
+    'Existing action focus is remembered without a Controller.toggle');
+$(nativeTrailer).trigger('hover:focus');
+assert.strictEqual(nativeStart.last,nativeTrailer,
+    'TV remote navigation tracks focus for extracted native buttons');
 assert.equal(toggles,0,'Unfolding must not switch the TV controller');
 assert.equal(movieButton.style.order,'');
 assert.equal(torrentButton.style.order,'',
@@ -175,6 +185,8 @@ assert.strictEqual(nativeStart.last,playButton,
 assert.strictEqual(sourceHolder.parent,page,
     'Disabling layout restores the original hidden source container');
 assert.ok(sourceHolder.classes.has('hide'));
+assert.equal(Object.keys(nativeOnline.events).some(k=>k.endsWith('.qualityButtonsFocus')),false,
+    'Source focus handlers must be unbound when native folder is restored');
 assert.ok(!playButton.classes.has('quality-buttons-play-hidden'),
     'Disabling Quality restores native Play source picker');
 assert.ok(!movieButton.classes.has('quality-buttons-hidden'));
