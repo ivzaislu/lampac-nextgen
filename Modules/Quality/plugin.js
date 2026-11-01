@@ -482,7 +482,9 @@
                 persistent_entries: persisted ? Object.keys(persisted.entries).length : 0,
                 sql_cache: sqlReady(), sql_active_requests: sqlActive + sqlWriteActive,
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
-                batch_size: sqlBatchSize(), background_refresh: backgroundEnabled()};
+                batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
+                online_source_filter: onlineFilterEnabled(),
+                online_filter_hook: onlineBridgeInstalled};
         },
         refresh: function () { refreshKnown(true); }
     };
@@ -769,6 +771,147 @@
         }
     }
 
+    // Optional Online UX bridge. Lampa's Online and Online Prestige already
+    // expose balancers through the "sort" menu, whereas translations/seasons
+    // are in "filter". Reuse the native sort handler instead of changing the
+    // providers or emulating translation/season logic.
+    var currentOnlineFilter = null;
+    var onlineBridgeInstalled = false;
+    function onlineFilterEnabled() {
+        return setting('quality_module_online_source_filter', true) !== false
+            && String(setting('quality_module_online_source_filter', true)) !== 'false';
+    }
+    function updateOnlineFilter() {
+        if (currentOnlineFilter && currentOnlineFilter.refresh)
+            currentOnlineFilter.refresh();
+    }
+    function installOnlineFilter() {
+        if (typeof L.Filter !== 'function') return;
+        if (L.Filter.__qualityOnlineBridge) {
+            onlineBridgeInstalled = true;
+            return;
+        }
+        var NativeFilter = L.Filter;
+        function OnlineFilterBridge(params) {
+            var instance = new NativeFilter(params);
+            // Explicit scope: never alter torrent, search, catalogue or
+            // third-party filters whose sort items are unrelated to Online.
+            if (!params || (params.component !== 'online'
+                && params.component !== 'online_prestige')) return instance;
+            if (!instance || typeof instance.set !== 'function'
+                || typeof instance.chosen !== 'function') return instance;
+
+            var nativeSet = instance.set;
+            var nativeChosen = instance.chosen;
+            var filterItems = null, sortItems = [], chosenItems = null;
+            var nativeSelect = typeof instance.onSelect === 'function'
+                ? instance.onSelect : null;
+
+            function available() {
+                return onlineFilterEnabled() && sortItems.length > 1
+                    && sortItems.every(function (item) {
+                        return item && typeof item.source === 'string'
+                            && item.source.length > 0 && typeof item.title === 'string';
+                    });
+            }
+            function selectedSource() {
+                if (!sortItems.length) return null;
+                for (var i = 0; i < sortItems.length; i++)
+                    if (sortItems[i].selected) return sortItems[i];
+                var saved = setting('online_balanser', '');
+                for (var j = 0; j < sortItems.length; j++)
+                    if (sortItems[j].source === saved) return sortItems[j];
+                return sortItems[0];
+            }
+            function menuItems() {
+                var items = (filterItems || []).slice();
+                if (!available()) return items;
+                var selected = selectedSource();
+                var choices = sortItems.map(function (src) {
+                    return {title: src.title, source: src.source,
+                        selected: selected && src.source === selected.source};
+                });
+                var entry = {title: 'Источник / балансер',
+                    subtitle: selected ? selected.title : '',
+                    stype: 'quality_online_source', qualityOnlineSource: true,
+                    items: choices};
+                // Put the balancer beside translation/season, after Reset.
+                items.splice(items.length && items[0] && items[0].reset ? 1 : 0,
+                    0, entry);
+                return items;
+            }
+            function chosenWithSource(items) {
+                var list = Array.isArray(items) ? items.slice() : [];
+                if (available()) {
+                    var selected = selectedSource();
+                    if (selected) list.push('Источник: ' + selected.title);
+                }
+                return list;
+            }
+            function refresh() {
+                if (filterItems)
+                    nativeSet.call(instance, 'filter', menuItems());
+                if (chosenItems)
+                    nativeChosen.call(instance, 'filter', chosenWithSource(chosenItems));
+            }
+            instance.set = function (type, items) {
+                if (type === 'filter') {
+                    filterItems = Array.isArray(items) ? items.filter(function (item) {
+                        return !item || !item.qualityOnlineSource;
+                    }) : items;
+                    return nativeSet.call(this, type, menuItems());
+                }
+                var result = nativeSet.apply(this, arguments);
+                if (type === 'sort') {
+                    sortItems = Array.isArray(items) ? items.slice() : [];
+                    refresh();
+                }
+                return result;
+            };
+            instance.chosen = function (type, items) {
+                if (type === 'filter') {
+                    chosenItems = Array.isArray(items) ? items.slice() : [];
+                    return nativeChosen.call(this, type, chosenWithSource(chosenItems));
+                }
+                return nativeChosen.apply(this, arguments);
+            };
+            Object.defineProperty(instance, 'onSelect', {
+                configurable: true,
+                enumerable: true,
+                get: function () {
+                    return function (type, item, choice) {
+                        if (type === 'filter' && item && item.qualityOnlineSource) {
+                            if (!available() || !choice) return;
+                            var source = sortItems.filter(function (option) {
+                                return option.source === choice.source;
+                            })[0];
+                            if (!source || source.selected || !nativeSelect) return;
+                            // Lampa.Filter.show opens its submenu again after
+                            // onSelect; defer the native sort switch until then
+                            // so Online's own close/search/Activity.replace wins.
+                            setTimeout(function () {
+                                if (onlineFilterEnabled() && nativeSelect)
+                                    nativeSelect.call(instance, 'sort', source);
+                            }, 0);
+                            return;
+                        }
+                        if (nativeSelect)
+                            return nativeSelect.apply(instance, arguments);
+                    };
+                },
+                set: function (fn) {
+                    nativeSelect = typeof fn === 'function' ? fn : null;
+                }
+            });
+            currentOnlineFilter = {refresh: refresh};
+            return instance;
+        }
+        OnlineFilterBridge.prototype = NativeFilter.prototype;
+        OnlineFilterBridge.__qualityOnlineBridge = true;
+        L.Filter = OnlineFilterBridge;
+        onlineBridgeInstalled = true;
+    }
+
     function registerSettings() {
         if (!L.SettingsApi || !L.SettingsApi.addComponent || !L.SettingsApi.addParam) return;
         L.SettingsApi.addComponent({
@@ -792,6 +935,10 @@
             'Метки качества на постерах и в полной карточке', scan);
         add('quality_module_background', 'trigger', 'Обновлять в фоне', null, true,
             'При запущенной Lampa качество периодически проверяется повторно');
+        add('quality_module_online_source_filter', 'trigger',
+            'Источник в фильтре Онлайн', null, true,
+            'Показывать балансер рядом с озвучкой и сезонами в Онлайн',
+            updateOnlineFilter);
         add('quality_module_days_low', 'select', 'CAM / TS / TC', days, '1',
             'Интервал повторной проверки низкого качества');
         add('quality_module_days_hd', 'select', 'SD / HD / FHD', days, '5',
@@ -816,6 +963,7 @@
     }
 
     function start() {
+        installOnlineFilter();
         registerSettings();
         var style = document.createElement('style');
         style.textContent = '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
@@ -856,6 +1004,8 @@
                 if (/^(parser_torrent_type|parser_use_link|jackett_url|jackett_key|jackett_url_two|jackett_key_two|jackett_interview|quality_module_enabled)$/.test(event.name))
                     scan();
                 if (/^quality_module_days_/.test(event.name)) refreshKnown(false);
+                if (event.name === 'quality_module_online_source_filter')
+                    updateOnlineFilter();
             });
         }
         scan();
