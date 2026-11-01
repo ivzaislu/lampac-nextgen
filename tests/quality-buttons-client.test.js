@@ -31,7 +31,10 @@ class Q {
     not(selectors){const excluded=selectors.split(',').map(s=>s.trim());
         return new Q(this.nodes.filter(x=>!excluded.some(s=>matches(x,s))));}
     each(fn){this.nodes.forEach((n,i)=>fn.call(n,i,n));return this;}
-    attr(k,v){if(v===undefined)return this[0]?.attrs[k]||'';
+    attr(k,v){if(v===undefined){
+            if(k==='class')return this[0]?Array.from(this[0].classes).join(' '):'';
+            return this[0]?.attrs[k]||'';
+        }
         this.nodes.forEach(n=>n.attrs[k]=String(v));return this;}
     css(k,v){if(v===undefined)return this[0]?.style[k]||'';
         this.nodes.forEach(n=>n.style[k]=String(v));return this;}
