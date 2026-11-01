@@ -246,7 +246,8 @@ close();
 open();menu=latest();
 menu.onSelect(menu.items.find(x=>x.title==='Торренты'));
 actions=latest();actions.onSelect(actions.items.find(x=>x.action==='up'));
-assert.equal(nativeTorrent.style.order,'0');
+assert.equal(nativeTorrent.style.order,'1',
+    'Moving native Torrent up advances one position in the combined plugin/source catalog');
 assert.ok(nav.includes(nativeTorrent));
 close();
 $(nativeTorrent).trigger('hover:enter');assert.equal(nativeTorrent.clicks,1);
