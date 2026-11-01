@@ -670,6 +670,9 @@
     function resumeFull(event) {
         if (!event || event.type !== 'start' || event.component !== 'full'
             || !event.object || !event.object.activity) return;
+        // Only touch the activity that Lampa actually put on screen.
+        // A late/injected start signal from an older Full must not rewire it.
+        if (currentFull() !== event.object) return;
         var component = event.object.activity.component;
         if (!component || typeof component.render !== 'function') return;
         var rendered;
