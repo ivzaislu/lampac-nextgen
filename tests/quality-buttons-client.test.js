@@ -348,6 +348,8 @@ for(let i=0;i<4;i++){
         assert.equal(deferred.length,1);
         deferred.shift()();
         assert.ok(c.online.classes.has('selector'));
+        assert.strictEqual(c.start.last,c.online,
+            'Once the preferred Online source arrives, untouched fallback focus follows the saved visual first button');
         assert.strictEqual(c.holder.parent,c.line);
         assert.ok(!c.play.classes.has('selector'));
     }
