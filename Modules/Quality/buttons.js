@@ -86,7 +86,24 @@
         for (var i = 0; i < classes.length; i++)
             if (/^(?:view--|button--|lampac--|modss--|showy--|shots-)/.test(classes[i]))
                 names.push(classes[i]);
-        var key = names.join('.') || clean(button.find('span').first().text()).slice(0, 50);
+        // Unknown third-party icon buttons often have no <span> and no
+        // view--/button-- class. Previously all became "custom-button",
+        // so IDs (and their saved positions/folders) shifted whenever their
+        // count or injection order changed between titles.
+        var key = names.join('.');
+        if (!key) {
+            var attr = clean(button.attr('data-plugin-id')
+                || button.attr('data-id') || button.attr('data-name')
+                || button.attr('aria-label') || button.attr('data-title')
+                || button.attr('title'));
+            var specific = classes.filter(function (name) {
+                return name && !/^(?:selector|focus|hide|loading|active|disabled|selected|full-start__button)$/.test(name)
+                    && name.indexOf('quality-buttons-') !== 0;
+            }).sort();
+            if (attr) key = 'attr:' + attr.slice(0, 90);
+            else if (specific.length) key = 'class:' + specific.join('.').slice(0, 90);
+            else key = clean(button.find('span').first().text()).slice(0, 50);
+        }
         if (!key) key = 'custom-button';
         var id = 'b:' + key;
         var count = used[id] || 0;
