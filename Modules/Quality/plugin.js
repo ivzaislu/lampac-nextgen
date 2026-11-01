@@ -484,7 +484,8 @@
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
                 online_source_filter: onlineFilterEnabled(),
-                online_filter_revision: 2,
+                online_filter_revision: 3,
+                online_external_balancer: !!(L.Filter && L.Filter.__balancer_dual_patched),
                 online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
                 online_filters_detected: onlineFiltersDetected,
                 online_filter_sources: onlineFilterSources,
@@ -829,7 +830,9 @@
     }
     function installOnlineFilter() {
         if (typeof L.Filter !== 'function') return false;
-        if (L.Filter.__qualityOnlineBridge) {
+        if (L.Filter.__qualityOnlineBridge || L.Filter.__balancer_dual_patched) {
+            // The user's standalone dual-balancer plugin already implements
+            // an "Источник" shortcut. Do not wrap its onSelect a second time.
             onlineBridgeInstalled = true;
             return true;
         }
@@ -871,16 +874,16 @@
             }
             function menuItems() {
                 var items = (filterItems || []).slice();
+                // The external standalone plugin uses {bal:true}. Reuse its
+                // semantics and never duplicate that native-menu shortcut.
+                if (items.some(function (x) { return x && x.bal; }))
+                    return items;
                 if (!available()) return items;
                 var selected = selectedSource();
-                var choices = sortItems.map(function (src) {
-                    return {title: src.title, source: src.source,
-                        selected: !!selected && src.source === selected.source};
-                });
-                var entry = {title: 'Источник / балансер',
+                var entry = {title: 'Источник',
                     subtitle: selected ? selected.title : '',
-                    stype: 'quality_online_source', qualityOnlineSource: true,
-                    items: choices};
+                    bal: true, stype: 'quality_online_source',
+                    qualityOnlineSource: true};
                 items.splice(items.length && items[0] && items[0].reset ? 1 : 0,
                     0, entry);
                 return items;
@@ -929,28 +932,21 @@
                 get: function () {
                     return function (type, item, choice) {
                         if (type === 'filter' && item && item.qualityOnlineSource) {
-                            if (!available() || !choice || !nativeSelect) return;
-                            var source = sortItems.filter(function (option) {
-                                return option.source === choice.source;
-                            })[0];
-                            if (!source || source.selected) return;
-                            // Filter.show reopens the submenu after onSelect;
-                            // let it finish before invoking native Online sort.
-                            setTimeout(function () {
-                                if (!onlineFilterEnabled() || currentOnlineFilter !== bridge
-                                    || !nativeSelect) return;
-                                if (L.Activity && typeof L.Activity.active === 'function') {
-                                    var current = L.Activity.active();
-                                    var currentComponent = current
-                                        && String(current.component || '').toLowerCase();
-                                    if (!current || (currentComponent
-                                        && !/^online(?:$|[_-])/.test(currentComponent))) return;
-                                    if (params && params.movie && current.movie
-                                        && String(params.movie.id) !== String(current.movie.id))
-                                        return;
-                                }
-                                nativeSelect.call(instance, 'sort', source);
-                            }, 0);
+                            if (!available()) return;
+                            // Same contract as the independent bal:true
+                            // plugin: open Lampa's *existing* sort selector.
+                            // Do not synthesize provider switching or override
+                            // its voice/season preservation logic.
+                            var button = null;
+                            try {
+                                var view = instance.render && instance.render();
+                                if (view && typeof view.find === 'function')
+                                    button = view.find('.filter--sort');
+                            } catch (e) {}
+                            if ((!button || !button.length))
+                                button = nativeBalancerButton();
+                            if (button && button.length && typeof button.trigger === 'function')
+                                button.trigger('hover:enter');
                             return;
                         }
                         if (nativeSelect) return nativeSelect.apply(instance, arguments);
@@ -1047,11 +1043,14 @@
         onlineSelectMenus++;
         // Don't duplicate the source row when the original constructor bridge
         // successfully populated the Filter options already.
-        if (config.items.some(function (x) { return x && x.qualityOnlineSource; }))
+        if (config.items.some(function (x) {
+            return x && (x.qualityOnlineSource || x.bal);
+        }))
             return;
         var item = {
-            title: 'Источник / балансер',
-            subtitle: 'Выбрать источник',
+            title: 'Источник',
+            subtitle: 'Выбрать балансер',
+            bal: true,
             noselect: true,
             qualityOnlineSelectShortcut: true,
             onSelect: function () {
