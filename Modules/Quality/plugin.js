@@ -222,6 +222,9 @@
     root.__qualityPluginLoaded = true;
     root.__qualityPluginLoadError = null;
     var L = root.Lampa;
+    // Configured in Lampac's init.conf; absent flags mean legacy defaults.
+    var serverConfig = root.__qualityModuleOptions || {};
+    function serverAllows(name) { return serverConfig[name] !== false; }
     var cache = Object.create(null), pending = Object.create(null);
     var queue = [], backgroundQueue = [], sqlPending = [], sqlWrites = [];
     var active = 0, signature = '', generation = 0, sqlUnavailable = false;
@@ -251,11 +254,13 @@
         return isFinite(value) && value >= min && value <= max ? value : fallback;
     }
     function backgroundEnabled() {
-        return setting('quality_module_background', true) !== false
+        return serverAllows('collect') && serverAllows('background')
+            && setting('quality_module_background', true) !== false
             && String(setting('quality_module_background', true)) !== 'false';
     }
     function badgeEnabled() {
-        return setting('quality_module_enabled', true) !== false
+        return serverAllows('collect')
+            && setting('quality_module_enabled', true) !== false
             && String(setting('quality_module_enabled', true)) !== 'false';
     }
     function ttlDays(label, item) {
@@ -282,7 +287,8 @@
             + ('00000000' + (b >>> 0).toString(16)).slice(-8);
     }
     function initSqlScope() {
-        if (!sqlEndpoint || !L.Storage.get || !L.Storage.set
+        if (!serverAllows('collect') || !serverAllows('sqlcache')
+            || !sqlEndpoint || !L.Storage.get || !L.Storage.set
             || typeof root.fetch !== 'function') return;
         try {
             sqlScope = L.Storage.get('quality_module_sql_scope_v1') || '';
@@ -299,7 +305,8 @@
     }
     initSqlScope();
     function sqlReady() {
-        if (!sqlEndpoint || !sqlScope || typeof root.fetch !== 'function') return false;
+        if (!serverAllows('collect') || !serverAllows('sqlcache')
+            || !sqlEndpoint || !sqlScope || typeof root.fetch !== 'function') return false;
         if (sqlUnavailable && Date.now() >= sqlRetryAt) sqlUnavailable = false;
         return !sqlUnavailable;
     }
@@ -476,6 +483,11 @@
     root.LampaQuality = {
         status: function () {
             return {loaded: true, parser_type: String(L.Storage.field('parser_torrent_type') || ''),
+                server_collect: serverAllows('collect'),
+                server_background: serverAllows('background'),
+                server_onlinefilter: serverAllows('onlinefilter'),
+                server_buttons: serverAllows('buttons'),
+                server_sqlcache: serverAllows('sqlcache'),
                 configured: configured(), active_requests: active,
                 queued_requests: queue.length + backgroundQueue.length + sqlPending.length,
                 cache_entries: Object.keys(cache).length,
@@ -483,7 +495,8 @@
                 sql_cache: sqlReady(), sql_active_requests: sqlActive + sqlWriteActive,
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
-                online_source_filter: root.LampaQualityOnline ? root.LampaQualityOnline.enabled() : true,
+                online_source_filter: serverAllows('onlinefilter')
+                    && (root.LampaQualityOnline ? root.LampaQualityOnline.enabled() : true),
                 online_filter_revision: root.LampaQualityOnline ? root.LampaQualityOnline.revision : 6,
                 online_external_balancer: !!(L.Filter && L.Filter.__balancer_dual_patched),
                 online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
@@ -790,6 +803,8 @@
 
     function registerSettings() {
         if (!L.SettingsApi || !L.SettingsApi.addComponent || !L.SettingsApi.addParam) return;
+        if (!serverAllows('collect') && !serverAllows('onlinefilter')
+            && !serverAllows('buttons')) return;
         L.SettingsApi.addComponent({
             component: 'quality',
             name: 'Quality — качество',
@@ -807,16 +822,12 @@
         var days = {'1': '1 день', '2': '2 дня', '3': '3 дня', '5': '5 дней',
             '7': '7 дней', '10': '10 дней', '14': '14 дней', '21': '21 день',
             '30': '30 дней', '45': '45 дней', '60': '60 дней'};
-        add('quality_module_enabled', 'trigger', 'Показывать бейджи', null, true,
-            'Метки качества на постерах и в полной карточке', scan);
-        add('quality_buttons_pencil', 'trigger', 'Показывать карандаш', null, false,
-            'Показывать или скрывать карандаш для настройки кнопок на полной карточке',
-            function () {
-                if (root.LampaQualityButtons && root.LampaQualityButtons.refresh)
-                    root.LampaQualityButtons.refresh();
-            });
-        add('quality_module_background', 'trigger', 'Обновлять в фоне', null, true,
-            'При запущенной Lampa качество периодически проверяется повторно');
+        if (serverAllows('collect')) {
+            add('quality_module_enabled', 'trigger', 'Показывать бейджи', null, true,
+                'Метки качества на постерах и в полной карточке', scan);
+            if (serverAllows('background'))
+                add('quality_module_background', 'trigger', 'Обновлять в фоне', null, true,
+                    'При запущенной Lampa качество периодически проверяется повторно');
         add('quality_module_days_low', 'select', 'CAM / TS / TC', days, '1',
             'Интервал повторной проверки низкого качества');
         add('quality_module_days_hd', 'select', 'SD / HD / FHD', days, '5',
@@ -838,10 +849,21 @@
             'Повторно проверить последние фильмы в фоне', function () {
                 refreshKnown(true);
             });
+        }
+        if (serverAllows('buttons'))
+            add('quality_buttons_pencil', 'trigger', 'Показывать карандаш', null, false,
+                'Показывать или скрывать карандаш для настройки кнопок на полной карточке',
+                function () {
+                    if (root.LampaQualityButtons && root.LampaQualityButtons.refresh)
+                        root.LampaQualityButtons.refresh();
+                });
     }
 
     function start() {
         registerSettings();
+        // The collector can be turned off in init.conf while Online and
+        // the user's button layout remain fully operational.
+        if (!serverAllows('collect')) return;
         var style = document.createElement('style');
         style.textContent = '.card__view.quality-module-replaces-native .card__quality:not(.quality-module-badge){display:none!important;}'
             + '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
@@ -888,6 +910,7 @@
         }
         scan();
         // Background work is deliberately throttled and runs only in an open Lampa.
+        if (serverAllows('background')) {
         var backgroundTimer = setInterval(function () {
             var minutes = numberSetting('quality_module_refresh_minutes', 15, 5, 60);
             if (Date.now() - (start.lastBackground || 0) < minutes * 60000) return;
@@ -895,6 +918,7 @@
             refreshKnown(false);
         }, 60000);
         if (backgroundTimer && typeof backgroundTimer.unref === 'function') backgroundTimer.unref();
+        }
     }
     if (document.body) start();
     else document.addEventListener('DOMContentLoaded', start);
