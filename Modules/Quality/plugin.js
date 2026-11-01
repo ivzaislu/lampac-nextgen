@@ -453,7 +453,7 @@
         }
         dropPending(job, success ? label : null);
         if (success && fromSql && recordDue(saved, job.item))
-            enqueueBackground(job.item);
+            enqueueRecheck(job.item, true);
     }
     function resetSource(current) {
         if (current === signature) return;
