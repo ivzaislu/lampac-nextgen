@@ -206,17 +206,16 @@
             var options = members.map(function (id) {
                 return {title: (findCatalog(id) || {}).title || id, id: id};
             });
-            if (!L.Select || typeof L.Select.show !== 'function') return;
-            L.Select.show({title: folder.title, items: options, onSelect: function (item) {
+            // Native Lampa.Select hides before calling onSelect.
+            // Do not close that hidden Select twice or strand its controller.
+            select(folder.title, options, function (item) {
                 if (!isCurrent(captured)) return;
                 var selected = findCatalog(item && item.id);
                 if (!selected || !selected.node || !selected.node.length) return;
-                // Select owns its focus; never force Controller.toggle on an unrelated screen.
-                if (L.Select.close) L.Select.close();
                 setTimeout(function () {
                     if (isCurrent(captured)) selected.node.trigger('hover:enter');
                 }, 0);
-            }});
+            });
         });
         line.append(node);
         folderNodes.push(node);
