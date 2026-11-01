@@ -839,16 +839,25 @@
 
     function registerSettings() {
         if (!L.SettingsApi || !L.SettingsApi.addComponent || !L.SettingsApi.addParam) return;
-        if (!serverAllows('collect') && !serverAllows('onlinefilter')
-            && !serverAllows('buttons')) return;
-        L.SettingsApi.addComponent({
-            component: 'quality',
-            name: 'Quality — качество',
-            after: 'parser',
-            icon: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 17h18M5 14l4-4 3 3 6-7"/><circle cx="18" cy="6" r="2"/></svg>'
-        });
-        function add(name, type, label, choices, fallback, description, handler) {
-            var options = {component: 'quality',
+        var hasQuality = serverAllows('collect');
+        var hasOther = serverAllows('onlinefilter') || serverAllows('buttons');
+        if (!hasQuality && !hasOther) return;
+        if (hasQuality)
+            L.SettingsApi.addComponent({
+                component: 'quality',
+                name: 'Quality — качество',
+                after: 'parser',
+                icon: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M3 17h18M5 14l4-4 3 3 6-7"/><circle cx="18" cy="6" r="2"/></svg>'
+            });
+        if (hasOther)
+            L.SettingsApi.addComponent({
+                component: 'quality_other',
+                name: 'Quality — другое',
+                after: hasQuality ? 'quality' : 'parser',
+                icon: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M18.4 5.6l-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="4"/></svg>'
+            });
+        function add(name, type, label, choices, fallback, description, handler, section) {
+            var options = {component: section || 'quality',
                 param: {name: name, type: type, default: fallback},
                 field: {name: label, description: description || ''}};
             if (choices) options.param.values = choices;
@@ -898,7 +907,7 @@
                 function () {
                     if (root.LampaQualityButtons && root.LampaQualityButtons.refresh)
                         root.LampaQualityButtons.refresh();
-                });
+                }, 'quality_other');
     }
 
     function start() {
