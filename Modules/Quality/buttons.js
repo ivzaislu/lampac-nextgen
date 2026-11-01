@@ -370,7 +370,7 @@
         // before DOM changes to prevent observer feedback loops.
         var holder = owner.find('.buttons--container')[0];
         if (holder) observer.observe(holder, {
-            childList:true, subtree:false, attributes:true,
+            childList:true, subtree:true, attributes:true,
             attributeFilter:['class']
         });
     }
@@ -411,6 +411,8 @@
             + '.full-start-new__buttons.quality-buttons-ungrouped{flex-wrap:wrap;}'
             + '.full-start-new__buttons .buttons--container.quality-buttons-native-sources{display:flex!important;'
             + 'flex-wrap:wrap;align-items:center;}'
+            + '@supports (display:contents){'
+            + '.full-start-new__buttons .buttons--container.quality-buttons-native-sources{display:contents!important;}}'
             + '.full-start-new__buttons.quality-buttons-ungrouped>.button--play.quality-buttons-play-hidden{display:none!important;}'
             + '.quality-buttons-mode-minimal>span{display:none!important;}'
             + '.quality-buttons-mode-full>span{display:inline!important;}'
