@@ -186,8 +186,8 @@ function boot(count, storage, behavior) {
     assert.equal(retry.parserCalls(),1,'Recovered SQLite avoids another JacRed query');
     assert.equal(retry.status().sql_cache,true);
 
-    // Many stale SQL entries remain visible; only three background searches
-    // may be admitted each minute, with two parser calls in flight.
+    // Many visible stale SQL entries should retain their badges and revalidate
+    // on visit, without the opt-in periodic collector's 3/minute throttle.
     clockShift=0;
     const stale=boot(100,new Map(),{delay:35,stale:true,holdParser:true});
     for (let attempt=0;attempt<20;attempt++) {
@@ -204,24 +204,28 @@ function boot(count, storage, behavior) {
         status:stale.status()
     }));
     assert.equal(stale.parserCalls(),2);
-    assert.equal(stale.status().queued_requests,1);
+    assert.equal(stale.status().queued_requests,98,
+        'All 100 visited stale cards are queued for priority rechecks');
     assert.equal(stale.pendingParsers.length,2);
     assert.ok(stale.peakSql()<=2);
     clockShift=61000;
     stale.periodic.find(x=>x.interval===60000).fn();
-    assert.equal(stale.parserCalls(),2,'Additional background work waits for slots');
-    assert.ok(stale.status().queued_requests>=1);
+    assert.equal(stale.parserCalls(),2,'Default-off periodic sweep does not add extra work');
+    assert.equal(stale.status().background_refresh,false);
+    assert.ok(stale.status().queued_requests>=98);
     stale.pendingParsers[0].done({Results:[{Title:'Film 1000 2025 2160p'}]});
     assert.equal(stale.parserCalls(),3);
     assert.equal(stale.cards[0].badges[0].textContent,'4K');
     assert.ok(stale.cards.slice(1).every(c=>c.badges[0].textContent==='CAM'));
-    // Drain all mocked in-flight parser callbacks: leaving them pending would
-    // keep the real 35-second request timers alive and slow the CI run.
+    // Drain all 100 visit jobs (new parser callbacks are appended as slots free).
+    // Do not leave 35-second mock timeouts running after assertions.
     for (let i=1; i<stale.pendingParsers.length; i++) {
         const request=stale.pendingParsers[i].request;
         stale.pendingParsers[i].done({Results:[
             {Title:request.movie.title+' 2025 WEB-DL 2160p'}
         ]});
     }
-    console.log('Quality stress: 150 warm/cold cards, bounded SQL read/write, restart, retry and background refresh OK');
+    assert.equal(stale.parserCalls(),100,
+        'All observed stale cards are checked without blocking on periodic refresh');
+    console.log('Quality stress: 150 warm/cold cards, bounded SQL, restart, retry and on-visit refresh OK');
 })().catch(e=>{console.error(e); process.exitCode=1;});
