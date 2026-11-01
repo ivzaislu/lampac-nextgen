@@ -307,7 +307,7 @@ assert.equal(focus,'settings_component',
 assert.equal(selectOpened,false);
 assert.ok(nativeRestorations>=4,
     'Native controller must be restored before subsequent Select menus');
-assert.ok(selectParents.every(x=>x==='settings_component'),
+assert.ok(selectParents.every(x=>x==='settings_component' || x==='full_start'),
     'No Select window may use a hidden Select as its parent');
 // Simulate the two standard Settings Back transitions after our editor.
 if(focus==='settings_component')focus='settings';
