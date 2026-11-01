@@ -810,12 +810,12 @@
             ? params.component.toLowerCase() : '';
         // Never modify another named activity even if it happens to expose
         // fields called "source", "voice" or "season".
-        if (declared && !/^(?:lampac|online(?:$|[_-]))/.test(declared)) return '';
+        if (declared && !/^(?:lampac$|online(?:$|[_-]))/.test(declared)) return '';
         if (declared) return declared;
         var current = L.Activity && typeof L.Activity.active === 'function'
             ? L.Activity.active() : null;
         var activity = current && String(current.component || '').toLowerCase();
-        if (activity && /^(?:lampac|online(?:$|[_-]))/.test(activity)) return activity;
+        if (activity && /^(?:lampac$|online(?:$|[_-]))/.test(activity)) return activity;
         // Stock Lampa balancers are enough evidence when some forks omit the
         // component name on the Filter's params object.
         var recognized = {videocdn: true, rezka: true, kinobase: true,
