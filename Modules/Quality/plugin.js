@@ -484,7 +484,7 @@
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
                 online_source_filter: onlineFilterEnabled(),
-                online_filter_revision: 5,
+                online_filter_revision: 6,
                 online_external_balancer: !!(L.Filter && L.Filter.__balancer_dual_patched),
                 online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
                 online_filters_detected: onlineFiltersDetected,
@@ -853,12 +853,14 @@
                 || typeof instance.chosen !== 'function') return instance;
             var nativeSet = instance.set;
             var nativeChosen = instance.chosen;
+            var nativeDestroy = instance.destroy;
             var filterItems = null, sortItems = [], chosenItems = null;
-            var scope = '', active = false;
+            var scope = '', active = false, destroyed = false;
             var nativeSelect = typeof instance.onSelect === 'function'
                 ? instance.onSelect : null;
             var bridge = {refresh: refresh, scope: ''};
             function eligible() {
+                if (destroyed) return false;
                 if (!scope && filterItems && sortItems.length)
                     scope = onlineFilterScope(params, filterItems, sortItems);
                 if (!scope) return false;
@@ -907,11 +909,16 @@
                 return list;
             }
             function refresh() {
+                // Lampa.Filter.destroy() clears its internal data object.
+                // Settings may be toggled after navigating away; never call
+                // native set/chosen on a filter that has already been destroyed.
+                if (destroyed) return;
                 if (filterItems) nativeSet.call(instance, 'filter', menuItems());
                 if (chosenItems)
                     nativeChosen.call(instance, 'filter', chosenWithSource(chosenItems));
             }
             instance.set = function (type, items) {
+                if (destroyed) return;
                 if (type === 'filter') {
                     filterItems = Array.isArray(items) ? items.filter(function (item) {
                         return !item || !item.qualityOnlineSource;
@@ -930,19 +937,30 @@
                 return result;
             };
             instance.chosen = function (type, items) {
+                if (destroyed) return;
                 if (type === 'filter') {
                     chosenItems = Array.isArray(items) ? items.slice() : [];
                     return nativeChosen.call(this, type, chosenWithSource(chosenItems));
                 }
                 return nativeChosen.apply(this, arguments);
             };
+            if (typeof nativeDestroy === 'function') {
+                instance.destroy = function () {
+                    destroyed = true;
+                    if (currentOnlineFilter === bridge) currentOnlineFilter = null;
+                    filterItems = null;
+                    chosenItems = null;
+                    sortItems = [];
+                    return nativeDestroy.apply(this, arguments);
+                };
+            }
             Object.defineProperty(instance, 'onSelect', {
                 configurable: true,
                 enumerable: true,
                 get: function () {
                     return function (type, item, choice) {
                         if (type === 'filter' && item && item.qualityOnlineSource) {
-                            if (currentOnlineFilter !== bridge || !available()) return;
+                            if (destroyed || currentOnlineFilter !== bridge || !available()) return;
                             if (L.Activity && typeof L.Activity.active === 'function') {
                                 var activePage = L.Activity.active();
                                 if (!activePage || (activePage.component
