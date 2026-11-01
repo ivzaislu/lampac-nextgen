@@ -368,7 +368,7 @@
         installOnlineSelectShortcut();
         if (L.SettingsApi && L.SettingsApi.addParam) {
             L.SettingsApi.addParam({
-                component: 'quality',
+                component: 'quality_other',
                 param: {name:'quality_module_online_source_filter',type:'trigger',default:true},
                 field: {name:'Источник в фильтре Онлайн',
                     description:'Показывать балансер рядом с озвучкой и сезонами в Онлайн'},
