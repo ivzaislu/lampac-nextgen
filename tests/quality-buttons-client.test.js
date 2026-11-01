@@ -549,7 +549,7 @@ const beforeRaceOrder = activeA.torrent.style.order;
 const delayedPlay = button('full-start__button selector button--play','Смотреть');
 const delayedBook = button('full-start__button selector button--book','Избранное');
 const delayedTorrent = button('full-start__button view--torrent','Торренты');
-const delayedOnline = button('full-start__button selector view--online lampac--button','Онлайн');
+const delayedOnline = button('full-start__button selector lampac--button','Онлайн');
 const delayedHolder = node('buttons--container hide',[delayedTorrent,delayedOnline]);
 const delayedLine = node('full-start-new__buttons',[delayedPlay,delayedBook]);
 const delayedPage = node('full-page',[delayedLine,delayedHolder]);
@@ -588,8 +588,11 @@ events.activity({component:'full',type:'start',object:delayedActivity});
 assert.strictEqual(delayedHolder.parent,delayedLine,
     'Deferred Full B gets layout on its actual activation');
 assert.ok(!delayedPlay.classes.has('selector'));
-assert.equal(delayedOnline.style.order,'0');
-assert.strictEqual(delayedStart.last,delayedOnline);
+assert.equal(delayedOnline.style.order,
+    String(movieSaved.order.indexOf('b:lampac--button')),
+    'Deferred Full uses the saved position of the same Lampac button');
+assert.strictEqual(delayedStart.last,delayedOnline,
+    'First activation focuses the first available visible action');
 assert.equal(win.LampaQualityButtons.status().profile,'movie');
 assert.strictEqual(storage.get('quality_module_buttons_v2_tv'),tvSaved);
 assert.strictEqual(storage.get('quality_module_buttons_v2_movie'),movieSaved);
