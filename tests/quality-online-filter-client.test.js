@@ -160,6 +160,8 @@ function menu(component) {
     const setting=params.filter(x=>x.param.name==='quality_module_online_source_filter');
     assert.equal(setting.length,1);
     assert.equal(setting[0].param.default,true);
+    assert.equal(setting[0].component,'quality_other',
+        'Online source filter must appear in Quality — другое');
 
     // Real incident: after leaving Online, its Filter.destroy() clears data.
     // Changing the Quality option in Settings must not call nativeSet on it.
@@ -316,6 +318,9 @@ function menu(component) {
     assert.equal(independentWindow.LampaQuality.status().online_external_balancer,true);
     assert.equal(externalSettings.filter(p =>
         p.param.name==='quality_module_online_source_filter').length,1);
+    assert.equal(externalSettings.find(p =>
+        p.param.name==='quality_module_online_source_filter').component,'quality_other',
+        'Standalone balancer compatibility must keep the filter in Other');
 
     console.log('Quality online: native source, component-less forks, late installation, toggle and isolation OK');
 })().catch(err=>{console.error(err);process.exitCode=1;});
