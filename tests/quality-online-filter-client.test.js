@@ -62,7 +62,7 @@ vm.runInNewContext(script, {window:win,document,MutationObserver:Mutation,
     console
 }, {filename:'quality-online-filter.js'});
 assert.equal(win.LampaQuality.status().online_source_filter,true);
-assert.equal(win.LampaQuality.status().online_filter_revision,3);
+assert.equal(win.LampaQuality.status().online_filter_revision,4);
 assert.equal(win.LampaQuality.status().online_filter_hook,true);
 assert.notEqual(L.Filter,FakeFilter,'Bridge must be installed once');
 
