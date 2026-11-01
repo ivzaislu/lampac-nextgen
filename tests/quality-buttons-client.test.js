@@ -95,16 +95,41 @@ const page=node('full-page',[line,sourceHolder]);
 // of Full.complite is the nested Full component root, not that slide.
 const slide=node('activity-slide',[page]);
 const nativeStart={last:playButton}, fullComponent={items:[nativeStart]};
-const storage=new Map(),events={},params=[],selected=[];
+const storage=new Map(),events={},params=[],selected=[],selectParents=[];
 let active={component:'full',activity:{component:fullComponent,render(){return $(slide);}}},
-    focus='full_start',toggles=0;
+    focus='full_start',badToggles=0,nativeRestorations=0,selectOpened=false;
 const L={Storage:{get(k,def){return storage.has(k)?storage.get(k):def;},set(k,v){storage.set(k,v);},
     listener:{follow(n,fn){events['storage:'+n]=fn;}}},
     Listener:{follow(n,fn){events[n]=fn;}},
     Activity:{active(){return active;}},
-    Controller:{enabled(){return {name:focus};},toggle(){toggles++;throw Error('Navigation hijacked');}},
+    Controller:{
+        enabled(){return {name:focus};},
+        toggle(name){
+            if(name!=='settings_component' && name!=='full_start'){
+                badToggles++;
+                throw Error('Unexpected controller hijack: '+name);
+            }
+            nativeRestorations++;
+            focus=name;
+        }
+    },
     SettingsApi:{addComponent(){},addParam(x){params.push(x);}},
-    Select:{show(x){selected.push(x);},close(){}},
+    Select:{
+        show(x){
+            if(selectOpened)throw Error('Unexpected nested Select window');
+            if(focus==='select')throw Error('Orphaned Select controller became parent');
+            selectParents.push(focus);
+            selected.push(Object.assign({},x,{
+                // Native Select.bind() calls hide() BEFORE onSelect,
+                // but the controller remains "select".
+                onSelect(item){selectOpened=false;if(x.onSelect)x.onSelect(item);},
+                onBack(){selectOpened=false;if(x.onBack)x.onBack();}
+            }));
+            selectOpened=true;
+            focus='select';
+        },
+        opened(){return selectOpened;}
+    },
     Input:{edit(x,cb){cb('Избранное');}},
     Noty:{show(){}}
 };
@@ -122,6 +147,15 @@ vm.runInNewContext(script,{window,document,console,
         return setTimeout(fn,ms);
     },clearTimeout,MutationObserver:Mutation});
 const setting=(name)=>params.find(x=>x.param.name===name);
+function openFromSettings(){
+    // Real settings cannot click the button again while its Select is open.
+    if(selectOpened)selected[selected.length-1].onBack();
+    focus='settings_component';
+    setting('quality_buttons_open').onChange();
+    assert.equal(focus,'select');
+    assert.equal(selectParents[selectParents.length-1],'settings_component',
+        'The editor must open from native Settings, not a stale Select');
+}
 assert.equal(window.LampaQualityButtons.status().loaded,true);
 assert.ok(setting('quality_buttons_open'));
 assert.ok(setting('quality_buttons_pencil'));
@@ -148,7 +182,7 @@ assert.strictEqual(nativeStart.last,nativeOnline,
 $(nativeTrailer).trigger('hover:focus');
 assert.strictEqual(nativeStart.last,nativeTrailer,
     'TV remote navigation tracks focus for extracted native buttons');
-assert.equal(toggles,0,'Unfolding must not switch the TV controller');
+assert.equal(badToggles,0,'Unfolding must not switch the TV controller');
 const lateSource=nativeSource('view--added-plugin','Доп. источник');
 sourceHolder.children.push(lateSource);lateSource.parent=sourceHolder;
 const thirdParty=node('selector foreign-button',[]);
@@ -166,7 +200,7 @@ assert.equal(lateSource.clicked,1,'Late plugin handler must remain bound');
 assert.strictEqual(nativeStart.last,lateSource);
 assert.ok(thirdParty.attrs['data-quality-buttons-id'],
     'Plugin-only .selector button must be discovered even without .full-start__button');
-setting('quality_buttons_open').onChange();
+openFromSettings();
 assert.ok(selected[selected.length-1].items.some(item=>item.title==='Сторонний плагин'),
     'Editor reflects buttons from other plugins added after full:complite');
 $(thirdParty).trigger('hover:enter');
@@ -181,7 +215,7 @@ assert.equal(playButton.attrs['data-quality-buttons-id'],undefined,
     'Protected native Play button cannot be reordered or hidden');
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,0,
     'Pencil should not take remote focus by default');
-setting('quality_buttons_open').onChange();
+openFromSettings();
 let editor=selected[selected.length-1];
 assert.equal(editor.title,'Настройка кнопок');
 editor.onSelect(editor.items[0]);
@@ -189,9 +223,9 @@ let actions=selected[selected.length-1];
 actions.onSelect(actions.items.find(x=>x.action==='visibility'));
 assert.ok(movieButton.classes.has('quality-buttons-hidden'),
     'Only selected button should become hidden');
-assert.equal(toggles,0,'No global Controller.toggle during editing');
+assert.equal(badToggles,0,'No global Controller.toggle during editing');
 // Order is stored without detaching existing plugin button nodes.
-setting('quality_buttons_open').onChange();
+openFromSettings();
 editor=selected[selected.length-1];
 editor.onSelect(editor.items[1]);
 actions=selected[selected.length-1];
@@ -199,11 +233,11 @@ actions.onSelect(actions.items.find(x=>x.action==='up'));
 assert.equal(torrentButton.style.order,'0');
 assert.equal(movieButton.style.order,'1');
 // Folder management is separate from the native buttons' click handlers.
-setting('quality_buttons_open').onChange();
+openFromSettings();
 editor=selected[selected.length-1];
 editor.onSelect(editor.items.find(x=>x.action==='newFolder'));
 assert.equal(window.LampaQualityButtons.status().folders,1);
-setting('quality_buttons_open').onChange();
+openFromSettings();
 editor=selected[selected.length-1];
 editor.onSelect(editor.items.find(x=>x.id===editor.items[1].id));
 actions=selected[selected.length-1];
@@ -238,9 +272,21 @@ assert.ok(movieButton.classes.has('quality-buttons-hidden'));
 active={component:'lampac',activity:{render(){return $(node('other',[]));}}};
 focus='online';
 window.LampaQualityButtons.refresh();
-assert.equal(toggles,0,'Stale full-card work cannot steal Online remote focus');
-setting('quality_buttons_open').onChange();
+assert.equal(badToggles,0,'Stale full-card work cannot steal Online remote focus');
+openFromSettings();
 assert.equal(selected[selected.length-1].title,'Настройка кнопок',
     'Settings editor still works when Online is active');
 assert.equal(toggles,0);
-console.log('Quality Buttons: settings, visibility, optional pencil and remote focus isolation OK');
+selected[selected.length-1].onBack();
+assert.equal(focus,'settings_component',
+    'Back from editor returns focus to native Settings component');
+assert.equal(selectOpened,false);
+assert.ok(nativeRestorations>=4,
+    'Native controller must be restored before subsequent Select menus');
+assert.ok(selectParents.every(x=>x==='settings_component'),
+    'No Select window may use a hidden Select as its parent');
+// Simulate the two standard Settings Back transitions after our editor.
+if(focus==='settings_component')focus='settings';
+if(focus==='settings')focus='head';
+assert.equal(focus,'head','Settings must be escapable after editing buttons');
+console.log('Quality Buttons: native Select/Settings back, order, folders and remote focus OK');
