@@ -311,7 +311,12 @@ function anotherCard(kind, options={}){
     if(options.noTorrent)nextTorrent.classes.add('hide');
     if(options.lateOnline)nextOnline.classes.add('hide');
     const nextHolder=node('buttons--container hide',[nextTorrent,nextOnline,nextTrailer]);
-    const nextLine=node('full-start-new__buttons',[nextPlay,nextBook]);
+    const thirdA=node('selector third-party-a');
+    thirdA.attrs['aria-label']='Дополнение А';
+    const thirdB=node('selector third-party-b');
+    thirdB.attrs['aria-label']='Дополнение Б';
+    const extras=options.reversePlugins ? [thirdB,thirdA] : [thirdA,thirdB];
+    const nextLine=node('full-start-new__buttons',[nextPlay,nextBook].concat(extras));
     const nextPage=node('full-page',[nextLine,nextHolder]);
     const nextSlide=node('activity-slide',[nextPage]);
     const nextStart={last:nextBook}; // model Lampa preferring Bookmarks
@@ -327,12 +332,20 @@ function anotherCard(kind, options={}){
             :{title:'Фильм',release_date:'2025-03-20'}}});
     L.Controller.toggle('full_start');
     return {play:nextPlay,book:nextBook,torrent:nextTorrent,online:nextOnline,
-        trailer:nextTrailer,holder:nextHolder,line:nextLine,page:nextPage,start:nextStart};
+        trailer:nextTrailer,thirdA,thirdB,holder:nextHolder,line:nextLine,
+        page:nextPage,start:nextStart};
 }
 const movieSaved=storage.get('quality_module_buttons_v2_movie');
 assert.ok(movieSaved,'Movie layout must persist in its own key');
 for(let i=0;i<4;i++){
-    const c=anotherCard('movie',{noTorrent:i%2===1,lateOnline:i===2});
+    const c=anotherCard('movie',{
+        noTorrent:i%2===1,lateOnline:i===2,reversePlugins:i%2===1
+    });
+    assert.equal(c.thirdA.attrs['data-quality-buttons-id'],'b:attr:Дополнение А');
+    assert.equal(c.thirdB.attrs['data-quality-buttons-id'],'b:attr:Дополнение Б');
+    assert.notEqual(c.thirdA.attrs['data-quality-buttons-id'],
+        c.thirdB.attrs['data-quality-buttons-id'],
+        'Plugin button identity stays stable even when asynchronous insertion order swaps');
     assert.strictEqual(c.holder.parent,c.line,
         'Native source holder stays ungrouped on every movie, including while sources load');
     assert.ok(!c.play.classes.has('selector'),
