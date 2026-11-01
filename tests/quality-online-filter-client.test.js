@@ -206,6 +206,22 @@ function menu(component) {
     first.filter.onSelect('filter',olderEntry);
     assert.equal(first.calls.length,0,'A replaced filter cannot switch the new filter');
     assert.equal(nativeMenuOpens,2,'Stale filters must not open the native sort menu');
+    // External standalone bal:true plugin already supplies the row.
+    // Quality must not create duplicates if it appears in filter.set().
+    const externalFilter = new L.Filter({component:'online',movie:{id:77}});
+    const externalRow = {title:'Источник',bal:true,subtitle:'Rezka'};
+    externalFilter.set('filter',[
+        {title:'Сброс',reset:true},externalRow,
+        {title:'Озвучка',stype:'voice',items:[]}
+    ]);
+    externalFilter.set('sort',[
+        {title:'Filmix',source:'filmix',selected:false},
+        {title:'Rezka',source:'rezka',selected:true}
+    ]);
+    assert.equal(externalFilter.get('filter').filter(x=>x.bal).length,1,
+        'External bal:true row must not be duplicated');
+    assert.strictEqual(externalFilter.get('filter')[1],externalRow);
+
 
     // Existing instance remains idempotent when script is injected twice.
     vm.runInNewContext(script,{window:win,document,MutationObserver:Mutation,

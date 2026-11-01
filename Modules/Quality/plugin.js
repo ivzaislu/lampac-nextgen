@@ -932,7 +932,7 @@
                 get: function () {
                     return function (type, item, choice) {
                         if (type === 'filter' && item && item.qualityOnlineSource) {
-                            if (!available() || currentOnlineFilter !== bridge) return;
+                            if (currentOnlineFilter !== bridge || !available()) return;
                             if (L.Activity && typeof L.Activity.active === 'function') {
                                 var activePage = L.Activity.active();
                                 if (!activePage || (activePage.component
