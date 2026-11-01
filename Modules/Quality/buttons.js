@@ -14,6 +14,7 @@
     var observer = null, scheduled = false;
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
     var originalSelectors = typeof WeakMap === 'function' ? new WeakMap() : null;
+    var nativeGroupHooks = typeof WeakSet === 'function' ? new WeakSet() : null;
     var knownNodes = typeof WeakMap === 'function' ? new WeakMap() : null;
     var $ = root.jQuery || root.$;
     function getOption(name, fallback) {
@@ -633,6 +634,33 @@
             attributeFilter:['class']
         });
     }
+    // Lampa Start.toggle() emits "groupButtons" BEFORE collecting .selector
+    // and applying remote focus. Native Buttons.onGroupButtons resets Play's
+    // visibility there. Reapply saved layout AFTER that native handler, using
+    // Start.use(), which is the upstream extension mechanism. This works on
+    // initial Full build, cached Back, and subsequent Start toggles; it does
+    // not depend on a second full:complite event.
+    function hookNativeGrouping(component) {
+        if (!component || !component.items || !component.items.length) return;
+        var start = component.items[0];
+        if (!start || typeof start.use !== 'function') return;
+        if (nativeGroupHooks && nativeGroupHooks.has(start)) return;
+        if (nativeGroupHooks) nativeGroupHooks.add(start);
+        start.use({
+            onGroupButtons: function () {
+                // Called synchronously inside Start.toggle(). Never toggle a
+                // controller here; Lampa itself rebuilds the collection after
+                // groupButtons, so recursion would otherwise be possible.
+                if (!owner || ownerComponent !== component || !isCurrent(owner)) return;
+                if (observer) observer.disconnect();
+                try {
+                    apply(owner);
+                    rememberNativeSourceFocus();
+                } catch (e) { /* third-party view may be in transition */ }
+                observeButtons();
+            }
+        });
+    }
     function bindFull(event) {
         if (!event || event.type !== 'complite' || !event.body) return;
         var node = $(event.body[0] || event.body);
@@ -643,6 +671,7 @@
         ownerComponent = event.link || null;
         ownerStart = event.link && event.link.items && event.link.items[0] || null;
         profile = profileFromFull(event);
+        hookNativeGrouping(ownerComponent);
         apply(node);
         rememberNativeSourceFocus();
         // Lampa's native full-start controller has not yet been toggled when
@@ -675,6 +704,7 @@
         if (currentFull() !== event.object) return;
         var component = event.object.activity.component;
         if (!component || typeof component.render !== 'function') return;
+        hookNativeGrouping(component);
         var rendered;
         try { rendered = component.render(); } catch (e) { return; }
         var node = $(rendered && (rendered[0] || rendered));
