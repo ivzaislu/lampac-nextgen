@@ -7,6 +7,7 @@
     var storageKey = 'quality_module_buttons_v1';
     var owner = null, catalog = [], pencil = null, folderNodes = [];
     var observer = null, scheduled = false, settingsRegistered = false;
+    var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
     var knownNodes = typeof WeakMap === 'function' ? new WeakMap() : null;
     var $ = root.jQuery || root.$;
     function getOption(name, fallback) {
@@ -72,20 +73,65 @@
         button.attr('data-quality-buttons-id', id);
         return id;
     }
+    // Lampa puts native torrent/online/trailer buttons in the hidden
+    // .buttons--container. The visible Play button merely opens a "Source"
+    // Select built from those originals. Move THE CONTAINER, not cloned
+    // buttons, into the toolbar: native handlers and onWatch() queries remain.
+    function restoreNativeSources(view) {
+        if (view && view.length) {
+            view.find('.full-start-new__buttons').first().removeClass('quality-buttons-ungrouped');
+            view.find('.button--play').removeClass('quality-buttons-play-hidden');
+        }
+        if (nativeSources && nativeSources.length) {
+            nativeSources.removeClass('quality-buttons-native-sources');
+            if (nativeSourceHidden) nativeSources.addClass('hide');
+            else nativeSources.removeClass('hide');
+            if (nativeSourceHome && nativeSourceHome.length)
+                nativeSourceHome.append(nativeSources);
+        }
+        nativeSources = null;
+        nativeSourceHome = null;
+    }
+    function revealNativeSources(view) {
+        var line = view.find('.full-start-new__buttons').first();
+        var holder = view.find('.buttons--container').first();
+        if (!line.length || !holder.length) return;
+        var sources = holder.children('.full-start__button').not('.hide');
+        if (!sources.length) {
+            if (nativeSources) restoreNativeSources(view);
+            return;
+        }
+        if (!nativeSources || nativeSources[0] !== holder[0]) {
+            if (nativeSources) restoreNativeSources(owner);
+            nativeSources = holder;
+            nativeSourceHome = holder.parent();
+            nativeSourceHidden = holder.hasClass('hide');
+        }
+        // Reparent only once; repeated refreshes must not disrupt focus.
+        if (holder.parent()[0] !== line[0]) line.append(holder);
+        holder.removeClass('hide').addClass('quality-buttons-native-sources');
+        line.addClass('quality-buttons-ungrouped');
+        view.find('.button--play').addClass('quality-buttons-play-hidden');
+    }
     function readButtons(view) {
         if (!$ || !view || !view.length) return [];
         var line = view.find('.full-start-new__buttons').first();
         if (!line.length) return [];
-        var buttons = line.children('.full-start__button')
-            // Native playback and other editors are not ordinary action buttons.
-            .not('.quality-buttons-pencil,.quality-buttons-folder,.button--play,.button--edit-order,.button--folder');
         var used = {}, items = [];
-        buttons.each(function () {
-            var btn = $(this);
-            var id = buttonId(btn, used);
-            items.push({id: id, title: clean(btn.find('span').first().text())
-                || id.replace(/^b:/, '').replace(/[._-]/g, ' '), node: btn});
-        });
+        var excluded = '.quality-buttons-pencil,.quality-buttons-folder,.button--play,'
+            + '.button--edit-order,.button--folder,.hide';
+        function addButtons(buttons) {
+            buttons.not(excluded).each(function () {
+                var btn = $(this);
+                var id = buttonId(btn, used);
+                items.push({id:id, title: clean(btn.find('span').first().text())
+                    || id.replace(/^b:/, '').replace(/[._-]/g,' '), node:btn});
+            });
+        }
+        addButtons(line.children('.full-start__button'));
+        // Include the original native source buttons so they can be reordered,
+        // hidden or placed in custom folders just like plugin-added buttons.
+        addButtons(line.children('.buttons--container').children('.full-start__button'));
         return items;
     }
     function findCatalog(id) {
@@ -138,19 +184,23 @@
     function restore(view) {
         if (!view || !view.length) return;
         clearGenerated();
-        view.find('.full-start-new__buttons > .full-start__button').each(function () {
-            var b = $(this);
-            b.removeClass('quality-buttons-hidden quality-buttons-in-folder quality-buttons-mode-minimal quality-buttons-mode-full');
-            if (knownNodes && knownNodes.has(this)) this.style.order = knownNodes.get(this);
+        // Source actions can be nested inside the native holder.
+        catalog.forEach(function (entry) {
+            var raw = entry.node && entry.node[0];
+            entry.node.removeClass('quality-buttons-hidden quality-buttons-in-folder quality-buttons-mode-minimal quality-buttons-mode-full');
+            if (raw && knownNodes && knownNodes.has(raw) && raw.style)
+                raw.style.order = knownNodes.get(raw);
         });
+        restoreNativeSources(view);
     }
     function apply(view) {
         if (!$ || !view || !view.length) return;
         var line = view.find('.full-start-new__buttons').first();
         if (!line.length) return;
         clearGenerated();
-        catalog = readButtons(view);
         if (!enabled()) { restore(view); return; }
+        revealNativeSources(view);
+        catalog = readButtons(view);
         var layout = model();
         var order = layout.order, maxOrder = 1000;
         catalog.forEach(function (entry, index) {
@@ -183,10 +233,9 @@
         if (!owner || !isCurrent(owner)) return;
         // Our own pencil/folder edits change childList. Suspend observation
         // during layout updates to prevent a perpetual refresh loop.
-        var area = owner.find('.full-start-new__buttons')[0];
         if (observer) observer.disconnect();
         try { apply(owner); } catch (e) { /* other plugins may destroy the view */ }
-        if (observer && area) observer.observe(area, {childList:true,subtree:false});
+        observeButtons();
     }
     function rerender() {
         if (owner && isCurrent(owner)) safeApply();
@@ -312,13 +361,36 @@
             field:{name:'Сбросить настройки кнопок',description:'Вернуть исходный вид'},
             onChange:function () { save({order:[],hidden:{},modes:{},folders:[]}); rerender(); }});
     }
+    function observeButtons() {
+        if (!observer || !owner || !owner.length) return;
+        var area = owner.find('.full-start-new__buttons')[0];
+        if (area) observer.observe(area, {childList:true,subtree:false});
+        // Other plugins can add native Online sources after full:complite.
+        // Observe only the holder's direct children; our refresh disconnects
+        // before DOM changes to prevent observer feedback loops.
+        var holder = owner.find('.buttons--container')[0];
+        if (holder) observer.observe(holder, {
+            childList:true, subtree:false, attributes:true,
+            attributeFilter:['class']
+        });
+    }
     function bindFull(event) {
         if (!event || event.type !== 'complite' || !event.body) return;
         var node = $(event.body[0] || event.body);
         if (!node.length || !node.find('.full-start-new__buttons').length) return;
         if (observer) { observer.disconnect(); observer = null; }
+        if (owner && owner[0] !== node[0]) restore(owner);
         owner = node;
         apply(node);
+        // Lampa's native full-start controller has not yet been toggled when
+        // full:complite fires. Avoid a stale remembered focus on hidden Play.
+        var start = event.link && event.link.items && event.link.items[0];
+        var play = node.find('.button--play').first();
+        if (start && play.length && start.last === play[0] && nativeSources) {
+            var first = nativeSources.children('.full-start__button')
+                .not('.hide').first();
+            if (first.length) start.last = first[0];
+        }
         if (typeof MutationObserver === 'function') {
             var area = node.find('.full-start-new__buttons')[0];
             observer = new MutationObserver(function () {
@@ -329,13 +401,17 @@
                     if (isCurrent(node)) safeApply();
                 }, 100);
             });
-            observer.observe(area, {childList:true,subtree:false});
+            observeButtons();
         }
     }
     function init() {
         if (!$) return;
         var css = document.createElement('style');
         css.textContent = '.quality-buttons-hidden,.quality-buttons-in-folder{display:none!important;}'
+            + '.full-start-new__buttons.quality-buttons-ungrouped{flex-wrap:wrap;}'
+            + '.full-start-new__buttons .buttons--container.quality-buttons-native-sources{display:flex!important;'
+            + 'flex-wrap:wrap;align-items:center;}'
+            + '.full-start-new__buttons.quality-buttons-ungrouped>.button--play.quality-buttons-play-hidden{display:none!important;}'
             + '.quality-buttons-mode-minimal>span{display:none!important;}'
             + '.quality-buttons-mode-full>span{display:inline!important;}'
             + '.quality-buttons-pencil,.quality-buttons-folder{cursor:pointer;}';
