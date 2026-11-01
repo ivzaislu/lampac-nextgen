@@ -484,7 +484,7 @@
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
                 online_source_filter: onlineFilterEnabled(),
-                online_filter_revision: 4,
+                online_filter_revision: 5,
                 online_external_balancer: !!(L.Filter && L.Filter.__balancer_dual_patched),
                 online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
                 online_filters_detected: onlineFiltersDetected,
@@ -881,7 +881,7 @@
                 if (!available()) return items;
                 var selected = selectedSource();
                 var entry = {title: 'Источник',
-                    subtitle: selected ? selected.title : '',
+                    subtitle: nativeSelectedSourceLabel() || (selected ? selected.title : ''),
                     bal: true, stype: 'quality_online_source',
                     qualityOnlineSource: true};
                 items.splice(items.length && items[0] && items[0].reset ? 1 : 0,
@@ -1031,6 +1031,19 @@
             return null;
         return buttons;
     }
+    // The native Filter stores its selected source in .filter--sort > div.
+    // Read the same displayed label (including resolution), not the generic
+    // balancer name; it may differ from the source id saved in Storage.
+    function nativeSelectedSourceLabel() {
+        var button = nativeBalancerButton();
+        if (!button || typeof button.find !== 'function') return '';
+        try {
+            var label = button.find('> div');
+            if (label && typeof label.text === 'function')
+                return String(label.text() || '').replace(/\s+/g, ' ').trim();
+        } catch (e) {}
+        return '';
+    }
     function selectIsOnlineFilter(config) {
         if (!config || !Array.isArray(config.items)) return false;
         var hasReset = config.items.some(function (x) { return x && x.reset; });
@@ -1061,7 +1074,7 @@
             return;
         var item = {
             title: 'Источник',
-            subtitle: 'Выбрать балансер',
+            subtitle: nativeSelectedSourceLabel() || 'Выбрать балансер',
             bal: true,
             noselect: true,
             qualityOnlineSelectShortcut: true,
