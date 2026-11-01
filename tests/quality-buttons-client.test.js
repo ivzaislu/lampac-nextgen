@@ -88,8 +88,9 @@ assert.ok(setting('quality_buttons_open'));
 assert.ok(setting('quality_buttons_pencil'));
 assert.equal(setting('quality_buttons_pencil').param.default,false);
 events.full({type:'complite',body:[page]});
-assert.equal(movieButton.style.order,'1000');
-assert.equal(torrentButton.style.order,'1001');
+assert.equal(movieButton.style.order,'');
+assert.equal(torrentButton.style.order,'',
+    'Native order must remain untouched before the user customizes it');
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,0,
     'Pencil should not take remote focus by default');
 setting('quality_buttons_open').onChange();
