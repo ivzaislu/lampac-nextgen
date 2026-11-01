@@ -268,6 +268,14 @@ assert.ok(!nativeTorrent.classes.has('selector'),
     'A source inside a custom folder must not remain keyboard-selectable');
 assert.ok(!nav.includes(nativeTorrent));
 close();
+const folder= line.children.find(x=>x.classes.has('quality-buttons-folder'));
+assert.ok(folder && folder.classes.has('selector'));
+$(folder).trigger('hover:focus');
+assert.strictEqual(start.last,folder,'Native Start remembers focused custom folder');
+win.LampaQualityButtons.refresh();
+assert.strictEqual(line.children.find(x=>x.classes.has('quality-buttons-folder')),folder,
+    'Layout refresh must not replace the focused folder DOM node');
+assert.ok(nav.includes(folder),'Folder stays keyboard-selectable after layout refresh');
 
 // Hide pencil from Quality settings: layout remains, editor goes away.
 start.last=pencil();
