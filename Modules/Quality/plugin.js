@@ -253,10 +253,17 @@
         var value = Number(setting(name, fallback));
         return isFinite(value) && value >= min && value <= max ? value : fallback;
     }
-    function backgroundEnabled() {
+    function periodicEnabled() {
+        // A new key deliberately ignores the old background=true preference.
+        // Periodic checks of films not on screen are opt-in.
+        var value = setting('quality_module_periodic_refresh', false);
         return serverAllows('collect') && serverAllows('background')
-            && setting('quality_module_background', true) !== false
-            && String(setting('quality_module_background', true)) !== 'false';
+            && (value === true || String(value) === 'true');
+    }
+    function visitRefreshEnabled() {
+        var value = setting('quality_module_refresh_on_visit', true);
+        return serverAllows('collect')
+            && value !== false && String(value) !== 'false';
     }
     function badgeEnabled() {
         return serverAllows('collect')
@@ -333,9 +340,16 @@
     function keyOf(item) {
         return item.source + ':' + item.type + ':' + (item.id || item.title) + ':' + item.year;
     }
+    // The hard retention horizon is distinct from the user-controlled soft TTL.
+    // A previously confirmed badge stays available when the next visit is late.
+    var retentionMs = 180 * 86400000;
     function recordValid(record) {
-        return !!record && typeof record === 'object' && Number(record.until) > Date.now()
-            && (record.label === null || Object.prototype.hasOwnProperty.call(rank, record.label));
+        if (!record || typeof record !== 'object'
+            || !(record.label === null || Object.prototype.hasOwnProperty.call(rank, record.label)))
+            return false;
+        var checked = Number(record.checkedAt) || 0;
+        return Number(record.until) > Date.now()
+            || (checked > 0 && checked + retentionMs > Date.now());
     }
     function recordDue(record, item) {
         if (!record) return false;
@@ -346,7 +360,7 @@
     function makeRecord(label, item, serverRecord) {
         var checked = serverRecord && Number(serverRecord.checkedAt) || Date.now();
         var until = serverRecord && Number(serverRecord.until)
-            || (checked + (ttlDays(label, item) + 2) * 86400000);
+            || (checked + retentionMs);
         return {label: label, checkedAt: checked, until: until};
     }
     function savePersistent() {
@@ -354,7 +368,7 @@
         if (!persisted || !L.Storage.set) return;
         var now = Date.now();
         Object.keys(persisted.entries).forEach(function (key) {
-            if (persisted.entries[key].until <= now) {
+            if (!recordValid(persisted.entries[key])) {
                 delete persisted.entries[key];
                 delete persisted.items[key];
             }
@@ -426,6 +440,13 @@
     function complete(job, label, success, fromSql, serverRecord) {
         if (job.generation !== generation) success = false;
         if (success) {
+            // A successful but empty recheck is not proof the old release vanished.
+            // Retain an already-confirmed badge until an actual replacement arrives.
+            if (label === null) {
+                var previous = cache[job.key]
+                    || (persisted && persisted.entries[keyOf(job.item)]);
+                if (previous && previous.label) label = previous.label;
+            }
             var saved = makeRecord(label, job.item, serverRecord);
             saveRecord(job, saved, fromSql);
             updateVisible(job, label);
@@ -461,23 +482,28 @@
         return {key: generation + ':' + keyOf(item), item: item,
             generation: generation, sourceHash: persistentSource, movieHash: hashId(keyOf(item))};
     }
-    function enqueueBackground(item) {
-        if (!configured() || !backgroundEnabled()) return;
+    function enqueueRecheck(item, onVisit) {
+        if (!configured() || !(onVisit ? visitRefreshEnabled() : periodicEnabled())) return;
         var key = generation + ':' + keyOf(item);
         var existing = cache[key] || (persisted && persisted.entries[keyOf(item)]);
         if (!existing || !recordDue(existing, item) || pending[key]) return;
-        // Avoid retry storms when JacRed fails. Low-priority requests are throttled.
-        if (Date.now() - (lastRefresh[key] || 0) < 15 * 60000) return;
-        if (backgroundQueue.length >= 60) return;
-        if (Date.now() - backgroundTokenTime >= 60000) {
-            backgroundTokenTime = Date.now();
-            backgroundTokens = 3;
+        // Even a failing JacRed must not be retried in a tight rendering loop.
+        if (Date.now() - (lastRefresh[key] || 0) < (onVisit ? 60000 : 15 * 60000)) return;
+        if (!onVisit) {
+            // Only the opt-in periodic collector has the 3/minute throttle.
+            if (backgroundQueue.length >= 60) return;
+            if (Date.now() - backgroundTokenTime >= 60000) {
+                backgroundTokenTime = Date.now();
+                backgroundTokens = 3;
+            }
+            if (backgroundTokens <= 0) return;
+            backgroundTokens--;
         }
-        if (backgroundTokens <= 0) return;
-        backgroundTokens--;
         lastRefresh[key] = Date.now();
         pending[key] = [];
-        backgroundQueue.push(jobFor(item));
+        // A film the user is viewing takes priority over periodic work.
+        if (onVisit) queue.push(jobFor(item));
+        else backgroundQueue.push(jobFor(item));
         runQueue();
     }
     root.LampaQuality = {
@@ -494,7 +520,8 @@
                 persistent_entries: persisted ? Object.keys(persisted.entries).length : 0,
                 sql_cache: sqlReady(), sql_active_requests: sqlActive + sqlWriteActive,
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
-                batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
+                batch_size: sqlBatchSize(), background_refresh: periodicEnabled(),
+                refresh_on_visit: visitRefreshEnabled(),
                 online_source_filter: serverAllows('onlinefilter')
                     && (root.LampaQualityOnline ? root.LampaQualityOnline.enabled() : true),
                 online_filter_revision: root.LampaQualityOnline ? root.LampaQualityOnline.revision : 6,
@@ -521,7 +548,7 @@
         }
         if (recordValid(saved)) {
             callback(saved.label);
-            if (recordDue(saved, item)) enqueueBackground(item);
+            if (recordDue(saved, item)) enqueueRecheck(item, true);
             return;
         }
         if (pending[job.key]) { pending[job.key].push(callback); return; }
@@ -686,7 +713,7 @@
         }
     }
     function refreshKnown(force) {
-        if (!configured() || (!force && !backgroundEnabled())) return;
+        if (!configured() || (!force && !periodicEnabled())) return;
         if (document.hidden) return;
         var items = Object.keys(known), queued = 0;
         for (var i = 0; i < items.length && queued < 3; i++) {
@@ -703,7 +730,7 @@
                 }
             } else {
                 var before = backgroundQueue.length;
-                enqueueBackground(item);
+                enqueueRecheck(item, false);
                 if (backgroundQueue.length > before) queued++;
             }
         }
@@ -758,7 +785,8 @@
         ? new IntersectionObserver(function (entries) {
             entries.forEach(function (e) {
                 if (!e.isIntersecting) return;
-                intersection.unobserve(e.target);
+                // Keep observing: when the user scrolls away and returns,
+                // this is a new encounter and can trigger a due recheck.
                 load(e.target.card_data, e.target, false);
             });
         }, {rootMargin: '150px'}) : null;
@@ -791,12 +819,17 @@
                 if (!previous) { load(card.card_data, card, false); continue; }
                 var saved = cache[generation + ':' + keyOf(item)]
                     || (persisted && persisted.entries[keyOf(item)]);
-                if (saved && recordDue(saved, item)) enqueueBackground(item);
+                // Do not refresh a film merely because scan() reran due to a
+                // DOM mutation. Rechecks happen on intersection entry.
                 continue;
             }
             if (observed) observed.set(card, identity);
             if (previous) draw(card, null, false);
-            if (intersection) intersection.observe(card);
+            if (intersection) {
+                // Card DOM nodes may be reused with another movie identity.
+                intersection.unobserve(card);
+                intersection.observe(card);
+            }
             else load(card.card_data, card, false);
         }
     }
@@ -825,9 +858,13 @@
         if (serverAllows('collect')) {
             add('quality_module_enabled', 'trigger', 'Показывать бейджи', null, true,
                 'Метки качества на постерах и в полной карточке', scan);
+            add('quality_module_refresh_on_visit', 'trigger',
+                'Перепроверять при появлении фильма', null, true,
+                'Показывать кэш и перепроверять качество при повторном появлении фильма после TTL');
             if (serverAllows('background'))
-                add('quality_module_background', 'trigger', 'Обновлять в фоне', null, true,
-                    'При запущенной Lampa качество периодически проверяется повторно');
+                add('quality_module_periodic_refresh', 'trigger',
+                    'Периодическое фоновое обновление', null, false,
+                    'Перепроверять старые фильмы, даже если они не отображаются');
         add('quality_module_days_low', 'select', 'CAM / TS / TC', days, '1',
             'Интервал повторной проверки низкого качества');
         add('quality_module_days_hd', 'select', 'SD / HD / FHD', days, '5',
