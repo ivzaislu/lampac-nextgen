@@ -272,6 +272,20 @@
             if (catalog[i].id === id) return catalog[i];
         return null;
     }
+    function orderedCatalog(layout) {
+        // The editor must display the SAME order as the visible toolbar,
+        // rather than reintroducing native DOM order on each new card.
+        return catalog.map(function (entry, index) {
+            var saved = layout.order.indexOf(entry.id);
+            var nativeOrder = Number(entry.node.css('order'));
+            return {entry:entry, position:index,
+                order:layout.order.length
+                    ? (saved >= 0 ? saved : 1000 + index)
+                    : (isFinite(nativeOrder) ? nativeOrder : 0)};
+        }).sort(function (a,b) {
+            return a.order - b.order || a.position - b.position;
+        }).map(function (item) { return item.entry; });
+    }
     function groupFor(layout, id) {
         for (var i = 0; i < layout.folders.length; i++)
             if (Array.isArray(layout.folders[i].members)
@@ -491,11 +505,19 @@
                 if (chosen.action === 'visibility') v.hidden[id] = !v.hidden[id];
                 if (chosen.action === 'mode') v.modes[id] = (v.modes[id] || 1) % 3 + 1;
                 if (chosen.action === 'up' || chosen.action === 'down') {
-                    if (!v.order.length) v.order = catalog.map(function (b) { return b.id; });
-                    if (v.order.indexOf(id) < 0) v.order.push(id);
-                    var n = v.order.indexOf(id), next = n + (chosen.action === 'up' ? -1 : 1);
-                    if (next >= 0 && next < v.order.length) {
-                        var tmp = v.order[next]; v.order[next] = id; v.order[n] = tmp;
+                    var present = orderedCatalog(v).map(function (b) { return b.id; });
+                    if (!v.order.length) v.order = present.slice();
+                    // Preserve IDs of buttons absent from THIS movie/series.
+                    // Otherwise editing a sparse card loses their positions.
+                    present.forEach(function (key) {
+                        if (v.order.indexOf(key) < 0) v.order.push(key);
+                    });
+                    var index = present.indexOf(id);
+                    var neighbor = present[index + (chosen.action === 'up' ? -1 : 1)];
+                    if (neighbor) {
+                        var here = v.order.indexOf(id), there = v.order.indexOf(neighbor);
+                        v.order[here] = neighbor;
+                        v.order[there] = id;
                     }
                 }
             });
@@ -529,7 +551,7 @@
             if (L.Noty && L.Noty.show) L.Noty.show('Сначала откройте полную карточку фильма');
             return;
         }
-        var layout = model(), options = catalog.map(function (b) {
+        var layout = model(), options = orderedCatalog(layout).map(function (b) {
             return {title:b.title, id:b.id, subtitle:
                 (layout.hidden[b.id] ? 'Скрыта • ' : '') + 'Режим ' + (layout.modes[b.id] || 1)
                 + (groupFor(layout, b.id) ? ' • В папке' : '')};
