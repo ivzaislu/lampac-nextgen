@@ -152,6 +152,27 @@ function menu(component) {
     assert.equal(unpopulated.get('filter').length,1);
     assert.equal(unpopulated.get('sort').length,0);
 
+    // A delayed click is cancelled if the user has already navigated away
+    // or the source menu belongs to an older filter instance.
+    const late = menu('online');
+    L.Activity = {active() {return {component:'full',movie:{id:77}};}};
+    const sourceEntry = late.filter.get('filter')[1];
+    late.filter.onSelect('filter',sourceEntry,sourceEntry.items[1]);
+    await pause(10);
+    assert.equal(late.calls.length,0,'A click from an inactive Online page is ignored');
+    const replaced = menu('online');
+    L.Activity.active = () => ({component:'online',movie:{id:78}});
+    const replacedEntry = replaced.filter.get('filter')[1];
+    replaced.filter.onSelect('filter',replacedEntry,replacedEntry.items[1]);
+    await pause(10);
+    assert.equal(replaced.calls.length,0,'The different film cannot inherit the old click');
+    L.Activity.active = () => ({component:'online',movie:{id:77}});
+    const first = menu('online'), olderEntry = first.filter.get('filter')[1];
+    first.filter.onSelect('filter',olderEntry,olderEntry.items[1]);
+    menu('online');
+    await pause(10);
+    assert.equal(first.calls.length,0,'A replaced filter cannot switch the new filter');
+
     // Existing instance remains idempotent when script is injected twice.
     vm.runInNewContext(script,{window:win,document,MutationObserver:Mutation,
         setTimeout,clearTimeout,setInterval(){return {unref(){}};},console},

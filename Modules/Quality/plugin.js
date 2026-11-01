@@ -875,6 +875,7 @@
                 }
                 return nativeChosen.apply(this, arguments);
             };
+            var bridge = {refresh: refresh};
             Object.defineProperty(instance, 'onSelect', {
                 configurable: true,
                 enumerable: true,
@@ -890,8 +891,18 @@
                             // onSelect; defer the native sort switch until then
                             // so Online's own close/search/Activity.replace wins.
                             setTimeout(function () {
-                                if (onlineFilterEnabled() && nativeSelect)
-                                    nativeSelect.call(instance, 'sort', source);
+                                if (!onlineFilterEnabled() || currentOnlineFilter !== bridge
+                                    || !nativeSelect) return;
+                                // Selection may outlive the menu after fast
+                                // navigation. Never switch the provider of a
+                                // different activity/film using an old callback.
+                                if (L.Activity && typeof L.Activity.active === 'function') {
+                                    var current = L.Activity.active();
+                                    if (!current || current.component !== params.component) return;
+                                    if (params.movie && current.movie
+                                        && String(params.movie.id) !== String(current.movie.id)) return;
+                                }
+                                nativeSelect.call(instance, 'sort', source);
                             }, 0);
                             return;
                         }
@@ -903,7 +914,7 @@
                     nativeSelect = typeof fn === 'function' ? fn : null;
                 }
             });
-            currentOnlineFilter = {refresh: refresh};
+            currentOnlineFilter = bridge;
             return instance;
         }
         OnlineFilterBridge.prototype = NativeFilter.prototype;
