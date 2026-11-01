@@ -189,7 +189,7 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
     selectEvents.preshow({active:lampacMenu});
     assert.equal(lampacMenu.items[1].subtitle,'Phantom - 1080p',
         'Native source changes must update the filter subtitle');
-    assert.equal(win.LampaQuality.status().online_select_inserted,4);
+    assert.equal(win.LampaQuality.status().online_select_inserted,5);
     lampacMenu.items[1].onSelect();
     await pause(10);
     assert.equal(counters.sortOpens,2,'Lampac source shortcut opens its native sort');
