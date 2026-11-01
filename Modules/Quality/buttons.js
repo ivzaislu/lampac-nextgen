@@ -96,6 +96,7 @@
             view.find('.button--play').removeClass('quality-buttons-play-hidden');
         }
         if (nativeSources && nativeSources.length) {
+            nativeSources.children('.full-start__button').off('.qualityButtonsFocus');
             nativeSources.removeClass('quality-buttons-native-sources');
             if (nativeSourceHidden) nativeSources.addClass('hide');
             else nativeSources.removeClass('hide');
@@ -125,6 +126,22 @@
         holder.removeClass('hide').addClass('quality-buttons-native-sources');
         line.addClass('quality-buttons-ungrouped');
         view.find('.button--play').addClass('quality-buttons-play-hidden');
+    }
+    function rememberNativeSourceFocus() {
+        if (!nativeSources || !nativeSources.length || !ownerStart) return;
+        // Start.create() wired focus tracking before the hidden source buttons
+        // were exposed. Listen only to these existing buttons, namespaced to
+        // remove our handlers on disable without affecting other plugins.
+        nativeSources.children('.full-start__button').each(function () {
+            $(this).off('.qualityButtonsFocus').on(
+                'hover:focus.qualityButtonsFocus hover:enter.qualityButtonsFocus '
+                + 'hover:hover.qualityButtonsFocus hover:touch.qualityButtonsFocus',
+                function () {
+                    if (ownerStart && isCurrent(owner))
+                        ownerStart.last = this;
+                }
+            );
+        });
     }
     function readButtons(view) {
         if (!$ || !view || !view.length) return [];
@@ -247,7 +264,10 @@
         // Our own pencil/folder edits change childList. Suspend observation
         // during layout updates to prevent a perpetual refresh loop.
         if (observer) observer.disconnect();
-        try { apply(owner); } catch (e) { /* other plugins may destroy the view */ }
+        try {
+            apply(owner);
+            rememberNativeSourceFocus();
+        } catch (e) { /* other plugins may destroy the view */ }
         observeButtons();
     }
     function rerender() {
@@ -396,6 +416,7 @@
         owner = node;
         ownerStart = event.link && event.link.items && event.link.items[0] || null;
         apply(node);
+        rememberNativeSourceFocus();
         // Lampa's native full-start controller has not yet been toggled when
         // full:complite fires. Avoid a stale remembered focus on hidden Play.
         var play = node.find('.button--play').first();
