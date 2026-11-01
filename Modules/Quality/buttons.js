@@ -5,7 +5,7 @@
         || !root.Lampa.Storage) return;
     var L = root.Lampa;
     var storageKey = 'quality_module_buttons_v1';
-    var owner = null, catalog = [], pencil = null, folderNodes = [];
+    var owner = null, ownerStart = null, catalog = [], pencil = null, folderNodes = [];
     var observer = null, scheduled = false, settingsRegistered = false;
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
     var knownNodes = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -78,6 +78,19 @@
     // Select built from those originals. Move THE CONTAINER, not cloned
     // buttons, into the toolbar: native handlers and onWatch() queries remain.
     function restoreNativeSources(view) {
+        // Lampa remembers the last focused element on full-start. If that
+        // element is about to become hidden again, restore a visible target.
+        if (ownerStart && nativeSources && nativeSources.length && ownerStart.last) {
+            var wasSource = false;
+            nativeSources.children('.full-start__button').each(function () {
+                if (this === ownerStart.last) wasSource = true;
+            });
+            if (wasSource) {
+                var play = view && view.length ? view.find('.button--play').first() : null;
+                ownerStart.last = play && play.length && !play.hasClass('hide')
+                    ? play[0] : null;
+            }
+        }
         if (view && view.length) {
             view.find('.full-start-new__buttons').first().removeClass('quality-buttons-ungrouped');
             view.find('.button--play').removeClass('quality-buttons-play-hidden');
@@ -381,15 +394,15 @@
         if (observer) { observer.disconnect(); observer = null; }
         if (owner && owner[0] !== node[0]) restore(owner);
         owner = node;
+        ownerStart = event.link && event.link.items && event.link.items[0] || null;
         apply(node);
         // Lampa's native full-start controller has not yet been toggled when
         // full:complite fires. Avoid a stale remembered focus on hidden Play.
-        var start = event.link && event.link.items && event.link.items[0];
         var play = node.find('.button--play').first();
-        if (start && play.length && start.last === play[0] && nativeSources) {
+        if (ownerStart && play.length && ownerStart.last === play[0] && nativeSources) {
             var first = nativeSources.children('.full-start__button')
                 .not('.hide').first();
-            if (first.length) start.last = first[0];
+            if (first.length) ownerStart.last = first[0];
         }
         if (typeof MutationObserver === 'function') {
             var area = node.find('.full-start-new__buttons')[0];
