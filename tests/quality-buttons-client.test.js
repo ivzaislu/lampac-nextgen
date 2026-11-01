@@ -183,7 +183,11 @@ vm.runInNewContext(script,{window:win,document,console,MutationObserver:Mutation
     setTimeout(fn,ms){if(ms===100)deferred.push(fn);return 1;},
     clearTimeout(){}});
 function latest(){return selects[selects.length-1];}
-function pencil(){return line.children.find(x=>x.classes.has('quality-buttons-pencil'));}
+function pencil(){
+    // The pencil belongs to the ACTIVE Full card; the original card's
+    // toolbar is intentionally destroyed when navigating to a new title.
+    return $(page).find('.quality-buttons-pencil')[0];
+}
 function open(){
     assert.ok(pencil(),'Pencil must exist to open editor');
     $(pencil()).trigger('hover:enter');
