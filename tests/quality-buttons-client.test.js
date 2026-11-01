@@ -111,6 +111,12 @@ const L={Storage:{get(k,def){return storage.has(k)?storage.get(k):def;},set(k,v)
             }
             nativeRestorations++;
             focus=name;
+        },
+        back(){
+            // Mirrors Settings.Component.back -> Settings.back in Lampa.
+            if(focus==='settings_component')focus='settings';
+            else if(focus==='settings')focus='head';
+            else throw Error('Settings Back trapped at '+focus);
         }
     },
     SettingsApi:{addComponent(){},addParam(x){params.push(x);}},
@@ -309,10 +315,11 @@ assert.ok(nativeRestorations>=4,
     'Native controller must be restored before subsequent Select menus');
 assert.ok(selectParents.every(x=>x==='settings_component' || x==='full_start'),
     'No Select window may use a hidden Select as its parent');
-// Simulate the two standard Settings Back transitions after our editor.
-if(focus==='settings_component')focus='settings';
-if(focus==='settings')focus='head';
-assert.equal(focus,'head','Settings must be escapable after editing buttons');
+// The real Lampa Back controllers must be reachable after closing editor.
+L.Controller.back();
+assert.equal(focus,'settings','First Back returns to Settings category list');
+L.Controller.back();
+assert.equal(focus,'head','Second Back exits Settings entirely');
 // Do not seize a Select which is already open for an unrelated plugin.
 focus='select';
 selectOpened=true;
