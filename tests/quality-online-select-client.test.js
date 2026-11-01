@@ -101,8 +101,9 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
     };
     selectEvents.preshow({active:menu});
     assert.deepEqual(menu.items.map(x=>x.title),
-        ['Сброс','Источник / балансер','Озвучка','Сезон']);
+        ['Сброс','Источник','Озвучка','Сезон']);
     assert.equal(menu.items[1].qualityOnlineSelectShortcut,true);
+    assert.equal(menu.items[1].bal,true,'Shortcut follows the supplied standalone plugin contract');
     assert.equal(typeof menu.items[1].onSelect,'function');
     assert.equal(win.LampaQuality.status().online_select_inserted,1);
     assert.equal(win.LampaQuality.status().online_filters_detected,1);
@@ -145,6 +146,7 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
     ]);
     const already={title:'Фильтрация',items:normal.get('filter')};
     assert.equal(already.items.filter(x=>x.qualityOnlineSource).length,1);
+    assert.equal(already.items[1].bal,true);
     selectEvents.preshow({active:already});
     assert.equal(already.items.filter(x=>x.qualityOnlineSource).length,1);
     assert.equal(already.items.filter(x=>x.qualityOnlineSelectShortcut).length,0);
