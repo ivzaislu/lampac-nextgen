@@ -248,24 +248,36 @@
                 && layout.folders[i].members.indexOf(id) >= 0) return layout.folders[i];
         return null;
     }
-    function makeFolder(line, folder, layout, order) {
+    function makeFolder(line, folder, layout, order, previousNodes) {
         if (!$ || !folder || !Array.isArray(folder.members)) return;
         var members = folder.members.filter(function (id) { return !!findCatalog(id); });
         if (!members.length) return;
-        var node = $('<div class="full-start__button selector quality-buttons-folder">'
-            + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">'
-            + '<path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'
-            + '<span></span></div>');
+        // Reuse existing folder buttons. Recreating a focused .selector during
+        // a layout update makes Lampa.Start.last refer to a detached element.
+        var node = null;
+        (previousNodes || []).forEach(function (previous) {
+            if (previous.attr('data-quality-folder-id') === folder.id) node = previous;
+        });
+        if (!node) {
+            node = $('<div class="full-start__button selector quality-buttons-folder">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">'
+                + '<path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'
+                + '<span></span></div>');
+            node.attr('data-quality-folder-id', folder.id);
+            line.append(node);
+        }
         node.find('span').text(folder.title);
         node.css('order', order);
-        node.attr('data-quality-folder-id', folder.id);
-        node.on('hover:enter', function () {
+        node.off('.qualityButtonsFolder');
+        node.on('hover:focus.qualityButtonsFolder hover:hover.qualityButtonsFolder '
+            + 'hover:touch.qualityButtonsFolder', function () {
+            if (ownerStart && isCurrent(owner)) ownerStart.last = node[0];
+        });
+        node.on('hover:enter.qualityButtonsFolder', function () {
             var captured = owner;
             var options = members.map(function (id) {
                 return {title: (findCatalog(id) || {}).title || id, id: id};
             });
-            // Native Lampa.Select hides before calling onSelect.
-            // Do not close that hidden Select twice or strand its controller.
             select(folder.title, options, function (item) {
                 if (!isCurrent(captured)) return;
                 var selected = findCatalog(item && item.id);
@@ -273,14 +285,11 @@
                 setTimeout(function () {
                     var current = L.Controller && L.Controller.enabled
                         ? L.Controller.enabled() : null;
-                    // Opening Settings or another plugin's window after a
-                    // folder choice must cancel the deferred native action.
                     if (isCurrent(captured) && current && current.name === 'full_start')
                         selected.node.trigger('hover:enter');
                 }, 0);
             });
         });
-        line.append(node);
         folderNodes.push(node);
     }
     function clearGenerated() {
@@ -307,7 +316,7 @@
         if (!line.length) return;
         // Keep the pencil DOM node stable across layout refreshes so
         // Lampa.Start.last never points at a deleted navigation target.
-        folderNodes.forEach(function (node) { node.remove(); });
+        var previousFolders = folderNodes;
         folderNodes = [];
         if (!pencilEnabled() && pencil) {
             if (ownerStart && ownerStart.last === pencil[0]) ownerStart.last = null;
@@ -335,13 +344,20 @@
             node.toggleClass('quality-buttons-mode-full', layout.modes[entry.id] === 3);
         });
         layout.folders.forEach(function (folder, idx) {
-            makeFolder(line, folder, layout, maxOrder + catalog.length + idx);
+            makeFolder(line, folder, layout, maxOrder + catalog.length + idx, previousFolders);
+        });
+        previousFolders.forEach(function (node) {
+            var present = folderNodes.some(function (current) { return current[0] === node[0]; });
+            if (!present) {
+                if (ownerStart && ownerStart.last === node[0]) ownerStart.last = null;
+                node.remove();
+            }
         });
         if (pencilEnabled()) {
             if (!pencil) {
                 pencil = $('<div class="full-start__button selector quality-buttons-pencil" title="Настройка кнопок">'
                     + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-                    + '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1-4z"/></svg>'
+                    + '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>'
                     + '<span>Кнопки</span></div>');
                 pencil.on('hover:enter', openEditor);
                 pencil.on('hover:focus hover:hover hover:touch', function () {
