@@ -15,6 +15,7 @@
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
     var originalSelectors = typeof WeakMap === 'function' ? new WeakMap() : null;
     var nativeGroupHooks = typeof WeakSet === 'function' ? new WeakSet() : null;
+    var initializedFulls = typeof WeakSet === 'function' ? new WeakSet() : null;
     var knownNodes = typeof WeakMap === 'function' ? new WeakMap() : null;
     var $ = root.jQuery || root.$;
     function getOption(name, fallback) {
@@ -702,6 +703,7 @@
             });
             observeButtons();
         }
+        if (initializedFulls && event.link) initializedFulls.add(event.link);
     }
     function resumeFull(event) {
         if (!event || event.type !== 'start' || event.component !== 'full'
@@ -724,8 +726,12 @@
         } else {
             // Back to an older cached Full: the other Full has already
             // restored its original DOM. Adopt and reapply this activity.
+            // First activation after a deferred (ignored) full:complite
+            // should pick the user's FIRST visible button. A previously
+            // initialized cached Full should preserve its remembered focus.
             bindFull({type:'complite',body:rendered,link:component,
-                props:component.props,object:event.object,resumed:true});
+                props:component.props,object:event.object,
+                resumed: !initializedFulls || initializedFulls.has(component)});
             safeApply();
         }
     }
