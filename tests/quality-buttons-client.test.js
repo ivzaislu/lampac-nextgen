@@ -107,7 +107,10 @@ assert.equal(window.LampaQualityButtons.status().loaded,true);
 assert.ok(setting('quality_buttons_open'));
 assert.ok(setting('quality_buttons_pencil'));
 assert.equal(setting('quality_buttons_pencil').param.default,false);
-events.full({type:'complite',body:[page]});
+const nativeStart={last:playButton};
+events.full({type:'complite',body:[page],link:{items:[nativeStart]}});
+assert.strictEqual(nativeStart.last,nativeTorrent,
+    'Native remembered focus cannot target Play after exposing sources');
 assert.strictEqual(sourceHolder.parent,line,
     'Native Source folder must be unfolded on the full-card toolbar');
 assert.equal(sourceHolder.classes.has('hide'),false);
