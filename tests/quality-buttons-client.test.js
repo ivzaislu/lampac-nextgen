@@ -109,7 +109,24 @@ const sourceHolder=node('buttons--container hide',[
 const nativeTorrent=sourceHolder.children[0],nativeOnline=sourceHolder.children[1];
 const line=node('full-start-new__buttons',[play,book]);
 let page=node('full-page',[line,sourceHolder]),slide=node('activity-slide',[page]);
-let start={last:play},component={items:[start]};
+function nativeStart(last, nativePlay){
+    return {
+        last:last,
+        modules:[],
+        use(module){this.modules.push(module);},
+        emit(name){
+            if(name!=='groupButtons')return;
+            // Mirrors Lampa Start's native Buttons.onGroupButtons: this
+            // resets native Play before the registered extension runs.
+            nativePlay.classes.delete('hide');
+            this.modules.forEach(mod=>{
+                if(typeof mod.onGroupButtons==='function')
+                    mod.onGroupButtons.call(this);
+            });
+        }
+    };
+}
+let start=nativeStart(play,play),component={items:[start]};
 const settingsComponents=[],settingsParams=[],events={},storage=new Map(),selects=[],parents=[];
 let focus='content',selectOpen=false,invalidToggle=0,nav=[],selected=null,navBuilds=0;
 let activity={component:'full',activity:{component,render(){return $(slide);}}};
@@ -149,7 +166,12 @@ const L={
                 invalidToggle++;throw Error('Unexpected controller '+name);
             }
             focus=name;
-            if(name==='full_start')buildNavigation();
+            if(name==='full_start'){
+                // Lampa Start.toggle() emits groupButtons just BEFORE it
+                // rebuilds Controller.collectionSet and collectionFocus.
+                start.emit('groupButtons');
+                buildNavigation();
+            }
         }
     },
     Select:{
@@ -319,7 +341,7 @@ function anotherCard(kind, options={}){
     const nextLine=node('full-start-new__buttons',[nextPlay,nextBook].concat(extras));
     const nextPage=node('full-page',[nextLine,nextHolder]);
     const nextSlide=node('activity-slide',[nextPage]);
-    const nextStart={last:nextBook}; // model Lampa preferring Bookmarks
+    const nextStart=nativeStart(nextBook,nextPlay); // native focus likes Bookmarks
     const nextComponent={items:[nextStart],render(){return $(nextPage);}};
     page=nextPage;start=nextStart;component=nextComponent;slide=nextSlide;
     const newActivity={component:'full',method:kind,
@@ -424,6 +446,8 @@ activity={component:'lampac',activity:{render(){return $(node('online'));}}};
 focus='content';
 const savedTvBeforeBack=storage.get('quality_module_buttons_v2_tv');
 assert.ok(cachedTv.holder.parent===cachedTv.line);
+assert.ok(cachedTv.start.modules.some(mod=>typeof mod.onGroupButtons==='function'),
+    'Quality must install native Start.use(onGroupButtons) before cached Back');
 // Simulate native source grouping / externally reinitialized button DOM.
 $(cachedTv.page).append($(cachedTv.holder));
 cachedTv.holder.classes.add('hide');
@@ -447,6 +471,19 @@ assert.ok(cachedTv.torrent.classes.has('selector'));
 assert.equal(cachedTv.torrent.style.order,'0',
     'activity:start restores the original TV user order');
 assert.strictEqual(cachedTv.start.last,cachedTv.torrent);
+// Simulate Lampa calling Start.toggle AGAIN later (e.g. after a Select,
+// switching row focus or re-entering Full). Native GroupButtons executes
+// before Quality's module and before controller's selector collection.
+cachedTv.play.classes.delete('quality-buttons-play-hidden');
+cachedTv.play.classes.add('selector');
+cachedTv.start.emit('groupButtons');
+assert.ok(cachedTv.play.classes.has('quality-buttons-play-hidden'),
+    'Native GroupButtons re-grouping must not resurrect factory Source picker');
+assert.ok(!cachedTv.play.classes.has('selector'));
+assert.strictEqual(cachedTv.holder.parent,cachedTv.line);
+assert.equal(cachedTv.torrent.style.order,'0');
+assert.equal(storage.get('quality_module_buttons_v2_tv'),savedTvBeforeBack,
+    'Native group reapplication must never write saved user layout');
 assert.strictEqual(storage.get('quality_module_buttons_v2_tv'),savedTvBeforeBack,
     'Reapplying the cached Full must not modify persisted TV preferences');
 
