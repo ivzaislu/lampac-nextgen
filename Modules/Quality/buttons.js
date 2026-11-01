@@ -10,6 +10,7 @@
     var storageKeyPrefix = 'quality_module_buttons_v2_';
     var profile = 'movie';
     var owner = null, ownerComponent = null, ownerStart = null, catalog = [], pencil = null, folderNodes = [];
+    var initialFocusNode = null, initialFocusSettled = false;
     var observer = null, scheduled = false;
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
     var originalSelectors = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -417,10 +418,25 @@
         if (!owner || !isCurrent(owner)) return;
         // Our own pencil/folder edits change childList. Suspend observation
         // during layout updates to prevent a perpetual refresh loop.
+        var previouslyFocused = ownerStart && ownerStart.last;
         if (observer) observer.disconnect();
         try {
             apply(owner);
             rememberNativeSourceFocus();
+            // A preferred source may arrive AFTER Full toggles and initially
+            // focuses the fallback button. Correct it exactly while the user
+            // has not moved away from that first focus; never steal focus
+            // during normal remote navigation or from other controllers.
+            if (!initialFocusSettled && ownerStart) {
+                if (previouslyFocused !== initialFocusNode) initialFocusSettled = true;
+                else {
+                    var first = focusCandidate();
+                    if (first && first !== previouslyFocused) {
+                        ownerStart.last = first;
+                        initialFocusNode = first;
+                    }
+                }
+            }
         } catch (e) { /* other plugins may destroy the view */ }
         observeButtons();
         refreshNativeNavigation();
@@ -611,6 +627,8 @@
         // order. On later refreshes ensureFocusCandidate preserves the user's
         // current focused button instead of stealing the remote.
         if (ownerStart) ownerStart.last = focusCandidate();
+        initialFocusNode = ownerStart ? ownerStart.last : null;
+        initialFocusSettled = false;
         if (typeof MutationObserver === 'function') {
             var area = node.find('.full-start-new__buttons')[0];
             observer = new MutationObserver(function () {
