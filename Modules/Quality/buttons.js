@@ -154,7 +154,9 @@
             if (knownNodes && raw && !knownNodes.has(raw))
                 knownNodes.set(raw, raw.style ? raw.style.order : '');
             var pos = order.indexOf(entry.id);
-            node.css('order', pos >= 0 ? pos : maxOrder + index);
+            // Until a user customizes ordering, preserve native / plugin CSS.
+            if (order.length) node.css('order', pos >= 0 ? pos : maxOrder + index);
+            else if (knownNodes && raw) node.css('order', knownNodes.get(raw));
             node.toggleClass('quality-buttons-hidden', !!layout.hidden[entry.id]);
             node.toggleClass('quality-buttons-in-folder', !!groupFor(layout, entry.id));
             node.toggleClass('quality-buttons-mode-minimal', layout.modes[entry.id] === 2);
