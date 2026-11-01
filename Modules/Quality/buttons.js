@@ -5,7 +5,7 @@
         || !root.Lampa.Storage) return;
     var L = root.Lampa;
     var storageKey = 'quality_module_buttons_v1';
-    var owner = null, ownerStart = null, catalog = [], pencil = null, folderNodes = [];
+    var owner = null, ownerComponent = null, ownerStart = null, catalog = [], pencil = null, folderNodes = [];
     var observer = null, scheduled = false, settingsRegistered = false;
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
     var knownNodes = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -48,12 +48,21 @@
     }
     function isCurrent(node) {
         var active = currentFull();
-        if (!node || !active || !active.activity
-            || typeof active.activity.render !== 'function') return false;
+        if (!node || !node.length || !active || !active.activity) return false;
+        // A full:complite event's body is the Full component's HTML.
+        // ActivitySlide.render() instead returns an OUTER activity slide.
+        // Comparing those DOM roots rejected every delayed plugin update.
+        // Compare the component identity first: it cannot match a later
+        // film or a different Activity (protecting remote/controller focus).
+        if (ownerComponent && active.activity.component)
+            return active.activity.component === ownerComponent;
+        // Older Lampa forks may not expose ActivitySlide.component.
         try {
+            if (typeof active.activity.render !== 'function') return false;
             var rendered = active.activity.render();
             var element = rendered && (rendered[0] || rendered);
-            return !!(element && element === node[0]);
+            return !!(element && (element === node[0]
+                || (typeof element.contains === 'function' && element.contains(node[0]))));
         } catch (e) { return false; }
     }
     function buttonId(button, used) {
@@ -154,14 +163,20 @@
             buttons.not(excluded).each(function () {
                 var btn = $(this);
                 var id = buttonId(btn, used);
-                items.push({id:id, title: clean(btn.find('span').first().text())
-                    || id.replace(/^b:/, '').replace(/[._-]/g,' '), node:btn});
+                var title = clean(btn.find('span').first().text())
+                    || clean(btn.find('.full-start__text').first().text())
+                    || clean(btn.attr('data-title')) || clean(btn.attr('aria-label'))
+                    || clean(btn.attr('title')) || clean(btn.attr('data-subtitle'))
+                    || id.replace(/^b:/, '').replace(/[._-]/g,' ');
+                items.push({id:id, title:title, node:btn});
             });
         }
-        addButtons(line.children('.full-start__button'));
-        // Include the original native source buttons so they can be reordered,
-        // hidden or placed in custom folders just like plugin-added buttons.
-        addButtons(line.children('.buttons--container').children('.full-start__button'));
+        // Third-party plugins frequently use .selector without the native
+        // .full-start__button class (or append AFTER full:complite).
+        // Keep the scan scoped to the button row and the native source holder.
+        addButtons(line.children('.full-start__button, .selector'));
+        addButtons(line.children('.buttons--container')
+            .children('.full-start__button, .selector'));
         return items;
     }
     function findCatalog(id) {
@@ -414,6 +429,7 @@
         if (observer) { observer.disconnect(); observer = null; }
         if (owner && owner[0] !== node[0]) restore(owner);
         owner = node;
+        ownerComponent = event.link || null;
         ownerStart = event.link && event.link.items && event.link.items[0] || null;
         apply(node);
         rememberNativeSourceFocus();
