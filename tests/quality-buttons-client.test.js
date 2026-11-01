@@ -108,8 +108,8 @@ const sourceHolder=node('buttons--container hide',[
 ]);
 const nativeTorrent=sourceHolder.children[0],nativeOnline=sourceHolder.children[1];
 const line=node('full-start-new__buttons',[play,book]);
-const page=node('full-page',[line,sourceHolder]),slide=node('activity-slide',[page]);
-const start={last:play},component={items:[start]};
+let page=node('full-page',[line,sourceHolder]),slide=node('activity-slide',[page]);
+let start={last:play},component={items:[start]};
 const settingsComponents=[],settingsParams=[],events={},storage=new Map(),selects=[],parents=[];
 let focus='content',selectOpen=false,invalidToggle=0,nav=[],selected=null,navBuilds=0;
 let activity={component:'full',activity:{component,render(){return $(slide);}}};
@@ -295,6 +295,86 @@ open();close();
 assert.equal(invalidToggle,0,'No alien controller was toggled');
 assert.ok(parents.every(x=>x==='full_start'),
     'Editor must only open from pencil while Full controller is active');
+// A saved layout applies to EVERY subsequent movie card, even if a third
+// party adds sources later or some source buttons are absent. Series have a
+// separate profile: editing a series must not modify the movie preferences.
+function anotherCard(kind, options={}){
+    const nextPlay=button('full-start__button selector button--play','Смотреть');
+    const nextBook=button('full-start__button selector button--book','Избранное');
+    const nextTorrent=button('full-start__button view--torrent','Торренты');
+    const nextOnline=button('full-start__button selector lampac--button','Онлайн');
+    const nextTrailer=button('full-start__button selector view--trailer','Трейлеры');
+    if(options.noTorrent)nextTorrent.classes.add('hide');
+    if(options.lateOnline)nextOnline.classes.add('hide');
+    const nextHolder=node('buttons--container hide',[nextTorrent,nextOnline,nextTrailer]);
+    const nextLine=node('full-start-new__buttons',[nextPlay,nextBook]);
+    const nextPage=node('full-page',[nextLine,nextHolder]);
+    const nextSlide=node('activity-slide',[nextPage]);
+    const nextStart={last:nextBook}; // model Lampa preferring Bookmarks
+    const nextComponent={items:[nextStart]};
+    page=nextPage;start=nextStart;component=nextComponent;slide=nextSlide;
+    activity={component:'full',activity:{component:nextComponent,render(){return $(nextSlide);}}};
+    focus='content';
+    events.full({type:'complite',body:[nextPage],link:nextComponent,
+        data:{movie:kind==='tv'
+            ?{name:'Сериал',first_air_date:'2025-03-20'}
+            :{title:'Фильм',release_date:'2025-03-20'}}});
+    L.Controller.toggle('full_start');
+    return {play:nextPlay,book:nextBook,torrent:nextTorrent,online:nextOnline,
+        trailer:nextTrailer,holder:nextHolder,line:nextLine,page:nextPage,start:nextStart};
+}
+const movieSaved=storage.get('quality_module_buttons_v2_movie');
+assert.ok(movieSaved,'Movie layout must persist in its own key');
+for(let i=0;i<4;i++){
+    const c=anotherCard('movie',{noTorrent:i%2===1,lateOnline:i===2});
+    assert.strictEqual(c.holder.parent,c.line,
+        'Native source holder stays ungrouped on every movie, including while sources load');
+    assert.ok(!c.play.classes.has('selector'),
+        'Native Source picker must never reappear between movies');
+    assert.ok(c.book.classes.has('quality-buttons-hidden'),
+        'Saved hidden state must survive each movie transition');
+    if(i!==2){
+        assert.strictEqual(c.start.last,c.online,
+            'New movie initial focus must be the first VISIBLE saved-order button');
+    }else{
+        assert.notStrictEqual(c.start.last,c.book,
+            'Late-loading source must not force focus onto hidden Bookmarks');
+        c.online.classes.delete('hide');
+        mutations[mutations.length-1].cb();
+        assert.equal(deferred.length,1);
+        deferred.shift()();
+        assert.ok(c.online.classes.has('selector'));
+        assert.strictEqual(c.holder.parent,c.line);
+        assert.ok(!c.play.classes.has('selector'));
+    }
+    assert.equal(storage.get('quality_module_buttons_v2_movie'),movieSaved,
+        'Browsing cards must never mutate saved movie layout');
+}
+let tv=anotherCard('tv');
+assert.equal(win.LampaQualityButtons.status().profile,'tv');
+assert.strictEqual(tv.start.last,tv.book,
+    'An unconfigured TV profile starts with its first visible native button');
+// Configure TV independently: move Torrents before Bookmarks.
+open();menu=latest();
+menu.onSelect(menu.items.find(x=>x.title==='Торренты'));
+actions=latest();
+actions.onSelect(actions.items.find(x=>x.action==='up'));
+close();
+const tvSaved=storage.get('quality_module_buttons_v2_tv');
+assert.ok(tvSaved,'Series must save to their own profile');
+assert.notStrictEqual(tvSaved,movieSaved);
+tv=anotherCard('tv',{lateOnline:true});
+assert.strictEqual(tv.start.last,tv.torrent,
+    'Each new TV card focuses the first button in its saved layout');
+assert.ok(!tv.book.classes.has('quality-buttons-hidden'),
+    'The movie hidden state must not leak into a TV layout');
+assert.equal(storage.get('quality_module_buttons_v2_tv'),tvSaved);
+const movieAgain=anotherCard('movie');
+assert.strictEqual(movieAgain.start.last,movieAgain.online,
+    'Returning from a series must restore movie visual order and focus');
+assert.ok(movieAgain.book.classes.has('quality-buttons-hidden'));
+assert.equal(storage.get('quality_module_buttons_v2_movie'),movieSaved);
+assert.equal(storage.get('quality_module_buttons_v2_tv'),tvSaved);
 activity={component:'online',activity:{render(){return $(node('online'));}}};
 focus='online';const previous=navBuilds;
 win.LampaQualityButtons.refresh();
