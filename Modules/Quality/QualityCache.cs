@@ -16,6 +16,9 @@ public static class QualityCache
     private static bool initialized;
     private static int writes;
     private const int MaxRows = 25000;
+    // Retain old badges long enough for an eventual user revisit; the client
+    // still rechecks at the much shorter configurable soft TTL.
+    private const int RetentionDays = 180;
     public const int MaxBatchSize = 30;
     public sealed record CacheRecord(string? label, long until, long checkedAt);
     public sealed record CacheWrite(string movie, string? label, int ttlDays);
@@ -135,8 +138,8 @@ public static class QualityCache
                 cmd.Parameters.AddWithValue("$source", source);
                 cmd.Parameters.AddWithValue("$movie", item.movie);
                 cmd.Parameters.AddWithValue("$label", (object?)item.label ?? DBNull.Value);
-                // Stale-while-revalidate: retain for two more days after soft TTL.
-                cmd.Parameters.AddWithValue("$expires", now + (item.ttlDays + 2L) * 86400000L);
+                // Hard retention is separate from the client's soft refresh TTL.
+                cmd.Parameters.AddWithValue("$expires", now + (RetentionDays + (long)item.ttlDays) * 86400000L);
                 cmd.Parameters.AddWithValue("$now", now);
                 cmd.ExecuteNonQuery();
             }
@@ -175,7 +178,7 @@ public static class QualityCache
                 cmd.Parameters.AddWithValue("$source", source);
                 cmd.Parameters.AddWithValue("$movie", movie);
                 cmd.Parameters.AddWithValue("$label", (object?)label ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$expires", now + days * 86400000L);
+                cmd.Parameters.AddWithValue("$expires", now + (RetentionDays + days) * 86400000L);
                 cmd.Parameters.AddWithValue("$now", now);
                 cmd.ExecuteNonQuery();
             }
