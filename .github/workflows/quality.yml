@@ -18,6 +18,7 @@ on:
       - 'tests/quality-online-select-client.test.js'
       - 'tests/quality-buttons-client.test.js'
       - 'tests/quality-module-config.test.js'
+      - 'tests/quality-visit-refresh-client.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -27,6 +28,7 @@ on:
       - 'tests/quality-online-filter-client.test.js'
       - 'tests/quality-buttons-client.test.js'
       - 'tests/quality-module-config.test.js'
+      - 'tests/quality-visit-refresh-client.test.js'
       - '!Modules/Quality/PLAN.md'
       - '!Modules/Quality/README.md'
       - 'tests/quality-client.test.js'
@@ -90,6 +92,7 @@ jobs:
           node tests/quality-online-select-client.test.js
           node tests/quality-buttons-client.test.js
           node tests/quality-module-config.test.js
+          node tests/quality-visit-refresh-client.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
