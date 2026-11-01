@@ -249,4 +249,53 @@ jobs:
           print('Quality SQLite: 150 writes + 150 reads in ten HTTP batches; seconds:',
                 round(time.monotonic()-start,3))
           PY
-          echo "Quality runtime plugin, status and SQLite cache: OK"
+          echo "Quality default runtime plugin, status and SQLite cache: OK"
+
+          # A separate server start proves the flags come from init.conf,
+          # not from Lampa.Storage or a mocked JS runtime.
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          sed -i 's/port: 9118/port: 9119/' /tmp/lampac-quality-smoke/init.yaml
+          printf '%s\n' '{"Quality":{"enable":true,"autoinject":false,"collect":false,"background":false,"onlinefilter":false,"buttons":true,"sqlcache":false}}' >/tmp/lampac-quality-smoke/init.conf
+          (cd /tmp/lampac-quality-smoke && exec dotnet Core.dll >/tmp/lampac-quality-flags.log 2>&1) &
+          pid=$!
+          found=0
+          for i in $(seq 1 180); do
+            if curl -fsS --max-time 2 http://127.0.0.1:9119/quality.js >/tmp/quality-flags.js 2>/dev/null; then
+              found=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              tail -n 150 /tmp/lampac-quality-flags.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$found" -ne 1 ]; then
+            tail -n 150 /tmp/lampac-quality-flags.log
+            exit 1
+          fi
+          node --check /tmp/quality-flags.js
+          grep -Fq '"collect":false' /tmp/quality-flags.js
+          grep -Fq '"onlinefilter":false' /tmp/quality-flags.js
+          grep -Fq '"buttons":true' /tmp/quality-flags.js
+          grep -Fq 'quality-buttons-pencil' /tmp/quality-flags.js
+          if grep -Fq 'qualityOnlineSelectShortcut' /tmp/quality-flags.js; then
+            echo 'Disabled Online filter was incorrectly bundled' >&2
+            exit 1
+          fi
+          curl -fsS --max-time 3 http://127.0.0.1:9119/quality/status > /tmp/quality-status-flags.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          status=json.loads(Path('/tmp/quality-status-flags.json').read_text())
+          assert status['module']=='Quality' and status['enabled'] is True
+          for field in ('autoinject','collect','background','onlinefilter','sqlcache'):
+              assert status[field] is False, (field,status)
+          assert status['buttons'] is True
+          PY
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            --data '{"op":"get","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb"}' \
+            http://127.0.0.1:9119/quality/cache)
+          [ "$code" = 404 ]
+          echo "Quality init.conf component isolation and disabled SQL endpoint: OK"
