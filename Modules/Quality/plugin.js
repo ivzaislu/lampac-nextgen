@@ -487,7 +487,10 @@
                 online_filter_revision: 2,
                 online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
                 online_filters_detected: onlineFiltersDetected,
-                online_filter_sources: onlineFilterSources};
+                online_filter_sources: onlineFilterSources,
+                online_select_hook: onlineSelectShortcutInstalled,
+                online_select_menus: onlineSelectMenus,
+                online_select_inserted: onlineSelectInserted};
         },
         refresh: function () { refreshKnown(true); }
     };
@@ -966,6 +969,112 @@
         return true;
     }
 
+    // Native Select's "preshow" event is emitted before Filter.show renders
+    // the menu. This also works when an Online plugin captured Lampa.Filter
+    // before Quality loaded, so constructor interception never ran.
+    var onlineSelectShortcutInstalled = false;
+    var onlineSelectMenus = 0, onlineSelectInserted = 0;
+    function onlineActivity() {
+        try {
+            return L.Activity && typeof L.Activity.active === 'function'
+                ? L.Activity.active() : null;
+        } catch (e) { return null; }
+    }
+    function nativeBalancerButton() {
+        var jq = root.jQuery || root.$ || (typeof $ === 'function' ? $ : null);
+        if (!jq) return null;
+        var activity = onlineActivity();
+        var view = null;
+        try {
+            if (activity && activity.activity
+                && typeof activity.activity.render === 'function')
+                view = activity.activity.render();
+        } catch (e) {}
+        var buttons = view && typeof view.find === 'function'
+            ? view.find('.filter--sort') : jq('.filter--sort');
+        if (!buttons || !buttons.length || typeof buttons.trigger !== 'function')
+            return null;
+        if (typeof buttons.filter === 'function') {
+            var visible = buttons.filter(':visible');
+            if (visible && visible.length) buttons = visible;
+        }
+        if (typeof buttons.last === 'function') buttons = buttons.last();
+        if (!buttons || !buttons.length) return null;
+        var title = '';
+        try {
+            if (typeof buttons.find === 'function') {
+                var caption = buttons.find('span');
+                if (caption && typeof caption.text === 'function')
+                    title = String(caption.text() || '');
+            }
+        } catch (e) {}
+        var namedOnline = activity && /^online(?:$|[_-])/i.test(String(activity.component || ''));
+        var expected = L.Lang && typeof L.Lang.translate === 'function'
+            ? String(L.Lang.translate('online_balanser') || '') : '';
+        if (!namedOnline
+            && !/(балансер|balancer)/i.test(title)
+            && !(expected && expected !== 'online_balanser' && title === expected))
+            return null;
+        return buttons;
+    }
+    function selectIsOnlineFilter(config) {
+        if (!config || !Array.isArray(config.items)) return false;
+        var hasReset = config.items.some(function (x) { return x && x.reset; });
+        if (!hasReset) return false;
+        // Stock Filter.show('filter') uses the translated filter title.
+        var title = String(config.title || '').toLowerCase();
+        var expected = L.Lang && typeof L.Lang.translate === 'function'
+            ? String(L.Lang.translate('filter_filtred') || '').toLowerCase() : '';
+        if (expected && title === expected) return !!nativeBalancerButton();
+        if (/фильтр|filter/i.test(title)) return !!nativeBalancerButton();
+        return false;
+    }
+    function addSourceToNativeSelect(event) {
+        var config = event && event.active;
+        if (!config || !Array.isArray(config.items)) return;
+        // Remove earlier menu-only shortcuts when the same Select configuration
+        // object is reused, including when the feature has just been disabled.
+        for (var i = config.items.length - 1; i >= 0; i--)
+            if (config.items[i] && config.items[i].qualityOnlineSelectShortcut)
+                config.items.splice(i, 1);
+        if (!onlineFilterEnabled() || !selectIsOnlineFilter(config)) return;
+        onlineSelectMenus++;
+        // Don't duplicate the source row when the original constructor bridge
+        // successfully populated the Filter options already.
+        if (config.items.some(function (x) { return x && x.qualityOnlineSource; }))
+            return;
+        var item = {
+            title: 'Источник / балансер',
+            subtitle: 'Выбрать источник',
+            noselect: true,
+            qualityOnlineSelectShortcut: true,
+            onSelect: function () {
+                if (!onlineFilterEnabled()) return;
+                var former = onlineActivity();
+                setTimeout(function () {
+                    if (!onlineFilterEnabled()) return;
+                    var current = onlineActivity();
+                    if (former && current && former !== current) return;
+                    var button = nativeBalancerButton();
+                    if (button) button.trigger('hover:enter');
+                }, 0);
+            }
+        };
+        config.items.splice(config.items[0] && config.items[0].reset ? 1 : 0, 0, item);
+        onlineSelectInserted++;
+        // Count a source menu confirmed by actual Select.preshow too; this
+        // status used to stay zero for online providers bypassing Lampa.Filter.
+        onlineFiltersDetected++;
+    }
+    function installOnlineSelectShortcut() {
+        if (onlineSelectShortcutInstalled) return true;
+        if (!L.Select || !L.Select.listener
+            || typeof L.Select.listener.follow !== 'function') return false;
+        L.Select.listener.follow('preshow', addSourceToNativeSelect);
+        onlineSelectShortcutInstalled = true;
+        return true;
+    }
+
     function registerSettings() {
         if (!L.SettingsApi || !L.SettingsApi.addComponent || !L.SettingsApi.addParam) return;
         L.SettingsApi.addComponent({
@@ -1018,14 +1127,18 @@
 
     function start() {
         installOnlineFilter();
+        installOnlineSelectShortcut();
         registerSettings();
         // L.Filter can be assigned after Quality starts when scripts are
         // loaded asynchronously. Retry on Lampa readiness, then stop polling
         // once the native Filter constructor is wrapped.
         var filterInstallTries = 0;
-        if (!onlineBridgeInstalled) {
+        if (!onlineBridgeInstalled || !onlineSelectShortcutInstalled) {
             var filterInstallTimer = setInterval(function () {
-                if (installOnlineFilter() || ++filterInstallTries >= 30)
+                installOnlineFilter();
+                installOnlineSelectShortcut();
+                if ((onlineBridgeInstalled && onlineSelectShortcutInstalled)
+                    || ++filterInstallTries >= 30)
                     clearInterval(filterInstallTimer);
             }, 1000);
             if (filterInstallTimer && typeof filterInstallTimer.unref === 'function')
@@ -1064,6 +1177,7 @@
         L.Listener.follow('app', function (event) {
             if (event && event.type === 'ready') {
                 installOnlineFilter();
+                installOnlineSelectShortcut();
                 scan();
             }
         });
