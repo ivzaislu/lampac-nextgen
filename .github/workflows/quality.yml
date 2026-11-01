@@ -15,6 +15,7 @@ on:
       - 'tests/quality-lifecycle-client.test.js'
       - 'tests/quality-online-filter-client.test.js'
       - 'tests/quality-online-select-client.test.js'
+      - 'tests/quality-buttons-client.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -22,6 +23,7 @@ on:
     paths:
       - 'Modules/Quality/**'
       - 'tests/quality-online-filter-client.test.js'
+      - 'tests/quality-buttons-client.test.js'
       - '!Modules/Quality/PLAN.md'
       - '!Modules/Quality/README.md'
       - 'tests/quality-client.test.js'
@@ -69,7 +71,10 @@ jobs:
         run: dotnet run --project tests/quality-autoinject/QualityAutoinject.csproj --configuration Release --nologo
 
       - name: Check Lampa plugin syntax
-        run: node --check Modules/Quality/plugin.js
+        run: |
+          node --check Modules/Quality/plugin.js
+          node --check Modules/Quality/online-filter.js
+          node --check Modules/Quality/buttons.js
 
       - name: Run client quality regression checks
         run: |
@@ -80,6 +85,7 @@ jobs:
           node tests/quality-lifecycle-client.test.js
           node tests/quality-online-filter-client.test.js
           node tests/quality-online-select-client.test.js
+          node tests/quality-buttons-client.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
@@ -96,6 +102,8 @@ jobs:
           value = json.loads(manifest.read_text())
           assert value['enable'] is True, 'Quality must load with its shipped manifest'
           assert Path('/tmp/lampac-quality-smoke/module/Quality/plugin.js').is_file()
+          assert Path('/tmp/lampac-quality-smoke/module/Quality/online-filter.js').is_file()
+          assert Path('/tmp/lampac-quality-smoke/module/Quality/buttons.js').is_file()
           PY
           cat > /tmp/lampac-quality-smoke/init.yaml <<'YAML'
           chromium:
@@ -136,6 +144,8 @@ jobs:
           fi
           node --check /tmp/quality-serve.js
           grep -Fq 'L.Parser.get(' /tmp/quality-serve.js
+          grep -Fq 'qualityOnlineSelectShortcut' /tmp/quality-serve.js
+          grep -Fq 'quality_buttons_open' /tmp/quality-serve.js
           curl -fsS --max-time 3 http://127.0.0.1:9118/quality/status > /tmp/quality-status.json
           python3 - <<'PY'
           import json
