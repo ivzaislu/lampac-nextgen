@@ -246,7 +246,7 @@ const folders=selected[selected.length-1];
 folders.onSelect(folders.items.find(x=>x.title==='Избранное'));
 assert.ok(torrentButton.classes.has('quality-buttons-in-folder'));
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-folder')).length,1);
-assert.equal(toggles,0);
+assert.equal(badToggles,0);
 storage.set('quality_buttons_pencil',true);
 setting('quality_buttons_pencil').onChange();
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,1);
@@ -276,7 +276,7 @@ assert.equal(badToggles,0,'Stale full-card work cannot steal Online remote focus
 openFromSettings();
 assert.equal(selected[selected.length-1].title,'Настройка кнопок',
     'Settings editor still works when Online is active');
-assert.equal(toggles,0);
+assert.equal(badToggles,0);
 selected[selected.length-1].onBack();
 assert.equal(focus,'settings_component',
     'Back from editor returns focus to native Settings component');
