@@ -102,6 +102,29 @@ actions.onSelect(actions.items.find(x=>x.action==='visibility'));
 assert.ok(movieButton.classes.has('quality-buttons-hidden'),
     'Only selected button should become hidden');
 assert.equal(toggles,0,'No global Controller.toggle during editing');
+// Order is stored without detaching existing plugin button nodes.
+setting('quality_buttons_open').onChange();
+editor=selected[selected.length-1];
+editor.onSelect(editor.items[1]);
+actions=selected[selected.length-1];
+actions.onSelect(actions.items.find(x=>x.action==='up'));
+assert.equal(torrentButton.style.order,'0');
+assert.equal(movieButton.style.order,'1');
+// Folder management is separate from the native buttons' click handlers.
+setting('quality_buttons_open').onChange();
+editor=selected[selected.length-1];
+editor.onSelect(editor.items.find(x=>x.action==='newFolder'));
+assert.equal(window.LampaQualityButtons.status().folders,1);
+setting('quality_buttons_open').onChange();
+editor=selected[selected.length-1];
+editor.onSelect(editor.items.find(x=>x.id===editor.items[1].id));
+actions=selected[selected.length-1];
+actions.onSelect(actions.items.find(x=>x.action==='folder'));
+const folders=selected[selected.length-1];
+folders.onSelect(folders.items.find(x=>x.title==='Избранное'));
+assert.ok(torrentButton.classes.has('quality-buttons-in-folder'));
+assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-folder')).length,1);
+assert.equal(toggles,0);
 storage.set('quality_buttons_pencil',true);
 setting('quality_buttons_pencil').onChange();
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,1);
