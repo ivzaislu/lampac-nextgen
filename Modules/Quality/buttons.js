@@ -663,6 +663,13 @@
     }
     function bindFull(event) {
         if (!event || event.type !== 'complite' || !event.body) return;
+        // Full can finish asynchronously AFTER another activity has become
+        // active. Never restore(owner), disconnect its observer or overwrite
+        // owner/profile for a different component's late completion.
+        // A skipped Full is picked up on its own activity:start via resumeFull.
+        var active = currentFull();
+        if (!event.link || !active || !active.activity
+            || active.activity.component !== event.link) return;
         var node = $(event.body[0] || event.body);
         if (!node.length || !node.find('.full-start-new__buttons').length) return;
         if (observer) { observer.disconnect(); observer = null; }
