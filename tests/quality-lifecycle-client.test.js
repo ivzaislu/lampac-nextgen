@@ -101,7 +101,7 @@ requests[1].done({Results:[{Title:'Example (2025) 1080p'}]});
 assert.equal(poster.badges[0].textContent,'FHD');
 assert.equal(full.badges[0].textContent,'FHD');
 assert.equal(poster.node.classList.contains('quality-module-replaces-native'),true,
-    'Quality's own FHD badge must replace the overlapping native label');
+    "Quality badge should replace the overlapping native quality label");
 assert.equal(poster.node.querySelector('.card__quality'),poster.nativeBadge,
     'Keep the native badge available for later restoration');
 assert.ok(source.includes(
