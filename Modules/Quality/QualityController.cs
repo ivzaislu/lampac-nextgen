@@ -42,7 +42,9 @@ public class QualityController : BaseController
     [Route("quality/status")]
     public ActionResult Status()
     {
-        return Ok(new
+        // Lampac's global JSON options may omit default bool=false.
+        // Status is diagnostic: every disabled flag must remain explicit.
+        return new JsonResult(new
         {
             module = "Quality",
             loaded = true,
@@ -54,7 +56,7 @@ public class QualityController : BaseController
             buttons = ModInit.conf?.buttons == true,
             source = "Lampa.Parser.get",
             sqlcache = ModInit.conf?.sqlcache == true
-        });
+        }, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.Never });
     }
     public sealed class CacheRequest
     {
