@@ -415,6 +415,11 @@ assert.equal(storage.get('quality_module_buttons_v2_tv'),tvSaved);
 const cachedTv=tv;
 const cachedTvActivity={component:'full',method:'tv',
     activity:{component:cachedTv.component,render(){return $(cachedTv.slide);}}};
+// We last visited a movie; first restore the cached series the same way
+// Lampa does before TranslationSub opens Online above that series.
+activity=cachedTvActivity;
+focus='full_start';
+events.activity({component:'full',type:'start',object:cachedTvActivity});
 activity={component:'lampac',activity:{render(){return $(node('online'));}}};
 focus='content';
 const savedTvBeforeBack=storage.get('quality_module_buttons_v2_tv');
