@@ -167,8 +167,11 @@ assert.equal(toggles,0);
 storage.set('quality_buttons_pencil',true);
 setting('quality_buttons_pencil').onChange();
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,1);
+nativeStart.last=nativeOnline;
 storage.set('quality_buttons_enabled',false);
 setting('quality_buttons_enabled').onChange();
+assert.strictEqual(nativeStart.last,playButton,
+    'Collapsing sources restores safe native Play focus instead of a hidden source');
 assert.strictEqual(sourceHolder.parent,page,
     'Disabling layout restores the original hidden source container');
 assert.ok(sourceHolder.classes.has('hide'));
