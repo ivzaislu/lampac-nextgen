@@ -374,8 +374,18 @@
     }
     function createFolder() {
         if (!L.Input || typeof L.Input.edit !== 'function') return;
+        var origin = editorReturnController;
         L.Input.edit({title:'Название папки',value:'',free:true,nosave:true,nomic:true},
             function (text) {
+                // Native Settings.Input.back() returns to settings_component.
+                // The editor's pencil can originate from Full instead.
+                if (origin === 'full_start' && isCurrent(owner) && L.Controller
+                    && typeof L.Controller.enabled === 'function'
+                    && typeof L.Controller.toggle === 'function') {
+                    var current = L.Controller.enabled();
+                    if (current && current.name === 'settings_component')
+                        L.Controller.toggle('full_start');
+                }
                 var title = clean(text).slice(0, 50);
                 if (!title) return;
                 change(function (value) {
