@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const script = fs.readFileSync(path.join(__dirname, '../Modules/Quality/plugin.js'), 'utf8');
+const script = fs.readFileSync(path.join(__dirname, '../Modules/Quality/plugin.js'), 'utf8') + '\n;\n'
+    + fs.readFileSync(path.join(__dirname, '../Modules/Quality/online-filter.js'), 'utf8');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Lampa's Online and Online Prestige both make new Lampa.Filter(object) and
