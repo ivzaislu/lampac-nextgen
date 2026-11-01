@@ -322,7 +322,11 @@ function anotherCard(kind, options={}){
     const nextStart={last:nextBook}; // model Lampa preferring Bookmarks
     const nextComponent={items:[nextStart],render(){return $(nextPage);}};
     page=nextPage;start=nextStart;component=nextComponent;slide=nextSlide;
-    activity={component:'full',activity:{component:nextComponent,render(){return $(nextSlide);}}};
+    const newActivity={component:'full',method:kind,
+        activity:{component:nextComponent,render(){return $(nextSlide);}}};
+    activity=options.backgroundCompletion
+        ?{component:'lampac',activity:{render(){return $(node('online'));}}}
+        :newActivity;
     focus='content';
     events.full({type:'complite',body:[nextPage],link:nextComponent,
         data:{movie:kind==='tv'
@@ -330,8 +334,9 @@ function anotherCard(kind, options={}){
                 ?{name:'Сериал',number_of_seasons:2}
                 :{name:'Сериал',first_air_date:'2025-03-20'})
             :{title:'Фильм',release_date:'2025-03-20'}}});
-    L.Controller.toggle('full_start');
-    return {play:nextPlay,book:nextBook,torrent:nextTorrent,online:nextOnline,
+    if(!options.backgroundCompletion)L.Controller.toggle('full_start');
+    return {activityObject:newActivity,
+        play:nextPlay,book:nextBook,torrent:nextTorrent,online:nextOnline,
         trailer:nextTrailer,thirdA,thirdB,holder:nextHolder,line:nextLine,
         page:nextPage,slide:nextSlide,component:nextComponent,start:nextStart};
 }
@@ -462,6 +467,29 @@ const origin=cachedTv.holder.parent;
 events.activity({component:'lampac',type:'start',object:activity});
 assert.strictEqual(cachedTv.holder.parent,origin,
     'Quality must never hijack a non-Full activity');
+
+// TranslationSub's real sequence pushes Full and immediately Lampac Online.
+// Api.full may send "full:complite" only AFTER Online has become active.
+const backgroundCard=anotherCard('tv',{backgroundCompletion:true});
+assert.equal(win.LampaQualityButtons.status().profile,'tv',
+    'Background Full completion retains the correct saved TV profile');
+assert.strictEqual(backgroundCard.holder.parent,backgroundCard.line);
+const beforeInactiveNav=navBuilds;
+events.activity({component:'full',type:'start',object:backgroundCard.activityObject});
+assert.equal(navBuilds,beforeInactiveNav,
+    'A start event for an INACTIVE cached Full must not steal Online focus');
+assert.equal(focus,'content');
+// Lampa Activity.backward() makes that cached Full active; no full:complite.
+activity=backgroundCard.activityObject;
+focus='full_start';
+events.activity({component:'full',type:'start',object:backgroundCard.activityObject});
+assert.strictEqual(backgroundCard.holder.parent,backgroundCard.line);
+assert.ok(!backgroundCard.play.classes.has('selector'));
+assert.strictEqual(backgroundCard.start.last,backgroundCard.torrent);
+assert.equal(backgroundCard.torrent.style.order,'0',
+    'Direct TranslationSub route restores saved series order on Back');
+assert.equal(storage.get('quality_module_buttons_v2_tv'),tvSaved,
+    'Background completion and return must never overwrite TV settings');
 
 // No stale toggle or unexpected controller activation is allowed.
 activity={component:'online',activity:{render(){return $(node('online'));}}};
