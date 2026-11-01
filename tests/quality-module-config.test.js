@@ -83,9 +83,12 @@ assert.equal(partial.win.LampaQuality.status().server_sqlcache,false);
 assert.equal(partial.win.LampaQuality.status().sql_cache,false);
 assert.equal(partial.win.LampaQuality.status().online_source_filter,false);
 assert.equal(partial.win.LampaQuality.status().background_refresh,false);
+assert.equal(partial.win.LampaQuality.status().refresh_on_visit,true);
 assert.ok(partial.params.some(p=>p.param.name==='quality_module_enabled'));
 assert.ok(!partial.params.some(p=>p.param.name==='quality_buttons_pencil'));
-assert.ok(!partial.params.some(p=>p.param.name==='quality_module_background'));
+assert.ok(!partial.params.some(p=>p.param.name==='quality_module_periodic_refresh'));
+assert.ok(partial.params.some(p=>p.param.name==='quality_module_refresh_on_visit'),
+    'On-visit refresh is independent of the periodic collector server flag');
 assert.ok(!partial.params.some(p=>p.param.name==='quality_module_refresh_minutes'),
     'No background interval control when server disabled background refresh');
 assert.ok(!partial.params.some(p=>p.param.name==='quality_module_batch_size'),
@@ -103,8 +106,18 @@ assert.equal(defaultConfig.win.LampaQuality.status().server_onlinefilter,true);
 assert.equal(defaultConfig.win.LampaQuality.status().server_sqlcache,true);
 assert.equal(defaultConfig.win.LampaQuality.status().configured,true);
 assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_buttons_pencil'));
-assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_module_background'));
-assert.equal(defaultConfig.timerCalls(),1,'Legacy install retains background refresh timer');
+assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_module_periodic_refresh'));
+assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_module_refresh_on_visit'));
+assert.equal(defaultConfig.win.LampaQuality.status().background_refresh,false,
+    'Periodic refresh is opt-in even for upgraded installations');
+assert.equal(defaultConfig.win.LampaQuality.status().refresh_on_visit,true);
+defaultConfig.local.set('quality_module_background',true);
+assert.equal(defaultConfig.win.LampaQuality.status().background_refresh,false,
+    'Old Lampa background=true must not migrate to the new default-off control');
+defaultConfig.local.set('quality_module_periodic_refresh',true);
+assert.equal(defaultConfig.win.LampaQuality.status().background_refresh,true,
+    'Opting in to the new setting enables periodic refresh');
+assert.equal(defaultConfig.timerCalls(),1,'Periodic timer exists but makes no requests until enabled');
 assert.equal(defaultConfig.local.has('quality_module_sql_scope_v1'),true);
 
 const allOff=launch({collect:false,background:false,
