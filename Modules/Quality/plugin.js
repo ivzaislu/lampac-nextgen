@@ -991,7 +991,10 @@
                 view = activity.activity.render();
         } catch (e) {}
         var buttons = view && typeof view.find === 'function'
-            ? view.find('.filter--sort') : jq('.filter--sort');
+            ? view.find('.filter--sort') : null;
+        // Some Online forks mount the filter outside activity.render().
+        if (!buttons || !buttons.length)
+            buttons = jq('.filter--sort');
         if (!buttons || !buttons.length || typeof buttons.trigger !== 'function')
             return null;
         if (typeof buttons.filter === 'function') {
