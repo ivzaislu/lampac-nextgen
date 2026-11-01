@@ -321,7 +321,9 @@ function anotherCard(kind, options={}){
     focus='content';
     events.full({type:'complite',body:[nextPage],link:nextComponent,
         data:{movie:kind==='tv'
-            ?{name:'Сериал',first_air_date:'2025-03-20'}
+            ?(options.noDate
+                ?{name:'Сериал',number_of_seasons:2}
+                :{name:'Сериал',first_air_date:'2025-03-20'})
             :{title:'Фильм',release_date:'2025-03-20'}}});
     L.Controller.toggle('full_start');
     return {play:nextPlay,book:nextBook,torrent:nextTorrent,online:nextOnline,
@@ -369,7 +371,9 @@ close();
 const tvSaved=storage.get('quality_module_buttons_v2_tv');
 assert.ok(tvSaved,'Series must save to their own profile');
 assert.notStrictEqual(tvSaved,movieSaved);
-tv=anotherCard('tv',{lateOnline:true});
+tv=anotherCard('tv',{lateOnline:true,noDate:true});
+assert.equal(win.LampaQualityButtons.status().profile,'tv',
+    'A series with missing first-air date keeps its TV layout');
 assert.strictEqual(tv.start.last,tv.torrent,
     'Each new TV card focuses the first button in its saved layout');
 assert.ok(!tv.book.classes.has('quality-buttons-hidden'),
