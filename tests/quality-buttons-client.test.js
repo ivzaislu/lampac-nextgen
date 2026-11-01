@@ -313,4 +313,15 @@ assert.ok(selectParents.every(x=>x==='settings_component' || x==='full_start'),
 if(focus==='settings_component')focus='settings';
 if(focus==='settings')focus='head';
 assert.equal(focus,'head','Settings must be escapable after editing buttons');
+// Do not seize a Select which is already open for an unrelated plugin.
+focus='select';
+selectOpened=true;
+const oldMenuCount=selected.length;
+const oldRestorations=nativeRestorations;
+window.LampaQualityButtons.open();
+assert.equal(focus,'select','Unrelated plugin Select keeps its focus');
+assert.equal(selectOpened,true,'Unrelated plugin Select stays open');
+assert.equal(selected.length,oldMenuCount,'Editor must not stack over another Select');
+assert.equal(nativeRestorations,oldRestorations,
+    'Editor must not toggle Controller while an unrelated Select owns it');
 console.log('Quality Buttons: native Select/Settings back, order, folders and remote focus OK');
