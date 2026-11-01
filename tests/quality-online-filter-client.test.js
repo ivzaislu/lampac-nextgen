@@ -17,6 +17,10 @@ function FakeFilter(params) {
 FakeFilter.prototype.set = function(type, items) {this.data[type] = items;};
 FakeFilter.prototype.get = function(type) {return this.data[type];};
 FakeFilter.prototype.chosen = function(type, text) {this.chosenText[type] = text;};
+FakeFilter.prototype.destroy = function() {
+    // Real Lampa.Filter.destroy() sets its closed-over data object to null.
+    this.data=null;
+};
 let nativeMenuOpens = 0;
 FakeFilter.prototype.render = function() {
     return {find(selector) {
@@ -62,7 +66,7 @@ vm.runInNewContext(script, {window:win,document,MutationObserver:Mutation,
     console
 }, {filename:'quality-online-filter.js'});
 assert.equal(win.LampaQuality.status().online_source_filter,true);
-assert.equal(win.LampaQuality.status().online_filter_revision,5);
+assert.equal(win.LampaQuality.status().online_filter_revision,6);
 assert.equal(win.LampaQuality.status().online_filter_hook,true);
 assert.notEqual(L.Filter,FakeFilter,'Bridge must be installed once');
 
@@ -155,6 +159,37 @@ function menu(component) {
     const setting=params.filter(x=>x.param.name==='quality_module_online_source_filter');
     assert.equal(setting.length,1);
     assert.equal(setting[0].param.default,true);
+
+    // Real incident: after leaving Online, its Filter.destroy() clears data.
+    // Changing the Quality option in Settings must not call nativeSet on it.
+    prestige.filter.destroy();
+    assert.equal(prestige.filter.data,null,'Simulate Lampa clearing Filter data');
+    values.set('quality_module_online_source_filter',false);
+    assert.doesNotThrow(()=>storageListeners.change({name:'quality_module_online_source_filter'}),
+        'Switching Quality off must not refresh the destroyed Online filter');
+    assert.doesNotThrow(()=>setting[0].onChange(),
+        'SettingsApi onChange must also tolerate a destroyed Online filter');
+    values.set('quality_module_online_source_filter',true);
+    assert.doesNotThrow(()=>storageListeners.change({name:'quality_module_online_source_filter'}),
+        'Switching Quality back on must not touch a destroyed filter');
+    // A fresh Online page still responds to the toggle after old filter disposal.
+    const reopened=menu('online');
+    assert.equal(reopened.filter.get('filter').filter(x=>x.qualityOnlineSource).length,1);
+    values.set('quality_module_online_source_filter',false);
+    assert.doesNotThrow(()=>setting[0].onChange());
+    assert.equal(reopened.filter.get('filter').some(x=>x.qualityOnlineSource),false);
+    values.set('quality_module_online_source_filter',true);
+    setting[0].onChange();
+    assert.equal(reopened.filter.get('filter').filter(x=>x.qualityOnlineSource).length,1);
+    // Destroying an older instance must not invalidate the newest instance.
+    const older=menu('online'), newer=menu('online');
+    older.filter.destroy();
+    values.set('quality_module_online_source_filter',false);
+    setting[0].onChange();
+    assert.equal(newer.filter.get('filter').some(x=>x.qualityOnlineSource),false);
+    values.set('quality_module_online_source_filter',true);
+    setting[0].onChange();
+    assert.equal(newer.filter.get('filter').filter(x=>x.qualityOnlineSource).length,1);
 
     // Other Lampa components (torrent/search) are never patched.
     const torrent=menu('torrent');
