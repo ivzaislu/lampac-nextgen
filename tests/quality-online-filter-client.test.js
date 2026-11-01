@@ -52,6 +52,7 @@ vm.runInNewContext(script, {window:win,document,MutationObserver:Mutation,
     console
 }, {filename:'quality-online-filter.js'});
 assert.equal(win.LampaQuality.status().online_source_filter,true);
+assert.equal(win.LampaQuality.status().online_filter_revision,2);
 assert.equal(win.LampaQuality.status().online_filter_hook,true);
 assert.notEqual(L.Filter,FakeFilter,'Bridge must be installed once');
 
@@ -216,5 +217,12 @@ function menu(component) {
     assert.equal(lateWin.LampaQuality.status().online_filter_hook,true,
         'App-ready must retry installing Lampa.Filter wrapper');
     assert.notEqual(delayedL.Filter,FakeFilter);
+    delayedL.Filter=FakeFilter; // simulate another plugin replacing L.Filter
+    assert.equal(lateWin.LampaQuality.status().online_filter_hook,false,
+        'Diagnostic must reflect the current real constructor, not a stale flag');
+    lateListeners.app({type:'ready'});
+    assert.equal(lateWin.LampaQuality.status().online_filter_hook,true,
+        'App-ready restores a replaced Filter bridge');
+
     console.log('Quality online: native source, component-less forks, late installation, toggle and isolation OK');
 })().catch(err=>{console.error(err);process.exitCode=1;});

@@ -484,7 +484,8 @@
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
                 online_source_filter: onlineFilterEnabled(),
-                online_filter_hook: onlineBridgeInstalled,
+                online_filter_revision: 2,
+                online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
                 online_filters_detected: onlineFiltersDetected,
                 online_filter_sources: onlineFilterSources};
         },
