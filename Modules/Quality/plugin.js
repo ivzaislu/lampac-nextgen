@@ -704,7 +704,13 @@
             : node.querySelector('.card__view');
         if (!parent) return;
         var badge = parent.querySelector('.quality-module-badge');
-        if (!label) { if (badge && badge.remove) badge.remove(); return; }
+        if (!label) {
+            if (badge && badge.remove) badge.remove();
+            // Restore native/CUB badges instead of deleting their DOM or styles.
+            if (!full && parent.classList)
+                parent.classList.remove('quality-module-replaces-native');
+            return;
+        }
         if (!badge) {
             badge = document.createElement('div');
             parent.appendChild(badge);
@@ -712,6 +718,10 @@
         badge.className = (full ? 'full-start__status quality-module-full'
             : 'card__quality quality-module-poster') + ' quality-module-badge quality-module-' + label.toLowerCase();
         badge.textContent = label;
+        // Hide other quality labels only while our own confirmed badge exists.
+        // CSS also covers native badges inserted later by CUB.
+        if (!full && parent.classList)
+            parent.classList.add('quality-module-replaces-native');
     }
 
     function load(itemData, node, full) {
@@ -757,7 +767,7 @@
             var card = cards[i];
             var previous = card.querySelector('.quality-module-badge');
             if (!enabled) {
-                if (previous && previous.remove) previous.remove();
+                draw(card, null, false);
                 if (observed) observed.delete(card);
                 continue;
             }
@@ -772,7 +782,7 @@
                 continue;
             }
             if (observed) observed.set(card, identity);
-            if (previous && previous.remove) previous.remove();
+            if (previous) draw(card, null, false);
             if (intersection) intersection.observe(card);
             else load(card.card_data, card, false);
         }
@@ -1175,7 +1185,8 @@
                 filterInstallTimer.unref();
         }
         var style = document.createElement('style');
-        style.textContent = '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
+        style.textContent = '.card__view.quality-module-replaces-native .card__quality:not(.quality-module-badge){display:none!important;}'
+            + '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
             + 'font-weight:750;text-align:center;white-space:nowrap;line-height:1.35;'
             + 'letter-spacing:.015em;text-shadow:0 1px 1px rgba(0,0,0,.16);}'
             + '.card__quality.quality-module-poster{left:-.7em;bottom:3em;top:auto;right:auto;'
