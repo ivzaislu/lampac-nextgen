@@ -172,7 +172,12 @@
     }
     function safeApply() {
         if (!owner || !isCurrent(owner)) return;
+        // Our own pencil/folder edits change childList. Suspend observation
+        // during layout updates to prevent a perpetual refresh loop.
+        var area = owner.find('.full-start-new__buttons')[0];
+        if (observer) observer.disconnect();
         try { apply(owner); } catch (e) { /* other plugins may destroy the view */ }
+        if (observer && area) observer.observe(area, {childList:true,subtree:false});
     }
     function rerender() {
         if (owner && isCurrent(owner)) safeApply();
