@@ -145,7 +145,12 @@ jobs:
           node --check /tmp/quality-serve.js
           grep -Fq 'L.Parser.get(' /tmp/quality-serve.js
           grep -Fq 'qualityOnlineSelectShortcut' /tmp/quality-serve.js
-          grep -Fq 'quality_buttons_open' /tmp/quality-serve.js
+          grep -Fq 'quality_buttons_pencil' /tmp/quality-serve.js
+          grep -Fq 'quality-buttons-pencil' /tmp/quality-serve.js
+          if grep -Fq "component:'quality_buttons'" /tmp/quality-serve.js; then
+            echo 'Obsolete Quality Buttons settings component still bundled' >&2
+            exit 1
+          fi
           curl -fsS --max-time 3 http://127.0.0.1:9118/quality/status > /tmp/quality-status.json
           python3 - <<'PY'
           import json
