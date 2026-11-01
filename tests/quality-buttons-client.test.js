@@ -16,6 +16,9 @@ class Q {
     constructor(nodes){this.nodes=nodes.filter(Boolean);this.length=this.nodes.length;
         for(let i=0;i<this.nodes.length;i++)this[i]=this.nodes[i];}
     first(){return new Q(this.nodes.slice(0,1));}
+    parent(){return new Q([this.nodes[0] && this.nodes[0].parent]);}
+    hasClass(name){return !!this.nodes[0] && this.nodes[0].classes.has(name);}
+    addClass(names){this.nodes.forEach(n=>names.split(' ').forEach(x=>n.classes.add(x)));return this;}
     find(selector){
         const s=selector.split(/\s+/).pop(),results=[];
         function walk(n){n.children.forEach(x=>{if(matches(x,s)||s==='span'&&x.tag==='span')results.push(x);walk(x);});}
@@ -68,7 +71,18 @@ const playButton=node('full-start__button button--play',[]);
 const playSpan=node('',[]);playSpan.tag='span';playSpan.textValue='Воспроизвести';
 playButton.children.push(playSpan);playSpan.parent=playButton;
 const line=node('full-start-new__buttons',[movieButton,torrentButton,playButton]);
-const page=node('full-page',[line]);
+function nativeSource(type,title){
+    const b=node('full-start__button selector '+type,[]);
+    const label=node('',[]);label.tag='span';label.textValue=title;
+    b.children.push(label);label.parent=b;
+    b.events['hover:enter']=()=>{b.clicked=(b.clicked||0)+1;};
+    return b;
+}
+const nativeTorrent=nativeSource('view--torrent','Торренты');
+const nativeOnline=nativeSource('lampac--button','Онлайн');
+const nativeTrailer=nativeSource('view--trailer','Трейлеры');
+const sourceHolder=node('hide buttons--container',[nativeTorrent,nativeOnline,nativeTrailer]);
+const page=node('full-page',[line,sourceHolder]);
 const storage=new Map(),events={},params=[],selected=[];
 let active={component:'full',activity:{render(){return $(page);}}},focus='full_start',toggles=0;
 const L={Storage:{get(k,def){return storage.has(k)?storage.get(k):def;},set(k,v){storage.set(k,v);},
@@ -91,6 +105,20 @@ assert.ok(setting('quality_buttons_open'));
 assert.ok(setting('quality_buttons_pencil'));
 assert.equal(setting('quality_buttons_pencil').param.default,false);
 events.full({type:'complite',body:[page]});
+assert.strictEqual(sourceHolder.parent,line,
+    'Native Source folder must be unfolded on the full-card toolbar');
+assert.equal(sourceHolder.classes.has('hide'),false);
+assert.ok(line.classes.has('quality-buttons-ungrouped'));
+assert.ok(playButton.classes.has('quality-buttons-play-hidden'),
+    'Native Play source picker is hidden when source actions are visible');
+assert.equal(nativeTorrent.attrs['data-quality-buttons-id'],'b:view--torrent');
+assert.equal(nativeOnline.attrs['data-quality-buttons-id'],'b:lampac--button');
+assert.equal(nativeTrailer.attrs['data-quality-buttons-id'],'b:view--trailer');
+assert.strictEqual(sourceHolder.children[0],nativeTorrent,
+    'Unfold uses original plugin nodes rather than clones');
+$(nativeOnline).trigger('hover:enter');
+assert.equal(nativeOnline.clicked,1,'Original Online click handler survives unfolding');
+assert.equal(toggles,0,'Unfolding must not switch the TV controller');
 assert.equal(movieButton.style.order,'');
 assert.equal(torrentButton.style.order,'',
     'Native order must remain untouched before the user customizes it');
@@ -135,10 +163,16 @@ setting('quality_buttons_pencil').onChange();
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,1);
 storage.set('quality_buttons_enabled',false);
 setting('quality_buttons_enabled').onChange();
+assert.strictEqual(sourceHolder.parent,page,
+    'Disabling layout restores the original hidden source container');
+assert.ok(sourceHolder.classes.has('hide'));
+assert.ok(!playButton.classes.has('quality-buttons-play-hidden'),
+    'Disabling Quality restores native Play source picker');
 assert.ok(!movieButton.classes.has('quality-buttons-hidden'));
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,0);
 storage.set('quality_buttons_enabled',true);
 setting('quality_buttons_enabled').onChange();
+assert.strictEqual(sourceHolder.parent,line,'Re-enable expands native folder again');
 assert.ok(movieButton.classes.has('quality-buttons-hidden'));
 
 active={component:'lampac',activity:{render(){return $(node('other',[]));}}};
