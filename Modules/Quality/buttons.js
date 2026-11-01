@@ -4,7 +4,11 @@
     if (root.__qualityButtonsLoaded || !root.Lampa || !root.Lampa.Listener
         || !root.Lampa.Storage) return;
     var L = root.Lampa;
-    var storageKey = 'quality_module_buttons_v1';
+    // Keep the old layout as a migration fallback; new movie/TV edits are
+    // isolated so editing a series can never overwrite a movie layout.
+    var legacyStorageKey = 'quality_module_buttons_v1';
+    var storageKeyPrefix = 'quality_module_buttons_v2_';
+    var profile = 'movie';
     var owner = null, ownerComponent = null, ownerStart = null, catalog = [], pencil = null, folderNodes = [];
     var observer = null, scheduled = false;
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
@@ -21,8 +25,18 @@
         var value = getOption('quality_buttons_pencil', false);
         return value === true || String(value) === 'true';
     }
+    function profileFromFull(event) {
+        var movie = event && event.data && event.data.movie;
+        if (!movie && event && event.props && typeof event.props.get === 'function')
+            movie = event.props.get('movie');
+        // Lampa Full receives a TMDB TV entry with first_air_date/name.
+        // Film entries use title/release_date instead.
+        return movie && (movie.first_air_date || (movie.name && !movie.title))
+            ? 'tv' : 'movie';
+    }
     function model() {
-        var value = getOption(storageKey, {});
+        var value = getOption(storageKeyPrefix + profile, null);
+        if (value === null) value = getOption(legacyStorageKey, {});
         if (typeof value === 'string') {
             try { value = JSON.parse(value); } catch (e) { value = {}; }
         }
@@ -34,7 +48,7 @@
             folders: Array.isArray(value.folders) ? value.folders.slice(0, 20) : []
         };
     }
-    function save(value) { L.Storage.set(storageKey, value); }
+    function save(value) { L.Storage.set(storageKeyPrefix + profile, value); }
     function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
     function currentFull() {
         if (!L.Activity || typeof L.Activity.active !== 'function') return null;
@@ -98,12 +112,30 @@
     }
     function focusCandidate() {
         if (!owner || !owner.length) return null;
-        var line = owner.find('.full-start-new__buttons').first();
-        var candidate = line.find('.full-start__button.selector').not(
-            '.hide,.quality-buttons-hidden,.quality-buttons-in-folder,'
-            + '.quality-buttons-play-hidden').first();
-        if (candidate.length) return candidate[0];
-        return null;
+        // The native DOM order differs from the visible CSS "order". Using
+        // .find(...).first() always selected Bookmarks before an earlier
+        // user-positioned Online button. Rank actual visible actions instead.
+        var items = [], position = 0, layout = model();
+        function candidate(node) {
+            if (!node || !node.length || !node.hasClass('selector')
+                || node.hasClass('hide') || node.hasClass('quality-buttons-hidden')
+                || node.hasClass('quality-buttons-in-folder')
+                || node.hasClass('quality-buttons-play-hidden')) return;
+            var raw = node[0];
+            if (!raw || !owner[0] || !owner[0].contains
+                || !owner[0].contains(raw)) return;
+            var id = node.attr('data-quality-buttons-id');
+            var index = layout.order.indexOf(id);
+            var value = layout.order.length
+                ? (index >= 0 ? index : 1000 + position)
+                : Number(node.css('order')) || 0;
+            items.push({node:raw, order:value, position:position++});
+        }
+        catalog.forEach(function (entry) { candidate(entry.node); });
+        folderNodes.forEach(candidate);
+        candidate(pencil);
+        items.sort(function (a,b) { return a.order-b.order || a.position-b.position; });
+        return items.length ? items[0].node : null;
     }
     function ensureFocusCandidate() {
         if (!ownerStart) return;
@@ -172,11 +204,9 @@
         var line = view.find('.full-start-new__buttons').first();
         var holder = view.find('.buttons--container').first();
         if (!line.length || !holder.length) return;
-        var sources = holder.children('.full-start__button').not('.hide');
-        if (!sources.length) {
-            if (nativeSources) restoreNativeSources(view);
-            return;
-        }
+        // The holder can be empty during full:complite. Keep it ungrouped
+        // anyway: async Online plugins populate it later. Otherwise the
+        // native "Source" picker reappears randomly between cards.
         if (!nativeSources || nativeSources[0] !== holder[0]) {
             if (nativeSources) restoreNativeSources(owner);
             nativeSources = holder;
@@ -549,12 +579,16 @@
         owner = node;
         ownerComponent = event.link || null;
         ownerStart = event.link && event.link.items && event.link.items[0] || null;
+        profile = profileFromFull(event);
         apply(node);
         rememberNativeSourceFocus();
         // Lampa's native full-start controller has not yet been toggled when
         // full:complite fires. Avoid a stale remembered focus on hidden Play.
         var play = node.find('.button--play').first();
-        ensureFocusCandidate();
+        // The first focus on a NEW card always follows the saved visual
+        // order. On later refreshes ensureFocusCandidate preserves the user's
+        // current focused button instead of stealing the remote.
+        if (ownerStart) ownerStart.last = focusCandidate();
         if (typeof MutationObserver === 'function') {
             var area = node.find('.full-start-new__buttons')[0];
             observer = new MutationObserver(function () {
@@ -591,7 +625,7 @@
     }
     root.LampaQualityButtons = {refresh:rerender,
         status:function () { return {loaded:true,
-            pencil:pencilEnabled(),known_buttons:catalog.length,
+            pencil:pencilEnabled(),profile:profile,known_buttons:catalog.length,
             folders:model().folders.length}; }};
     root.__qualityButtonsLoaded = true;
     if (document.body) init();
