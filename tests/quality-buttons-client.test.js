@@ -64,7 +64,10 @@ movieButton.children.push(movieSpan);movieSpan.parent=movieButton;
 const torrentButton=node('full-start__button view--torrents',[]);
 const torrentSpan=node('',[]);torrentSpan.tag='span';torrentSpan.textValue='Торренты';
 torrentButton.children.push(torrentSpan);torrentSpan.parent=torrentButton;
-const line=node('full-start-new__buttons',[movieButton,torrentButton]);
+const playButton=node('full-start__button button--play',[]);
+const playSpan=node('',[]);playSpan.tag='span';playSpan.textValue='Воспроизвести';
+playButton.children.push(playSpan);playSpan.parent=playButton;
+const line=node('full-start-new__buttons',[movieButton,torrentButton,playButton]);
 const page=node('full-page',[line]);
 const storage=new Map(),events={},params=[],selected=[];
 let active={component:'full',activity:{render(){return $(page);}}},focus='full_start',toggles=0;
@@ -91,6 +94,8 @@ events.full({type:'complite',body:[page]});
 assert.equal(movieButton.style.order,'');
 assert.equal(torrentButton.style.order,'',
     'Native order must remain untouched before the user customizes it');
+assert.equal(playButton.attrs['data-quality-buttons-id'],undefined,
+    'Protected native Play button cannot be reordered or hidden');
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,0,
     'Pencil should not take remote focus by default');
 setting('quality_buttons_open').onChange();
