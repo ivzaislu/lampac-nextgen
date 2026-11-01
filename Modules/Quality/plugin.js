@@ -1008,7 +1008,10 @@
                     title = String(caption.text() || '');
             }
         } catch (e) {}
-        var namedOnline = activity && /^online(?:$|[_-])/i.test(String(activity.component || ''));
+        var componentName = activity ? String(activity.component || '') : '';
+        if (/^(?:torrent|torrents|mytorrents|settings|full|main|search|category|favorite|bookmarks|plugins|actor)$/i.test(componentName))
+            return null;
+        var namedOnline = /^online(?:$|[_-])/i.test(componentName);
         var expected = L.Lang && typeof L.Lang.translate === 'function'
             ? String(L.Lang.translate('online_balanser') || '') : '';
         if (!namedOnline
