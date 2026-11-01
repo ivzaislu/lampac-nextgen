@@ -86,6 +86,10 @@ assert.equal(partial.win.LampaQuality.status().background_refresh,false);
 assert.ok(partial.params.some(p=>p.param.name==='quality_module_enabled'));
 assert.ok(!partial.params.some(p=>p.param.name==='quality_buttons_pencil'));
 assert.ok(!partial.params.some(p=>p.param.name==='quality_module_background'));
+assert.ok(!partial.params.some(p=>p.param.name==='quality_module_refresh_minutes'),
+    'No background interval control when server disabled background refresh');
+assert.ok(!partial.params.some(p=>p.param.name==='quality_module_batch_size'),
+    'No SQL batch option when server disabled SQL');
 assert.ok(partial.handlers.full);
 assert.equal(partial.timerCalls(),0,'init.conf background=false must disable periodic collector timer');
 assert.equal(partial.sqlCalls(),0,'SQL disabled in init.conf must not reach backend');
