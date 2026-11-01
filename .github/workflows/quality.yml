@@ -16,6 +16,7 @@ on:
       - 'tests/quality-online-filter-client.test.js'
       - 'tests/quality-online-select-client.test.js'
       - 'tests/quality-buttons-client.test.js'
+      - 'tests/quality-module-config.test.js'
       - 'tests/quality-autoinject/**'
       - 'NextGen.slnx'
       - '.github/workflows/quality.yml'
@@ -24,6 +25,7 @@ on:
       - 'Modules/Quality/**'
       - 'tests/quality-online-filter-client.test.js'
       - 'tests/quality-buttons-client.test.js'
+      - 'tests/quality-module-config.test.js'
       - '!Modules/Quality/PLAN.md'
       - '!Modules/Quality/README.md'
       - 'tests/quality-client.test.js'
@@ -86,6 +88,7 @@ jobs:
           node tests/quality-online-filter-client.test.js
           node tests/quality-online-select-client.test.js
           node tests/quality-buttons-client.test.js
+          node tests/quality-module-config.test.js
 
       - name: Publish Lampac for dynamic module smoke
         run: dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-quality-smoke --nologo -p:PlaywrightPlatform=linux-x64
@@ -161,6 +164,10 @@ jobs:
           assert status['enabled'] is True
           assert status['autoinject'] is True
           assert status['sqlcache'] is True
+          assert status['collect'] is True
+          assert status['background'] is True
+          assert status['onlinefilter'] is True
+          assert status['buttons'] is True
           PY
           curl -fsS --max-time 5 -X POST -H 'Content-Type: application/json' \
             --data '{"op":"put","scope":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","source":"aaaaaaaaaaaaaaaa","movie":"bbbbbbbbbbbbbbbb","label":"4K"}' \
