@@ -484,7 +484,9 @@
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
                 online_source_filter: onlineFilterEnabled(),
-                online_filter_hook: onlineBridgeInstalled};
+                online_filter_hook: onlineBridgeInstalled,
+                online_filters_detected: onlineFiltersDetected,
+                online_filter_sources: onlineFilterSources};
         },
         refresh: function () { refreshKnown(true); }
     };
@@ -771,57 +773,97 @@
         }
     }
 
-    // Optional Online UX bridge. Lampa's Online and Online Prestige already
-    // expose balancers through the "sort" menu, whereas translations/seasons
-    // are in "filter". Reuse the native sort handler instead of changing the
-    // providers or emulating translation/season logic.
-    var currentOnlineFilter = null;
-    var onlineBridgeInstalled = false;
+    // Optional Online UX bridge. Identify the actual balancer list populated
+    // by Lampa rather than assuming Activity passes a "component" property to
+    // every Filter constructor. The previous assumption made the shortcut
+    // silently disappear in some Online installations.
+    var currentOnlineFilter = null, onlineBridgeInstalled = false;
+    var onlineFiltersDetected = 0, onlineFilterSources = 0;
     function onlineFilterEnabled() {
-        return setting('quality_module_online_source_filter', true) !== false
-            && String(setting('quality_module_online_source_filter', true)) !== 'false';
+        var value = setting('quality_module_online_source_filter', true);
+        return value !== false && String(value) !== 'false';
     }
     function updateOnlineFilter() {
         if (currentOnlineFilter && currentOnlineFilter.refresh)
             currentOnlineFilter.refresh();
     }
+    function onlineBalancerList(items) {
+        if (!Array.isArray(items) || items.length < 2) return false;
+        var names = Object.create(null);
+        return items.every(function (item) {
+            if (!item || typeof item.source !== 'string'
+                || !/^[a-z0-9_-]{2,40}$/i.test(item.source)
+                || typeof item.title !== 'string'
+                || !item.title.trim() || names[item.source]) return false;
+            names[item.source] = true;
+            return true;
+        });
+    }
+    function onlineFilterScope(params, filterItems, sortItems) {
+        if (!onlineBalancerList(sortItems)) return '';
+        var declared = params && typeof params.component === 'string'
+            ? params.component.toLowerCase() : '';
+        // Never modify another named activity even if it happens to expose
+        // fields called "source", "voice" or "season".
+        if (declared && !/^online(?:$|[_-])/.test(declared)) return '';
+        if (declared) return declared;
+        var current = L.Activity && typeof L.Activity.active === 'function'
+            ? L.Activity.active() : null;
+        var activity = current && String(current.component || '').toLowerCase();
+        if (activity && /^online(?:$|[_-])/.test(activity)) return activity;
+        // Stock Lampa balancers are enough evidence when some forks omit the
+        // component name on the Filter's params object.
+        var recognized = {videocdn: true, rezka: true, kinobase: true,
+            collaps: true, filmix: true, cdnmovies: true};
+        var matches = sortItems.filter(function (item) {
+            return recognized[item.source.toLowerCase()];
+        }).length;
+        var hasReset = (filterItems || []).some(function (item) {
+            return item && item.reset === true;
+        });
+        return hasReset && matches >= 2 ? 'online-detected' : '';
+    }
     function installOnlineFilter() {
-        if (typeof L.Filter !== 'function') return;
+        if (typeof L.Filter !== 'function') return false;
         if (L.Filter.__qualityOnlineBridge) {
             onlineBridgeInstalled = true;
-            return;
+            return true;
         }
         var NativeFilter = L.Filter;
         function OnlineFilterBridge(params) {
             var instance = new NativeFilter(params);
-            // Explicit scope: never alter torrent, search, catalogue or
-            // third-party filters whose sort items are unrelated to Online.
-            if (!params || (params.component !== 'online'
-                && params.component !== 'online_prestige')) return instance;
             if (!instance || typeof instance.set !== 'function'
                 || typeof instance.chosen !== 'function') return instance;
-
             var nativeSet = instance.set;
             var nativeChosen = instance.chosen;
             var filterItems = null, sortItems = [], chosenItems = null;
+            var scope = '', active = false;
             var nativeSelect = typeof instance.onSelect === 'function'
                 ? instance.onSelect : null;
-
+            var bridge = {refresh: refresh, scope: ''};
+            function eligible() {
+                if (!scope && filterItems && sortItems.length)
+                    scope = onlineFilterScope(params, filterItems, sortItems);
+                if (!scope) return false;
+                if (!active) {
+                    active = true;
+                    onlineFiltersDetected++;
+                }
+                onlineFilterSources = sortItems.length;
+                bridge.scope = scope;
+                currentOnlineFilter = bridge;
+                return true;
+            }
             function available() {
-                return onlineFilterEnabled() && sortItems.length > 1
-                    && sortItems.every(function (item) {
-                        return item && typeof item.source === 'string'
-                            && item.source.length > 0 && typeof item.title === 'string';
-                    });
+                return onlineFilterEnabled() && eligible();
             }
             function selectedSource() {
-                if (!sortItems.length) return null;
                 for (var i = 0; i < sortItems.length; i++)
                     if (sortItems[i].selected) return sortItems[i];
                 var saved = setting('online_balanser', '');
                 for (var j = 0; j < sortItems.length; j++)
                     if (sortItems[j].source === saved) return sortItems[j];
-                return sortItems[0];
+                return sortItems[0] || null;
             }
             function menuItems() {
                 var items = (filterItems || []).slice();
@@ -829,13 +871,12 @@
                 var selected = selectedSource();
                 var choices = sortItems.map(function (src) {
                     return {title: src.title, source: src.source,
-                        selected: selected && src.source === selected.source};
+                        selected: !!selected && src.source === selected.source};
                 });
                 var entry = {title: 'Источник / балансер',
                     subtitle: selected ? selected.title : '',
                     stype: 'quality_online_source', qualityOnlineSource: true,
                     items: choices};
-                // Put the balancer beside translation/season, after Reset.
                 items.splice(items.length && items[0] && items[0].reset ? 1 : 0,
                     0, entry);
                 return items;
@@ -849,8 +890,7 @@
                 return list;
             }
             function refresh() {
-                if (filterItems)
-                    nativeSet.call(instance, 'filter', menuItems());
+                if (filterItems) nativeSet.call(instance, 'filter', menuItems());
                 if (chosenItems)
                     nativeChosen.call(instance, 'filter', chosenWithSource(chosenItems));
             }
@@ -859,11 +899,15 @@
                     filterItems = Array.isArray(items) ? items.filter(function (item) {
                         return !item || !item.qualityOnlineSource;
                     }) : items;
-                    return nativeSet.call(this, type, menuItems());
+                    refresh();
+                    return;
                 }
                 var result = nativeSet.apply(this, arguments);
                 if (type === 'sort') {
                     sortItems = Array.isArray(items) ? items.slice() : [];
+                    // Both stock Online implementations set filter *before*
+                    // sort. A filter must therefore be rebuilt once the actual
+                    // provider data is available.
                     refresh();
                 }
                 return result;
@@ -875,52 +919,50 @@
                 }
                 return nativeChosen.apply(this, arguments);
             };
-            var bridge = {refresh: refresh};
             Object.defineProperty(instance, 'onSelect', {
                 configurable: true,
                 enumerable: true,
                 get: function () {
                     return function (type, item, choice) {
                         if (type === 'filter' && item && item.qualityOnlineSource) {
-                            if (!available() || !choice) return;
+                            if (!available() || !choice || !nativeSelect) return;
                             var source = sortItems.filter(function (option) {
                                 return option.source === choice.source;
                             })[0];
-                            if (!source || source.selected || !nativeSelect) return;
-                            // Lampa.Filter.show opens its submenu again after
-                            // onSelect; defer the native sort switch until then
-                            // so Online's own close/search/Activity.replace wins.
+                            if (!source || source.selected) return;
+                            // Filter.show reopens the submenu after onSelect;
+                            // let it finish before invoking native Online sort.
                             setTimeout(function () {
                                 if (!onlineFilterEnabled() || currentOnlineFilter !== bridge
                                     || !nativeSelect) return;
-                                // Selection may outlive the menu after fast
-                                // navigation. Never switch the provider of a
-                                // different activity/film using an old callback.
                                 if (L.Activity && typeof L.Activity.active === 'function') {
                                     var current = L.Activity.active();
-                                    if (!current || current.component !== params.component) return;
-                                    if (params.movie && current.movie
-                                        && String(params.movie.id) !== String(current.movie.id)) return;
+                                    var currentComponent = current
+                                        && String(current.component || '').toLowerCase();
+                                    if (!current || (currentComponent
+                                        && !/^online(?:$|[_-])/.test(currentComponent))) return;
+                                    if (params && params.movie && current.movie
+                                        && String(params.movie.id) !== String(current.movie.id))
+                                        return;
                                 }
                                 nativeSelect.call(instance, 'sort', source);
                             }, 0);
                             return;
                         }
-                        if (nativeSelect)
-                            return nativeSelect.apply(instance, arguments);
+                        if (nativeSelect) return nativeSelect.apply(instance, arguments);
                     };
                 },
                 set: function (fn) {
                     nativeSelect = typeof fn === 'function' ? fn : null;
                 }
             });
-            currentOnlineFilter = bridge;
             return instance;
         }
         OnlineFilterBridge.prototype = NativeFilter.prototype;
         OnlineFilterBridge.__qualityOnlineBridge = true;
         L.Filter = OnlineFilterBridge;
         onlineBridgeInstalled = true;
+        return true;
     }
 
     function registerSettings() {
@@ -976,6 +1018,18 @@
     function start() {
         installOnlineFilter();
         registerSettings();
+        // L.Filter can be assigned after Quality starts when scripts are
+        // loaded asynchronously. Retry on Lampa readiness, then stop polling
+        // once the native Filter constructor is wrapped.
+        var filterInstallTries = 0;
+        if (!onlineBridgeInstalled) {
+            var filterInstallTimer = setInterval(function () {
+                if (installOnlineFilter() || ++filterInstallTries >= 30)
+                    clearInterval(filterInstallTimer);
+            }, 1000);
+            if (filterInstallTimer && typeof filterInstallTimer.unref === 'function')
+                filterInstallTimer.unref();
+        }
         var style = document.createElement('style');
         style.textContent = '.quality-module-badge{box-sizing:border-box;z-index:3;pointer-events:none;'
             + 'font-weight:750;text-align:center;white-space:nowrap;line-height:1.35;'
@@ -1007,7 +1061,10 @@
             setInterval(scan, 2500);
         }
         L.Listener.follow('app', function (event) {
-            if (event && event.type === 'ready') scan();
+            if (event && event.type === 'ready') {
+                installOnlineFilter();
+                scan();
+            }
         });
         if (L.Storage.listener && L.Storage.listener.follow) {
             L.Storage.listener.follow('change', function (event) {
