@@ -6,8 +6,9 @@
     var L = root.Lampa;
     var storageKey = 'quality_module_buttons_v1';
     var owner = null, ownerComponent = null, ownerStart = null, catalog = [], pencil = null, folderNodes = [];
-    var observer = null, scheduled = false, settingsRegistered = false;
+    var observer = null, scheduled = false;
     var nativeSources = null, nativeSourceHome = null, nativeSourceHidden = true;
+    var originalSelectors = typeof WeakMap === 'function' ? new WeakMap() : null;
     var knownNodes = typeof WeakMap === 'function' ? new WeakMap() : null;
     var $ = root.jQuery || root.$;
     function getOption(name, fallback) {
@@ -15,10 +16,6 @@
             var value = L.Storage.get(name, fallback);
             return value === undefined || value === null ? fallback : value;
         } catch (e) { return fallback; }
-    }
-    function enabled() {
-        var value = getOption('quality_buttons_enabled', true);
-        return value !== false && String(value) !== 'false';
     }
     function pencilEnabled() {
         var value = getOption('quality_buttons_pencil', false);
@@ -82,6 +79,59 @@
         button.attr('data-quality-buttons-id', id);
         return id;
     }
+    // Controller.collectionSet() scans .selector, and collectionFocus()
+    // may choose the FIRST .selector even if another plugin hid it via CSS.
+    // Temporarily remove navigation eligibility from hidden actions, and
+    // grant it to exposed native actions that lack it (e.g. torrents).
+    function navigable(node, allowed) {
+        if (!node || !node.length) return;
+        var raw = node[0];
+        if (originalSelectors && raw && !originalSelectors.has(raw))
+            originalSelectors.set(raw, node.hasClass('selector'));
+        node.toggleClass('selector', !!allowed);
+    }
+    function restoreSelector(node) {
+        if (!node || !node.length || !originalSelectors) return;
+        var raw = node[0];
+        if (raw && originalSelectors.has(raw))
+            node.toggleClass('selector', originalSelectors.get(raw));
+    }
+    function focusCandidate() {
+        if (!owner || !owner.length) return null;
+        var line = owner.find('.full-start-new__buttons').first();
+        var candidate = line.find('.full-start__button.selector').not(
+            '.hide,.quality-buttons-hidden,.quality-buttons-in-folder,'
+            + '.quality-buttons-play-hidden').first();
+        if (candidate.length) return candidate[0];
+        return null;
+    }
+    function ensureFocusCandidate() {
+        if (!ownerStart) return;
+        var previous = ownerStart.last;
+        if (previous) {
+            var button = $(previous);
+            if (button.hasClass('selector') && !button.hasClass('hide')
+                && !button.hasClass('quality-buttons-hidden')
+                && !button.hasClass('quality-buttons-in-folder')
+                && !button.hasClass('quality-buttons-play-hidden')
+                && owner && owner[0] && owner[0].contains
+                && owner[0].contains(previous)) return;
+        }
+        ownerStart.last = focusCandidate();
+    }
+    function refreshNativeNavigation() {
+        if (!owner || !isCurrent(owner) || !L.Controller
+            || typeof L.Controller.enabled !== 'function'
+            || typeof L.Controller.toggle !== 'function') return;
+        var active = L.Controller.enabled();
+        // Only the actual Full controller may rebuild its selector collection.
+        // Never touch a Select, Settings, Player, or another plugin's controller.
+        if (active && active.name === 'full_start'
+            && active.controller && active.controller.link === ownerStart) {
+            ensureFocusCandidate();
+            L.Controller.toggle('full_start');
+        }
+    }
     // Lampa puts native torrent/online/trailer buttons in the hidden
     // .buttons--container. The visible Play button merely opens a "Source"
     // Select built from those originals. Move THE CONTAINER, not cloned
@@ -102,10 +152,13 @@
         }
         if (view && view.length) {
             view.find('.full-start-new__buttons').first().removeClass('quality-buttons-ungrouped');
-            view.find('.button--play').removeClass('quality-buttons-play-hidden');
+            var play = view.find('.button--play').first();
+            play.removeClass('quality-buttons-play-hidden');
+            restoreSelector(play);
         }
         if (nativeSources && nativeSources.length) {
-            nativeSources.children('.full-start__button').off('.qualityButtonsFocus');
+            nativeSources.children('.full-start__button').off('.qualityButtonsFocus')
+                .each(function () { restoreSelector($(this)); });
             nativeSources.removeClass('quality-buttons-native-sources');
             if (nativeSourceHidden) nativeSources.addClass('hide');
             else nativeSources.removeClass('hide');
@@ -134,7 +187,12 @@
         if (holder.parent()[0] !== line[0]) line.append(holder);
         holder.removeClass('hide').addClass('quality-buttons-native-sources');
         line.addClass('quality-buttons-ungrouped');
-        view.find('.button--play').addClass('quality-buttons-play-hidden');
+        holder.children('.full-start__button').each(function () {
+            if (!$(this).hasClass('hide')) navigable($(this), true);
+        });
+        var play = view.find('.button--play').first();
+        play.addClass('quality-buttons-play-hidden');
+        navigable(play, false);
     }
     function rememberNativeSourceFocus() {
         if (!nativeSources || !nativeSources.length || !ownerStart) return;
@@ -237,6 +295,7 @@
         catalog.forEach(function (entry) {
             var raw = entry.node && entry.node[0];
             entry.node.removeClass('quality-buttons-hidden quality-buttons-in-folder quality-buttons-mode-minimal quality-buttons-mode-full');
+            restoreSelector(entry.node);
             if (raw && knownNodes && knownNodes.has(raw) && raw.style)
                 raw.style.order = knownNodes.get(raw);
         });
@@ -246,8 +305,15 @@
         if (!$ || !view || !view.length) return;
         var line = view.find('.full-start-new__buttons').first();
         if (!line.length) return;
-        clearGenerated();
-        if (!enabled()) { restore(view); return; }
+        // Keep the pencil DOM node stable across layout refreshes so
+        // Lampa.Start.last never points at a deleted navigation target.
+        folderNodes.forEach(function (node) { node.remove(); });
+        folderNodes = [];
+        if (!pencilEnabled() && pencil) {
+            if (ownerStart && ownerStart.last === pencil[0]) ownerStart.last = null;
+            pencil.remove();
+            pencil = null;
+        }
         revealNativeSources(view);
         catalog = readButtons(view);
         var layout = model();
@@ -260,8 +326,11 @@
             // Until a user customizes ordering, preserve native / plugin CSS.
             if (order.length) node.css('order', pos >= 0 ? pos : maxOrder + index);
             else if (knownNodes && raw) node.css('order', knownNodes.get(raw));
+            var visible = !layout.hidden[entry.id] && !groupFor(layout, entry.id)
+                && !node.hasClass('hide');
             node.toggleClass('quality-buttons-hidden', !!layout.hidden[entry.id]);
             node.toggleClass('quality-buttons-in-folder', !!groupFor(layout, entry.id));
+            navigable(node, visible);
             node.toggleClass('quality-buttons-mode-minimal', layout.modes[entry.id] === 2);
             node.toggleClass('quality-buttons-mode-full', layout.modes[entry.id] === 3);
         });
@@ -269,14 +338,20 @@
             makeFolder(line, folder, layout, maxOrder + catalog.length + idx);
         });
         if (pencilEnabled()) {
-            pencil = $('<div class="full-start__button selector quality-buttons-pencil" title="Настройка кнопок">'
-                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-                + '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>'
-                + '<span>Кнопки</span></div>');
+            if (!pencil) {
+                pencil = $('<div class="full-start__button selector quality-buttons-pencil" title="Настройка кнопок">'
+                    + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                    + '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1-4z"/></svg>'
+                    + '<span>Кнопки</span></div>');
+                pencil.on('hover:enter', openEditor);
+                pencil.on('hover:focus hover:hover hover:touch', function () {
+                    if (ownerStart && isCurrent(owner)) ownerStart.last = pencil[0];
+                });
+                line.append(pencil);
+            }
             pencil.css('order', maxOrder + catalog.length + layout.folders.length + 1);
-            pencil.on('hover:enter', openEditor);
-            line.append(pencil);
         }
+        ensureFocusCandidate();
     }
     function safeApply() {
         if (!owner || !isCurrent(owner)) return;
@@ -288,6 +363,7 @@
             rememberNativeSourceFocus();
         } catch (e) { /* other plugins may destroy the view */ }
         observeButtons();
+        refreshNativeNavigation();
     }
     function rerender() {
         if (owner && isCurrent(owner)) safeApply();
@@ -435,29 +511,6 @@
             editButton(item.id);
         });
     }
-    function registerSettings() {
-        if (settingsRegistered || !L.SettingsApi || !L.SettingsApi.addComponent
-            || !L.SettingsApi.addParam) return;
-        settingsRegistered = true;
-        L.SettingsApi.addComponent({component:'quality_buttons',name:'Quality — кнопки',
-            after:'quality',icon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 21 3-1 12-12-2-2L4 18zM14 6l3 3"/></svg>'});
-        L.SettingsApi.addParam({component:'quality_buttons',
-            param:{name:'quality_buttons_enabled',type:'trigger',default:true},
-            field:{name:'Управлять кнопками',description:'Порядок, видимость и папки на полной карточке'},
-            onChange:function () { if (owner) { if (enabled()) rerender(); else restore(owner); } }});
-        L.SettingsApi.addParam({component:'quality_buttons',
-            param:{name:'quality_buttons_pencil',type:'trigger',default:false},
-            field:{name:'Показывать карандаш',description:'Кнопка редактора на полной карточке'},
-            onChange:rerender});
-        L.SettingsApi.addParam({component:'quality_buttons',
-            param:{name:'quality_buttons_open',type:'button',default:''},
-            field:{name:'Настроить кнопки',description:'Порядок, показ, режим текста и папки'},
-            onChange:openEditor});
-        L.SettingsApi.addParam({component:'quality_buttons',
-            param:{name:'quality_buttons_reset',type:'button',default:''},
-            field:{name:'Сбросить настройки кнопок',description:'Вернуть исходный вид'},
-            onChange:function () { save({order:[],hidden:{},modes:{},folders:[]}); rerender(); }});
-    }
     function observeButtons() {
         if (!observer || !owner || !owner.length) return;
         var area = owner.find('.full-start-new__buttons')[0];
@@ -485,11 +538,7 @@
         // Lampa's native full-start controller has not yet been toggled when
         // full:complite fires. Avoid a stale remembered focus on hidden Play.
         var play = node.find('.button--play').first();
-        if (ownerStart && play.length && ownerStart.last === play[0] && nativeSources) {
-            var first = nativeSources.children('.full-start__button')
-                .not('.hide').first();
-            if (first.length) ownerStart.last = first[0];
-        }
+        ensureFocusCandidate();
         if (typeof MutationObserver === 'function') {
             var area = node.find('.full-start-new__buttons')[0];
             observer = new MutationObserver(function () {
@@ -517,22 +566,15 @@
             + '.quality-buttons-mode-full>span{display:inline!important;}'
             + '.quality-buttons-pencil,.quality-buttons-folder{cursor:pointer;}';
         (document.head || document.documentElement).appendChild(css);
-        registerSettings();
         L.Listener.follow('full',bindFull);
-        L.Listener.follow('app',function (e) {
-            if (e && e.type==='ready') registerSettings();
-        });
         if (L.Storage.listener && L.Storage.listener.follow)
             L.Storage.listener.follow('change',function (e) {
                 if (!e) return;
-                if (e.name === 'quality_buttons_enabled') {
-                    if (!enabled() && owner) restore(owner);
-                    else rerender();
-                } else if (e.name === 'quality_buttons_pencil') rerender();
+                if (e.name === 'quality_buttons_pencil') rerender();
             });
     }
-    root.LampaQualityButtons = {open:openEditor,refresh:rerender,
-        status:function () { return {loaded:true,enabled:enabled(),
+    root.LampaQualityButtons = {refresh:rerender,
+        status:function () { return {loaded:true,
             pencil:pencilEnabled(),known_buttons:catalog.length,
             folders:model().folders.length}; }};
     root.__qualityButtonsLoaded = true;
