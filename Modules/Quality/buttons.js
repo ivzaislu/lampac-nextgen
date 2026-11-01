@@ -32,7 +32,8 @@
             movie = event.props.get('movie');
         // Lampa Full receives a TMDB TV entry with first_air_date/name.
         // Film entries use title/release_date instead.
-        return movie && (movie.first_air_date || (movie.name && !movie.title))
+        return movie && (movie.first_air_date || movie.media_type === 'tv'
+            || movie.number_of_seasons || (movie.name && !movie.release_date))
             ? 'tv' : 'movie';
     }
     function model() {
