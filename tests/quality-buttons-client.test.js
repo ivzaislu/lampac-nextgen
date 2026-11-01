@@ -514,8 +514,11 @@ assert.strictEqual(cachedTv.holder.parent,origin,
 // Api.full may send "full:complite" only AFTER Online has become active.
 const backgroundCard=anotherCard('tv',{backgroundCompletion:true});
 assert.equal(win.LampaQualityButtons.status().profile,'tv',
-    'Background Full completion retains the correct saved TV profile');
-assert.strictEqual(backgroundCard.holder.parent,backgroundCard.line);
+    'An inactive Full completion cannot overwrite the saved layout profile');
+assert.strictEqual(backgroundCard.holder.parent,backgroundCard.page,
+    'A Full completed beneath Online must be deferred, not laid out in the background');
+assert.ok(backgroundCard.holder.classes.has('hide'));
+assert.ok(backgroundCard.play.classes.has('selector'));
 const beforeInactiveNav=navBuilds;
 events.activity({component:'full',type:'start',object:backgroundCard.activityObject});
 assert.equal(navBuilds,beforeInactiveNav,
@@ -525,13 +528,71 @@ assert.equal(focus,'content');
 activity=backgroundCard.activityObject;
 focus='full_start';
 events.activity({component:'full',type:'start',object:backgroundCard.activityObject});
-assert.strictEqual(backgroundCard.holder.parent,backgroundCard.line);
+assert.strictEqual(backgroundCard.holder.parent,backgroundCard.line,
+    'First activation of a deferred Full applies its saved layout');
 assert.ok(!backgroundCard.play.classes.has('selector'));
 assert.strictEqual(backgroundCard.start.last,backgroundCard.torrent);
 assert.equal(backgroundCard.torrent.style.order,'0',
     'Direct TranslationSub route restores saved series order on Back');
 assert.equal(storage.get('quality_module_buttons_v2_tv'),tvSaved,
     'Background completion and return must never overwrite TV settings');
+
+// Real user log 15:36:06.369: active Full A (component 21) was correctly
+// ungrouped, then a different Full B (component 24) emitted full:complite.
+// Quality previously called restore(owner) on A and switched its observer to
+// B, leaving A with the native Play/Source folder even though A was visible.
+const activeA = backgroundCard;
+const activeAComponent = activeA.component;
+const beforeRaceNav = navBuilds;
+const beforeRaceSaved = storage.get('quality_module_buttons_v2_tv');
+const beforeRaceOrder = activeA.torrent.style.order;
+const delayedPlay = button('full-start__button selector button--play','Смотреть');
+const delayedBook = button('full-start__button selector button--book','Избранное');
+const delayedTorrent = button('full-start__button view--torrent','Торренты');
+const delayedOnline = button('full-start__button selector lampac--button','Онлайн');
+const delayedHolder = node('buttons--container hide',[delayedTorrent,delayedOnline]);
+const delayedLine = node('full-start-new__buttons',[delayedPlay,delayedBook]);
+const delayedPage = node('full-page',[delayedLine,delayedHolder]);
+const delayedSlide = node('activity-slide',[delayedPage]);
+const delayedStart = nativeStart(delayedPlay,delayedPlay);
+const delayedComponent = {items:[delayedStart],render(){return $(delayedPage);}};
+const delayedActivity = {
+    component:'full',method:'movie',
+    activity:{component:delayedComponent,render(){return $(delayedSlide);}}
+};
+// B finishes late, but A remains the active Full throughout this event.
+events.full({type:'complite',body:[delayedPage],link:delayedComponent,
+    data:{movie:{title:'Фильм Б',release_date:'2026-01-01'}}});
+assert.strictEqual(activity.activity.component,activeAComponent);
+assert.strictEqual(activeA.holder.parent,activeA.line,
+    'Foreign full:complite must never restore active Full A to native Source folder');
+assert.ok(!activeA.play.classes.has('selector'),
+    'Foreign full:complite cannot make native Play focusable on active A');
+assert.ok(activeA.play.classes.has('quality-buttons-play-hidden'));
+assert.equal(activeA.torrent.style.order,beforeRaceOrder);
+assert.strictEqual(activeA.start.last,activeA.torrent,
+    'Foreign full:complite cannot reset the active controller focus');
+assert.equal(win.LampaQualityButtons.status().profile,'tv',
+    'Foreign full:complite must not switch the active layout profile');
+assert.strictEqual(delayedHolder.parent,delayedPage,
+    'The background Full B must remain untouched until it becomes active');
+assert.equal(delayedStart.modules.length,0,
+    'Do not attach grouping handlers to a nonactive Full');
+assert.equal(navBuilds,beforeRaceNav,
+    'No remote navigation rebuild for a foreign completion');
+assert.strictEqual(storage.get('quality_module_buttons_v2_tv'),beforeRaceSaved);
+// Later B becomes active via activity:start; now it receives its movie layout.
+activity=delayedActivity;
+focus='full_start';
+events.activity({component:'full',type:'start',object:delayedActivity});
+assert.strictEqual(delayedHolder.parent,delayedLine,
+    'Deferred Full B gets layout on its actual activation');
+assert.ok(!delayedPlay.classes.has('selector'));
+assert.equal(delayedOnline.style.order,'0');
+assert.strictEqual(delayedStart.last,delayedOnline);
+assert.equal(win.LampaQualityButtons.status().profile,'movie');
+assert.strictEqual(storage.get('quality_module_buttons_v2_tv'),tvSaved);
+assert.strictEqual(storage.get('quality_module_buttons_v2_movie'),movieSaved);
 
 // No stale toggle or unexpected controller activation is allowed.
 activity={component:'online',activity:{render(){return $(node('online'));}}};
