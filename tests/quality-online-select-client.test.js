@@ -6,7 +6,8 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
-const plugin=fs.readFileSync(path.join(__dirname,'../Modules/Quality/plugin.js'),'utf8');
+const plugin=fs.readFileSync(path.join(__dirname,'../Modules/Quality/plugin.js'),'utf8')+'\n;\n'
+    + fs.readFileSync(path.join(__dirname,'../Modules/Quality/online-filter.js'),'utf8');
 const pause=ms=>new Promise(done=>setTimeout(done,ms));
 
 const store=new Map(),selectEvents={},events={},settingsListeners={},params=[];
