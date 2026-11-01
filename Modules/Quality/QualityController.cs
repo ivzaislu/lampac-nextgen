@@ -20,10 +20,22 @@ public class QualityController : BaseController
         if (ModInit.conf?.enable != true)
             return NotFound();
 
-        // One public URL for legacy Lampa, three independent client scripts.
-        string script = FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "quality.js", saveCache: false)
-            + "\n;\n" + FileCache.ReadAllText($"{ModInit.modpath}/online-filter.js", "quality-online.js", saveCache: false)
-            + "\n;\n" + FileCache.ReadAllText($"{ModInit.modpath}/buttons.js", "quality-buttons.js", saveCache: false);
+        // Keep the legacy URL. Send server-owned switches before client
+        // initialization; never include credentials, JacRed URLs or keys.
+        var options = new
+        {
+            collect = ModInit.conf.collect,
+            background = ModInit.conf.background,
+            onlinefilter = ModInit.conf.onlinefilter,
+            buttons = ModInit.conf.buttons,
+            sqlcache = ModInit.conf.sqlcache
+        };
+        string script = ";window.__qualityModuleOptions = " + JsonSerializer.Serialize(options) + ";\n"
+            + FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "quality.js", saveCache: false);
+        if (ModInit.conf.onlinefilter)
+            script += "\n;\n" + FileCache.ReadAllText($"{ModInit.modpath}/online-filter.js", "quality-online.js", saveCache: false);
+        if (ModInit.conf.buttons)
+            script += "\n;\n" + FileCache.ReadAllText($"{ModInit.modpath}/buttons.js", "quality-buttons.js", saveCache: false);
         return ContentTo(script, "application/javascript; charset=utf-8");
     }
     [HttpGet, AllowAnonymous]
@@ -36,6 +48,10 @@ public class QualityController : BaseController
             loaded = true,
             enabled = ModInit.conf?.enable == true,
             autoinject = ModInit.conf?.autoinject == true,
+            collect = ModInit.conf?.collect == true,
+            background = ModInit.conf?.background == true,
+            onlinefilter = ModInit.conf?.onlinefilter == true,
+            buttons = ModInit.conf?.buttons == true,
             source = "Lampa.Parser.get",
             sqlcache = ModInit.conf?.sqlcache == true
         });
