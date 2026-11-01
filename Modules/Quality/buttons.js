@@ -294,9 +294,41 @@
         save(value);
         rerender();
     }
+    // Lampa.Select.bind() calls hide() BEFORE onSelect, leaving Controller
+    // active as "select". Reopening a menu immediately would make the new
+    // Select window's "below" controller point to that now-hidden select,
+    // trapping Back in Settings. Restore the genuine native controller first,
+    // as Lampa.Settings.Params does for its own select fields.
+    var editorReturnController = '';
+    function restoreEditorController(name) {
+        if (!name || name === 'select' || !L.Controller
+            || typeof L.Controller.enabled !== 'function'
+            || typeof L.Controller.toggle !== 'function') return;
+        var active = L.Controller.enabled();
+        if (active && active.name === 'select') L.Controller.toggle(name);
+    }
     function select(title, items, onSelect, onBack) {
         if (!L.Select || typeof L.Select.show !== 'function') return;
-        L.Select.show({title: title, items: items, onSelect: onSelect, onBack: onBack});
+        var current = L.Controller && typeof L.Controller.enabled === 'function'
+            ? L.Controller.enabled() : null;
+        var origin = current && current.name;
+        if (origin && origin !== 'select') editorReturnController = origin;
+        else {
+            origin = editorReturnController;
+            // Refuse to push a new Select window with "select" as its parent.
+            restoreEditorController(origin);
+        }
+        L.Select.show({
+            title: title, items: items,
+            onSelect: function (item) {
+                restoreEditorController(origin);
+                if (onSelect) onSelect(item);
+            },
+            onBack: function () {
+                restoreEditorController(origin);
+                if (onBack) onBack();
+            }
+        });
     }
     function editButton(id) {
         var entry = findCatalog(id), layout = model();
