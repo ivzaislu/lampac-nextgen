@@ -313,8 +313,11 @@
         var origin = current && current.name;
         if (origin && origin !== 'select') editorReturnController = origin;
         else {
+            // Never replace an actual open Select owned by another plugin.
+            // The fallback is only for a controller orphaned after hide().
+            if (L.Select.opened && L.Select.opened()) return;
             origin = editorReturnController;
-            // Refuse to push a new Select window with "select" as its parent.
+            if (!origin) return;
             restoreEditorController(origin);
         }
         L.Select.show({
