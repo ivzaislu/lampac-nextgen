@@ -152,6 +152,26 @@ function menu(component) {
     assert.equal(unpopulated.get('filter').length,1);
     assert.equal(unpopulated.get('sort').length,0);
 
+    // Some Lampa forks omit the component name in Filter constructor params.
+    // The previous implementation silently skipped those filters.
+    L.Activity = {active() {return {component:'full',movie:{id:77}};}};
+    const implicit = menu(undefined);
+    assert.equal(implicit.filter.get('filter')[1].title,'Источник / балансер',
+        'Detect stock balancers even when params.component is missing');
+    assert.ok(win.LampaQuality.status().online_filters_detected >= 3);
+    assert.equal(win.LampaQuality.status().online_filter_sources,3);
+    const customized = menu('online_mod');
+    assert.equal(customized.filter.get('filter')[1].title,'Источник / балансер',
+        'Other Online variants using the native balancer format are supported');
+    const notOnline = menu('torrents');
+    assert.equal(notOnline.filter.get('filter').length,3,
+        'An unrelated named component is always excluded');
+    const falseList = new L.Filter({movie:{id:77}});
+    falseList.set('filter',[{title:'Сброс',reset:true}]);
+    falseList.set('sort',[{title:'По дате',sort:'date'},{title:'По рейтингу',sort:'rank'}]);
+    assert.equal(falseList.get('filter').length,1,
+        'Arbitrary sort menus cannot be classified as Online balancers');
+
     // A delayed click is cancelled if the user has already navigated away
     // or the source menu belongs to an older filter instance.
     const late = menu('online');
@@ -179,5 +199,22 @@ function menu(component) {
         {filename:'quality-online-filter-duplicate.js'});
     assert.equal(L.Filter.__qualityOnlineBridge,true);
     assert.equal(params.filter(x=>x.param.name==='quality_module_online_source_filter').length,1);
-    console.log('Quality online: native balancer shortcut, translation/season, toggle, isolation and idempotency OK');
+
+    // Quality may start before Lampa assigns its Filter constructor. The
+    // app-ready listener must install the bridge later, not silently give up.
+    const lateListeners = {}, delayedL = Object.assign({}, L, {
+        Filter: undefined,
+        Listener: {follow(name,fn) {lateListeners[name]=fn;}}
+    });
+    const lateWin = {Lampa:delayedL};
+    vm.runInNewContext(script,{window:lateWin,document,MutationObserver:Mutation,
+        setTimeout,clearTimeout,setInterval(){return {unref(){}};},
+        clearInterval(){},console}, {filename:'quality-online-filter-late-init.js'});
+    assert.equal(lateWin.LampaQuality.status().online_filter_hook,false);
+    delayedL.Filter = FakeFilter;
+    lateListeners.app({type:'ready'});
+    assert.equal(lateWin.LampaQuality.status().online_filter_hook,true,
+        'App-ready must retry installing Lampa.Filter wrapper');
+    assert.notEqual(delayedL.Filter,FakeFilter);
+    console.log('Quality online: native source, component-less forks, late installation, toggle and isolation OK');
 })().catch(err=>{console.error(err);process.exitCode=1;});
