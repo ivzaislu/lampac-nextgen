@@ -27,9 +27,16 @@
         return value === true || String(value) === 'true';
     }
     function profileFromFull(event) {
+        // On Activity.backward() Lampa sends activity:start without sending
+        // full:complite again. The saved activity method is authoritative
+        // when the reused Full component has not exposed props yet.
+        var method = event && event.object && event.object.method;
+        if (method === 'tv') return 'tv';
+        if (method === 'movie') return 'movie';
         var movie = event && event.data && event.data.movie;
         if (!movie && event && event.props && typeof event.props.get === 'function')
             movie = event.props.get('movie');
+        if (!movie && event && event.object) movie = event.object.card;
         // Lampa Full receives a TMDB TV entry with first_air_date/name.
         // Film entries use title/release_date instead.
         return movie && (movie.first_air_date || movie.media_type === 'tv'
@@ -641,12 +648,12 @@
         // Lampa's native full-start controller has not yet been toggled when
         // full:complite fires. Avoid a stale remembered focus on hidden Play.
         var play = node.find('.button--play').first();
-        // The first focus on a NEW card always follows the saved visual
-        // order. On later refreshes ensureFocusCandidate preserves the user's
-        // current focused button instead of stealing the remote.
-        if (ownerStart) ownerStart.last = focusCandidate();
+        // A new card starts on the first saved visual action. Returning to
+        // a cached Full activity must instead keep its previous valid focus.
+        if (event.resumed) ensureFocusCandidate();
+        else if (ownerStart) ownerStart.last = focusCandidate();
         initialFocusNode = ownerStart ? ownerStart.last : null;
-        initialFocusSettled = false;
+        initialFocusSettled = !!event.resumed;
         if (typeof MutationObserver === 'function') {
             var area = node.find('.full-start-new__buttons')[0];
             observer = new MutationObserver(function () {
@@ -658,6 +665,28 @@
                 }, 100);
             });
             observeButtons();
+        }
+    }
+    function resumeFull(event) {
+        if (!event || event.type !== 'start' || event.component !== 'full'
+            || !event.object || !event.object.activity) return;
+        var component = event.object.activity.component;
+        if (!component || typeof component.render !== 'function') return;
+        var rendered;
+        try { rendered = component.render(); } catch (e) { return; }
+        var node = $(rendered && (rendered[0] || rendered));
+        if (!node.length || !node.find('.full-start-new__buttons').length) return;
+        // TranslationSub can push Full then immediately push Online.
+        // The Full may complete while Online is active. On Back Lampa only
+        // emits activity:start, so full:complite will never reapply our layout.
+        if (ownerComponent === component && owner && owner[0] === node[0]) {
+            safeApply();
+        } else {
+            // Back to an older cached Full: the other Full has already
+            // restored its original DOM. Adopt and reapply this activity.
+            bindFull({type:'complite',body:rendered,link:component,
+                props:component.props,object:event.object,resumed:true});
+            safeApply();
         }
     }
     function init() {
@@ -675,6 +704,7 @@
             + '.quality-buttons-pencil,.quality-buttons-folder{cursor:pointer;}';
         (document.head || document.documentElement).appendChild(css);
         L.Listener.follow('full',bindFull);
+        L.Listener.follow('activity',resumeFull);
         if (L.Storage.listener && L.Storage.listener.follow)
             L.Storage.listener.follow('change',function (e) {
                 if (!e) return;
