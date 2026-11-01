@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/qulity-lampa-module
+      - feature/quality-on-visit-refresh
     paths:
       - 'Modules/Quality/**'
       - '!Modules/Quality/PLAN.md'
