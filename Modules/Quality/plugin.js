@@ -484,7 +484,7 @@
                 sql_retry_in_ms: sqlUnavailable ? Math.max(0, sqlRetryAt - Date.now()) : 0,
                 batch_size: sqlBatchSize(), background_refresh: backgroundEnabled(),
                 online_source_filter: onlineFilterEnabled(),
-                online_filter_revision: 3,
+                online_filter_revision: 4,
                 online_external_balancer: !!(L.Filter && L.Filter.__balancer_dual_patched),
                 online_filter_hook: !!(L.Filter && L.Filter.__qualityOnlineBridge),
                 online_filters_detected: onlineFiltersDetected,
@@ -810,12 +810,12 @@
             ? params.component.toLowerCase() : '';
         // Never modify another named activity even if it happens to expose
         // fields called "source", "voice" or "season".
-        if (declared && !/^online(?:$|[_-])/.test(declared)) return '';
+        if (declared && !/^(?:lampac|online(?:$|[_-]))/.test(declared)) return '';
         if (declared) return declared;
         var current = L.Activity && typeof L.Activity.active === 'function'
             ? L.Activity.active() : null;
         var activity = current && String(current.component || '').toLowerCase();
-        if (activity && /^online(?:$|[_-])/.test(activity)) return activity;
+        if (activity && /^(?:lampac|online(?:$|[_-]))/.test(activity)) return activity;
         // Stock Lampa balancers are enough evidence when some forks omit the
         // component name on the Filter's params object.
         var recognized = {videocdn: true, rezka: true, kinobase: true,
@@ -936,7 +936,7 @@
                             if (L.Activity && typeof L.Activity.active === 'function') {
                                 var activePage = L.Activity.active();
                                 if (!activePage || (activePage.component
-                                    && !/^online(?:$|[_-])/i.test(String(activePage.component))))
+                                    && !/^(?:lampac$|online(?:$|[_-]))/i.test(String(activePage.component))))
                                     return;
                                 if (params && params.movie && activePage.movie
                                     && String(params.movie.id) !== String(activePage.movie.id))
@@ -1019,7 +1019,10 @@
         var componentName = activity ? String(activity.component || '') : '';
         if (/^(?:torrent|torrents|mytorrents|settings|full|main|search|category|favorite|bookmarks|plugins|actor)$/i.test(componentName))
             return null;
-        var namedOnline = /^online(?:$|[_-])/i.test(componentName);
+        // Lampac's own Online activity uses component="lampac". Its sort
+        // control is labeled "Источник" and can display a provider/quality
+        // suffix ("ИсточникPhantom ~ 2160p"), not "Балансер".
+        var namedOnline = /^(?:lampac$|online(?:$|[_-]))/i.test(componentName);
         var expected = L.Lang && typeof L.Lang.translate === 'function'
             ? String(L.Lang.translate('online_balanser') || '') : '';
         if (!namedOnline

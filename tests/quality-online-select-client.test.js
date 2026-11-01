@@ -11,6 +11,7 @@ const pause=ms=>new Promise(done=>setTimeout(done,ms));
 
 const store=new Map(),selectEvents={},events={},settingsListeners={},params=[];
 const counters={sortOpens:0};
+let buttonCaption='Балансер';
 const button={
     length:1,
     trigger(type) {
@@ -19,7 +20,7 @@ const button={
     },
     find(selector) {
         assert.equal(selector,'span');
-        return {text(){return 'Балансер';}};
+        return {text(){return buttonCaption;}};
     },
     last(){return this;},
     filter(){return this;}
@@ -159,5 +160,43 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
     active={component:'full',movie:{id:99},activity:{render(){return view;}}};
     await pause(10);
     assert.equal(counters.sortOpens,1,'No balancer switch after navigation');
-    console.log('Quality: real Select.preshow fallback for preloaded Online filters OK');
+    // Exact browser probe from the user's Lampac Online screen:
+    // component=lampac, Filter={Reset,Voice,Season}, sort button caption
+    // "ИсточникPhantom ~ 2160p". The older balancer-caption check rejected it.
+    active={component:'lampac',movie:{id:321},activity:{render(){return view;}}};
+    buttonCaption = 'ИсточникPhantom ~ 2160p';
+    const lampacMenu = {title:'Фильтр',items:[
+        {title:'Сбросить фильтр',reset:true},
+        {title:'Перевод',stype:'voice',items:[{title:'Дубляж',index:0}]},
+        {title:'Сезон',stype:'season',items:[{title:'1',index:0}]}
+    ]};
+    selectEvents.preshow({active:lampacMenu});
+    assert.deepEqual(lampacMenu.items.map(x=>x.title),
+        ['Сбросить фильтр','Источник','Перевод','Сезон'],
+        'Lampac Online filter must get the native source shortcut');
+    assert.equal(lampacMenu.items[1].bal,true);
+    assert.equal(win.LampaQuality.status().online_select_inserted,4);
+    lampacMenu.items[1].onSelect();
+    await pause(10);
+    assert.equal(counters.sortOpens,2,'Lampac source shortcut opens its native sort');
+
+    // Film menus may have a voice entry but no season.
+    const lampacFilm={title:'Фильтр',items:[
+        {title:'Сбросить фильтр',reset:true},
+        {title:'Перевод',stype:'voice',items:[{title:'Дубляж',index:0}]}
+    ]};
+    selectEvents.preshow({active:lampacFilm});
+    assert.deepEqual(lampacFilm.items.map(x=>x.title),
+        ['Сбросить фильтр','Источник','Перевод']);
+
+    // Even a menu using the same text must not modify unrelated sections.
+    active={component:'torrents',movie:{id:321},activity:{render(){return view;}}};
+    const torrentMenu={title:'Фильтр',items:[
+        {title:'Сбросить фильтр',reset:true},
+        {title:'Перевод',stype:'voice'}
+    ]};
+    selectEvents.preshow({active:torrentMenu});
+    assert.equal(torrentMenu.items.length,2);
+
+    console.log('Quality: real Select.preshow fallback and Lampac Online filter probe OK');
 })().catch(e=>{console.error(e);process.exitCode=1;});

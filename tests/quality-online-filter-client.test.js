@@ -179,6 +179,10 @@ function menu(component) {
     const customized = menu('online_mod');
     assert.equal(customized.filter.get('filter')[1].title,'Источник',
         'Other Online variants using the native balancer format are supported');
+    const lampacFilter = menu('lampac');
+    assert.equal(lampacFilter.filter.get('filter')[1].title,'Источник',
+        'Lampac Online uses component=lampac instead of online');
+    assert.equal(lampacFilter.filter.get('filter')[1].bal,true);
     const notOnline = menu('torrents');
     assert.equal(notOnline.filter.get('filter').length,3,
         'An unrelated named component is always excluded');
