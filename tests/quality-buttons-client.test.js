@@ -320,7 +320,7 @@ function anotherCard(kind, options={}){
     const nextPage=node('full-page',[nextLine,nextHolder]);
     const nextSlide=node('activity-slide',[nextPage]);
     const nextStart={last:nextBook}; // model Lampa preferring Bookmarks
-    const nextComponent={items:[nextStart]};
+    const nextComponent={items:[nextStart],render(){return $(nextPage);}};
     page=nextPage;start=nextStart;component=nextComponent;slide=nextSlide;
     activity={component:'full',activity:{component:nextComponent,render(){return $(nextSlide);}}};
     focus='content';
@@ -333,7 +333,7 @@ function anotherCard(kind, options={}){
     L.Controller.toggle('full_start');
     return {play:nextPlay,book:nextBook,torrent:nextTorrent,online:nextOnline,
         trailer:nextTrailer,thirdA,thirdB,holder:nextHolder,line:nextLine,
-        page:nextPage,start:nextStart};
+        page:nextPage,slide:nextSlide,component:nextComponent,start:nextStart};
 }
 const movieSaved=storage.get('quality_module_buttons_v2_movie');
 assert.ok(movieSaved,'Movie layout must persist in its own key');
@@ -402,6 +402,68 @@ assert.strictEqual(movieAgain.start.last,movieAgain.online,
 assert.ok(movieAgain.book.classes.has('quality-buttons-hidden'));
 assert.equal(storage.get('quality_module_buttons_v2_movie'),movieSaved);
 assert.equal(storage.get('quality_module_buttons_v2_tv'),tvSaved);
+
+// TranslationSub direct route: it pushes a Full series card immediately
+// underneath Lampac Online. Returning from Online sends activity:start,
+// NOT full:complite. Its Lampa Start.onGroupButtons may have already changed
+// the native picker while the series card was inactive.
+const cachedTv=tv;
+const cachedTvActivity={component:'full',method:'tv',
+    activity:{component:cachedTv.component,render(){return $(cachedTv.slide);}}};
+activity={component:'lampac',activity:{render(){return $(node('online'));}}};
+focus='content';
+const savedTvBeforeBack=storage.get('quality_module_buttons_v2_tv');
+assert.ok(cachedTv.holder.parent===cachedTv.line);
+// Simulate native source grouping / externally reinitialized button DOM.
+$(cachedTv.page).append($(cachedTv.holder));
+cachedTv.holder.classes.add('hide');
+cachedTv.holder.classes.delete('quality-buttons-native-sources');
+cachedTv.line.classes.delete('quality-buttons-ungrouped');
+cachedTv.play.classes.delete('quality-buttons-play-hidden');
+cachedTv.play.classes.add('selector');
+cachedTv.torrent.style.order='';
+cachedTv.book.style.order='';
+assert.strictEqual(cachedTv.holder.parent,cachedTv.page,
+    'The online-return test must begin from a grouped factory DOM');
+// Back to the SAME cached Full: no second full:complite event happens.
+activity=cachedTvActivity;
+focus='full_start';
+events.activity({component:'full',type:'start',object:cachedTvActivity});
+assert.strictEqual(cachedTv.holder.parent,cachedTv.line,
+    'activity:start after Online must re-extract native source buttons');
+assert.ok(!cachedTv.holder.classes.has('hide'));
+assert.ok(!cachedTv.play.classes.has('selector'));
+assert.ok(cachedTv.torrent.classes.has('selector'));
+assert.equal(cachedTv.torrent.style.order,'0',
+    'activity:start restores the original TV user order');
+assert.strictEqual(cachedTv.start.last,cachedTv.torrent);
+assert.strictEqual(storage.get('quality_module_buttons_v2_tv'),savedTvBeforeBack,
+    'Reapplying the cached Full must not modify persisted TV preferences');
+
+// Another important path: while another Full is active, Quality restores the
+// older Full to its native DOM. Returning to it must adopt its component,
+// re-extract sources, and load the correct media profile without full:complite.
+const newerMovie=anotherCard('movie');
+assert.equal(cachedTv.holder.parent,cachedTv.page,
+    'Switching to a different Full restores the inactive TV DOM');
+activity=cachedTvActivity;
+focus='full_start';
+events.activity({component:'full',type:'start',object:cachedTvActivity});
+assert.equal(win.LampaQualityButtons.status().profile,'tv',
+    'Cached Full return must recover TV profile from Lampa activity.method');
+assert.strictEqual(cachedTv.holder.parent,cachedTv.line);
+assert.equal(cachedTv.torrent.style.order,'0');
+assert.strictEqual(storage.get('quality_module_buttons_v2_movie'),movieSaved);
+assert.strictEqual(storage.get('quality_module_buttons_v2_tv'),tvSaved);
+// A background Online activation should NOT touch the cached card.
+activity={component:'lampac',activity:{render(){return $(node('online'));}}};
+focus='content';
+const origin=cachedTv.holder.parent;
+events.activity({component:'lampac',type:'start',object:activity});
+assert.strictEqual(cachedTv.holder.parent,origin,
+    'Quality must never hijack a non-Full activity');
+
+// No stale toggle or unexpected controller activation is allowed.
 activity={component:'online',activity:{render(){return $(node('online'));}}};
 focus='online';const previous=navBuilds;
 win.LampaQualityButtons.refresh();
