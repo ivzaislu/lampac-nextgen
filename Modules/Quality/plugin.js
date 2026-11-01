@@ -932,7 +932,16 @@
                 get: function () {
                     return function (type, item, choice) {
                         if (type === 'filter' && item && item.qualityOnlineSource) {
-                            if (!available()) return;
+                            if (!available() || currentOnlineFilter !== bridge) return;
+                            if (L.Activity && typeof L.Activity.active === 'function') {
+                                var activePage = L.Activity.active();
+                                if (!activePage || (activePage.component
+                                    && !/^online(?:$|[_-])/i.test(String(activePage.component))))
+                                    return;
+                                if (params && params.movie && activePage.movie
+                                    && String(params.movie.id) !== String(activePage.movie.id))
+                                    return;
+                            }
                             // Same contract as the independent bal:true
                             // plugin: open Lampa's *existing* sort selector.
                             // Do not synthesize provider switching or override
