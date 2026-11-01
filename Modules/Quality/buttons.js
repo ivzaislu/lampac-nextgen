@@ -77,7 +77,8 @@
         var line = view.find('.full-start-new__buttons').first();
         if (!line.length) return [];
         var buttons = line.children('.full-start__button')
-            .not('.quality-buttons-pencil,.quality-buttons-folder');
+            // Native playback and other editors are not ordinary action buttons.
+            .not('.quality-buttons-pencil,.quality-buttons-folder,.button--play,.button--edit-order,.button--folder');
         var used = {}, items = [];
         buttons.each(function () {
             var btn = $(this);
