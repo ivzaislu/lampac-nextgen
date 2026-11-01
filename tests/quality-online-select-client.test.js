@@ -12,6 +12,7 @@ const pause=ms=>new Promise(done=>setTimeout(done,ms));
 const store=new Map(),selectEvents={},events={},settingsListeners={},params=[];
 const counters={sortOpens:0};
 let buttonCaption='Балансер';
+let buttonSelection='Filmix - 1080p';
 const button={
     length:1,
     trigger(type) {
@@ -19,8 +20,9 @@ const button={
         counters.sortOpens++;
     },
     find(selector) {
-        assert.equal(selector,'span');
-        return {text(){return buttonCaption;}};
+        if (selector==='span') return {text(){return buttonCaption;}};
+        if (selector==='> div') return {text(){return buttonSelection;}};
+        throw Error('Unexpected selector: '+selector);
     },
     last(){return this;},
     filter(){return this;}
@@ -105,6 +107,8 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
         ['Сброс','Источник','Озвучка','Сезон']);
     assert.equal(menu.items[1].qualityOnlineSelectShortcut,true);
     assert.equal(menu.items[1].bal,true,'Shortcut follows the supplied standalone plugin contract');
+    assert.equal(menu.items[1].subtitle,'Filmix - 1080p',
+        'Selected native source and resolution must appear in the filter');
     assert.equal(typeof menu.items[1].onSelect,'function');
     assert.equal(win.LampaQuality.status().online_select_inserted,1);
     assert.equal(win.LampaQuality.status().online_filters_detected,1);
@@ -115,7 +119,10 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
         'The shortcut must invoke the existing native balancer menu');
 
     // Opening the same filter again must not duplicate entries.
+    buttonSelection='Rezka - 2160p';
     selectEvents.preshow({active:menu});
+    assert.equal(menu.items[1].subtitle,'Rezka - 2160p',
+        'The next filter opening must show the newly selected source');
     assert.equal(menu.items.filter(x=>x.qualityOnlineSelectShortcut).length,1);
     assert.equal(menu.items.length,4);
 
@@ -164,7 +171,8 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
     // component=lampac, Filter={Reset,Voice,Season}, sort button caption
     // "ИсточникPhantom ~ 2160p". The older balancer-caption check rejected it.
     active={component:'lampac',movie:{id:321},activity:{render(){return view;}}};
-    buttonCaption = 'ИсточникPhantom ~ 2160p';
+    buttonCaption = 'ИсточникAlloha - 2160p';
+    buttonSelection = 'Alloha - 2160p';
     const lampacMenu = {title:'Фильтр',items:[
         {title:'Сбросить фильтр',reset:true},
         {title:'Перевод',stype:'voice',items:[{title:'Дубляж',index:0}]},
@@ -175,6 +183,12 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
         ['Сбросить фильтр','Источник','Перевод','Сезон'],
         'Lampac Online filter must get the native source shortcut');
     assert.equal(lampacMenu.items[1].bal,true);
+    assert.equal(lampacMenu.items[1].subtitle,'Alloha - 2160p',
+        'The real Lampac Online menu must mirror the native source pill');
+    buttonSelection='Phantom - 1080p';
+    selectEvents.preshow({active:lampacMenu});
+    assert.equal(lampacMenu.items[1].subtitle,'Phantom - 1080p',
+        'Native source changes must update the filter subtitle');
     assert.equal(win.LampaQuality.status().online_select_inserted,4);
     lampacMenu.items[1].onSelect();
     await pause(10);
@@ -185,7 +199,10 @@ vm.runInNewContext(plugin,{window:win,document:doc,console,
         {title:'Сбросить фильтр',reset:true},
         {title:'Перевод',stype:'voice',items:[{title:'Дубляж',index:0}]}
     ]};
+    buttonSelection='';
     selectEvents.preshow({active:lampacFilm});
+    assert.equal(lampacFilm.items[1].subtitle,'Выбрать балансер',
+        'Keep the placeholder only if the native source label is unavailable');
     assert.deepEqual(lampacFilm.items.map(x=>x.title),
         ['Сбросить фильтр','Источник','Перевод']);
 
