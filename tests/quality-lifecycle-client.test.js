@@ -14,9 +14,20 @@ const config={
     jackett_url:'https://first.example.invalid'
 };
 function makeView(){
-    const badges=[];
+    const badges=[],classes=new Set();
+    // CUB's own quality label must survive the Quality overlay lifecycle.
+    const nativeBadge={className:'card__quality',textContent:'DL'};
     const node={
-        querySelector(selector){return selector==='.quality-module-badge' ? badges[0]||null : null;},
+        classList:{
+            add(name){classes.add(name);},
+            remove(name){classes.delete(name);},
+            contains(name){return classes.has(name);}
+        },
+        querySelector(selector){
+            if(selector==='.quality-module-badge')return badges[0]||null;
+            if(selector==='.card__quality')return nativeBadge;
+            return null;
+        },
         appendChild(el){
             badges.push(el);
             el.remove=()=>{
@@ -25,7 +36,7 @@ function makeView(){
             };
         }
     };
-    return {node,badges};
+    return {node,badges,nativeBadge};
 }
 const poster=makeView(),full=makeView();
 const movie={id:10,title:'Example',original_title:'Example',release_date:'2025-01-01'};
@@ -71,6 +82,10 @@ store.set('quality_module_enabled',false);
 storageListeners.change({name:'quality_module_enabled'});
 assert.equal(poster.badges.length,0);
 assert.equal(full.badges.length,0);
+assert.equal(poster.node.classList.contains('quality-module-replaces-native'),false,
+    'Disabling Quality restores the native/CUB quality label');
+assert.equal(poster.node.querySelector('.card__quality'),poster.nativeBadge,
+    'The native quality element must never be removed');
 assert.equal(w.LampaQuality.status().configured,false);
 
 store.set('quality_module_enabled',true);
@@ -85,20 +100,33 @@ assert.equal(full.badges.length,0,'Disabled source response cannot redraw full p
 requests[1].done({Results:[{Title:'Example (2025) 1080p'}]});
 assert.equal(poster.badges[0].textContent,'FHD');
 assert.equal(full.badges[0].textContent,'FHD');
+assert.equal(poster.node.classList.contains('quality-module-replaces-native'),true,
+    'Quality's own FHD badge must replace the overlapping native label');
+assert.equal(poster.node.querySelector('.card__quality'),poster.nativeBadge,
+    'Keep the native badge available for later restoration');
+assert.ok(source.includes(
+    '.card__view.quality-module-replaces-native .card__quality:not(.quality-module-badge){display:none!important;}'),
+    'Scoped CSS must hide only other quality badges while Quality is present');
 
 config.jackett_url='https://second.example.invalid';
 storageListeners.change({name:'jackett_url'});
 assert.equal(requests.length,3,'Source change requires a fresh parser result');
 assert.equal(poster.badges.length,0,'Stale poster label removed on source change');
 assert.equal(full.badges.length,0,'Stale full-page label removed on source change');
+assert.equal(poster.node.classList.contains('quality-module-replaces-native'),false,
+    'Source changes restore native quality until the new result arrives');
 requests[2].done({Results:[{Title:'Example (2025) 4K 2160p'}]});
 assert.equal(poster.badges[0].textContent,'4K');
 assert.equal(full.badges[0].textContent,'4K');
+assert.equal(poster.node.classList.contains('quality-module-replaces-native'),true,
+    'Replacement resumes after the new source returns quality');
 
 config.parser_torrent_type='prowlarr';
 storageListeners.change({name:'parser_torrent_type'});
 assert.equal(poster.badges.length,0,'Turning off JacRed removes poster badge');
 assert.equal(full.badges.length,0,'Turning off JacRed removes full-page badge');
+assert.equal(poster.node.classList.contains('quality-module-replaces-native'),false,
+    'Turning off JacRed must reveal the original native label');
 assert.equal(requests.length,3);
 assert.equal(w.LampaQuality.status().configured,false);
 console.log('Quality: poster/full lifecycle, disable/re-enable, stale response and source switch OK');
