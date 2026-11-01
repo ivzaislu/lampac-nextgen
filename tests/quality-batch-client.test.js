@@ -127,8 +127,8 @@ function boot(movies, sqlHits, delayParser) {
     batch.cards.forEach(card => assert.equal(card.badges[0].textContent, 'FHD'));
     assert.equal(batch.settingsComponents[0].component, 'quality');
     const p = batch.settingsParams.map(x => x.param.name);
-    for (const name of ['quality_module_enabled', 'quality_module_background',
-        'quality_module_days_low', 'quality_module_days_hd',
+    for (const name of ['quality_module_enabled', 'quality_module_periodic_refresh',
+        'quality_module_refresh_on_visit', 'quality_module_days_low', 'quality_module_days_hd',
         'quality_module_days_4k_new', 'quality_module_days_4k_old',
         'quality_module_days_empty', 'quality_module_batch_size',
         'quality_module_refresh_minutes', 'quality_module_refresh_now']) {
@@ -160,19 +160,22 @@ function boot(movies, sqlHits, delayParser) {
     assert.equal(refresh.calls.filter(x => x.op === 'put_batch')[0].items[0].label, '4K');
     assert.equal(refresh.cards[0].badges.length, 1, 'Badge must not disappear while refreshing');
 
-    // Eight stale records must not produce eight simultaneous background
-    // JacRed lookups. Exactly three are admitted per minute, at most two active.
+    // Eight visible stale records are all eligible for an on-visit recheck.
+    // Unlike opt-in periodic work, visits are not throttled to 3/minute,
+    // but the JacRed concurrency limit of two must still be respected.
     const many = boot(Array.from({length: 8}, (_, i) =>
         ({id: 300+i, title: 'Stale Film ' + (i+1)})), {all: stale}, true);
     await sleep(240);
-    assert.equal(many.parserCount(), 2, 'Background concurrency is capped at two');
-    assert.equal(many.status().queued_requests, 1, 'Background throttle admits only three');
-    many.parserCallbacks[0].callback({Results: [{Title: 'Stale Film 1 2025 1080p'}]});
-    assert.equal(many.parserCount(), 3);
-    many.parserCallbacks[1].callback({Results: [{Title: 'Stale Film 2 2025 1080p'}]});
-    many.parserCallbacks[2].callback({Results: [{Title: 'Stale Film 3 2025 1080p'}]});
+    assert.equal(many.parserCount(), 2, 'At most two JacRed searches are active');
+    assert.equal(many.status().queued_requests, 6,
+        'All eight visible stale films must be queued, not silently dropped');
+    for (let i = 0; i < many.parserCallbacks.length; i++) {
+        const item = many.parserCallbacks[i];
+        item.callback({Results: [{Title: item.request.movie.title + ' 2025 1080p'}]});
+    }
     await sleep(30);
-    assert.equal(many.parserCount(), 3, 'Remaining stale entries must wait for a later refresh window');
+    assert.equal(many.parserCount(), 8, 'Every visible stale film is eventually checked');
+    assert.ok(many.cards.every(card => card.badges[0].textContent === 'FHD'));
 
     // A callback completing after a user disables Quality must never
     // reintroduce a badge on the card.
@@ -183,5 +186,5 @@ function boot(movies, sqlHits, delayParser) {
     disabled.listeners.app({type: 'ready'});
     disabled.parserCallbacks[0].callback({Results: [{Title: 'Disabled Movie 2025 4K 2160p'}]});
     assert.equal(disabled.cards[0].badges.length, 0);
-    console.log('Quality SQL: 12-card batch, SettingsApi, SWR, throttle and disable guard OK');
+    console.log('Quality SQL: 12-card batch, SettingsApi, visit rechecks and disable guard OK');
 })().catch(error => {console.error(error); process.exitCode = 1;});
