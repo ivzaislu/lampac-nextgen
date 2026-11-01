@@ -809,6 +809,12 @@
             '30': '30 дней', '45': '45 дней', '60': '60 дней'};
         add('quality_module_enabled', 'trigger', 'Показывать бейджи', null, true,
             'Метки качества на постерах и в полной карточке', scan);
+        add('quality_buttons_pencil', 'trigger', 'Показывать карандаш', null, false,
+            'Показывать или скрывать карандаш для настройки кнопок на полной карточке',
+            function () {
+                if (root.LampaQualityButtons && root.LampaQualityButtons.refresh)
+                    root.LampaQualityButtons.refresh();
+            });
         add('quality_module_background', 'trigger', 'Обновлять в фоне', null, true,
             'При запущенной Lampa качество периодически проверяется повторно');
         add('quality_module_days_low', 'select', 'CAM / TS / TC', days, '1',
