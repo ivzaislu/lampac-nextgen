@@ -129,4 +129,16 @@ assert.equal(poster.node.classList.contains('quality-module-replaces-native'),fa
     'Turning off JacRed must reveal the original native label');
 assert.equal(requests.length,3);
 assert.equal(w.LampaQuality.status().configured,false);
-console.log('Quality: poster/full lifecycle, disable/re-enable, stale response and source switch OK');
+
+// When no acceptable release exists, CUB remains visible: only a Quality
+// result is allowed to suppress an existing native quality mark.
+config.parser_torrent_type='jackett';
+config.jackett_url='https://third.example.invalid';
+storageListeners.change({name:'parser_torrent_type'});
+assert.equal(requests.length,4);
+requests[3].done({Results:[]});
+assert.equal(poster.badges.length,0,'No Quality match means no custom badge');
+assert.equal(poster.node.classList.contains('quality-module-replaces-native'),false,
+    'No matching quality must leave the native CUB label available');
+assert.equal(poster.node.querySelector('.card__quality'),poster.nativeBadge);
+console.log('Quality: poster/full lifecycle, native badge replacement and restoration OK');
