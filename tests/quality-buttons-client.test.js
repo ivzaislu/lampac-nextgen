@@ -130,7 +130,12 @@ const L={Storage:{get(k,def){return storage.has(k)?storage.get(k):def;},set(k,v)
         },
         opened(){return selectOpened;}
     },
-    Input:{edit(x,cb){cb('Избранное');}},
+    Input:{edit(x,cb){
+        // Native Settings.Input.back() toggles settings_component first,
+        // then runs the callback, even if Input was opened from Full.
+        L.Controller.toggle('settings_component');
+        cb('Избранное');
+    }},
     Noty:{show(){}}
 };
 const document={body:{},head:{appendChild(){}},createElement(){return {};}};
@@ -250,6 +255,25 @@ assert.equal(badToggles,0);
 storage.set('quality_buttons_pencil',true);
 setting('quality_buttons_pencil').onChange();
 assert.equal(line.children.filter(n=>n.classes.has('quality-buttons-pencil')).length,1);
+// Real Lampa pencil opens a Select from Full, not from Settings. Both
+// the folder Select and the native name Input must return Full's focus.
+if(selectOpened)selected[selected.length-1].onBack();
+focus='full_start';
+const folderNode=line.children.find(n=>n.classes.has('quality-buttons-folder'));
+$(folderNode).trigger('hover:enter');
+assert.equal(selectParents[selectParents.length-1],'full_start');
+selected[selected.length-1].onBack();
+assert.equal(focus,'full_start','Back from a custom folder restores Full');
+const pencilNode=line.children.find(n=>n.classes.has('quality-buttons-pencil'));
+$(pencilNode).trigger('hover:enter');
+assert.equal(selectParents[selectParents.length-1],'full_start');
+const pencilMenu=selected[selected.length-1];
+pencilMenu.onSelect(pencilMenu.items.find(x=>x.action==='newFolder'));
+assert.equal(focus,'select');
+assert.equal(selectParents[selectParents.length-1],'full_start',
+    'Native Input completion must return to Full before reopening the editor');
+selected[selected.length-1].onBack();
+assert.equal(focus,'full_start','Back from pencil editor returns to Full');
 nativeStart.last=nativeOnline;
 storage.set('quality_buttons_enabled',false);
 setting('quality_buttons_enabled').onChange();
