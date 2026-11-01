@@ -103,7 +103,10 @@
         if (!$ || !folder || !Array.isArray(folder.members)) return;
         var members = folder.members.filter(function (id) { return !!findCatalog(id); });
         if (!members.length) return;
-        var node = $('<div class="full-start__button selector quality-buttons-folder"><span></span></div>');
+        var node = $('<div class="full-start__button selector quality-buttons-folder">'
+            + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">'
+            + '<path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'
+            + '<span></span></div>');
         node.find('span').text(folder.title);
         node.css('order', order);
         node.attr('data-quality-folder-id', folder.id);
