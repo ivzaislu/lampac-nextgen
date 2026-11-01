@@ -20,7 +20,10 @@ public class QualityController : BaseController
         if (ModInit.conf?.enable != true)
             return NotFound();
 
-        string script = FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "quality.js", saveCache: false);
+        // One public URL for legacy Lampa, three independent client scripts.
+        string script = FileCache.ReadAllText($"{ModInit.modpath}/plugin.js", "quality.js", saveCache: false)
+            + "\n;\n" + FileCache.ReadAllText($"{ModInit.modpath}/online-filter.js", "quality-online.js", saveCache: false)
+            + "\n;\n" + FileCache.ReadAllText($"{ModInit.modpath}/buttons.js", "quality-buttons.js", saveCache: false);
         return ContentTo(script, "application/javascript; charset=utf-8");
     }
     [HttpGet, AllowAnonymous]
