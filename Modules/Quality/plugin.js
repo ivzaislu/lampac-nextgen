@@ -487,6 +487,9 @@
         var key = generation + ':' + keyOf(item);
         var existing = cache[key] || (persisted && persisted.entries[keyOf(item)]);
         if (!existing || !recordDue(existing, item) || pending[key]) return;
+        // Large catalogues may contain hundreds of stale entries at once.
+        // Keep the same bounded backlog as initial JacRed/SQL requests.
+        if (queue.length + backgroundQueue.length + sqlPending.length >= 300) return;
         // Even a failing JacRed must not be retried in a tight rendering loop.
         if (Date.now() - (lastRefresh[key] || 0) < (onVisit ? 60000 : 15 * 60000)) return;
         if (!onVisit) {
