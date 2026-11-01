@@ -66,7 +66,10 @@ assert.equal(off.win.LampaQuality.status().sql_cache,false);
 assert.equal(off.win.LampaQuality.status().background_refresh,false);
 assert.deepEqual(off.params.map(p=>p.param.name),['quality_buttons_pencil'],
     'Turning off the collector keeps pencil settings but hides collector controls');
-assert.equal(off.components.length,1);
+assert.deepEqual(off.components.map(c=>c.component), ['quality_other'],
+    'Without collector, only the Other section is registered');
+assert.equal(off.params[0].component,'quality_other',
+    'Pencil control belongs to Other even when collector is disabled');
 assert.equal(off.parserCalls(),0);
 assert.equal(off.sqlCalls(),0);
 assert.equal(off.timerCalls(),0);
@@ -84,6 +87,8 @@ assert.equal(partial.win.LampaQuality.status().sql_cache,false);
 assert.equal(partial.win.LampaQuality.status().online_source_filter,false);
 assert.equal(partial.win.LampaQuality.status().background_refresh,false);
 assert.equal(partial.win.LampaQuality.status().refresh_on_visit,true);
+assert.deepEqual(partial.components.map(c=>c.component), ['quality'],
+    'Collector-only server config must not create an empty Other section');
 assert.ok(partial.params.some(p=>p.param.name==='quality_module_enabled'));
 assert.ok(!partial.params.some(p=>p.param.name==='quality_buttons_pencil'));
 assert.ok(!partial.params.some(p=>p.param.name==='quality_module_periodic_refresh'));
@@ -105,6 +110,14 @@ assert.equal(defaultConfig.win.LampaQuality.status().server_buttons,true);
 assert.equal(defaultConfig.win.LampaQuality.status().server_onlinefilter,true);
 assert.equal(defaultConfig.win.LampaQuality.status().server_sqlcache,true);
 assert.equal(defaultConfig.win.LampaQuality.status().configured,true);
+assert.deepEqual(defaultConfig.components.map(c=>c.component),
+    ['quality','quality_other'],'Quality and Other must appear as separate Settings sections');
+assert.equal(defaultConfig.components[0].name,'Quality — качество');
+assert.equal(defaultConfig.components[1].name,'Quality — другое');
+assert.equal(defaultConfig.components[1].after,'quality');
+assert.ok(defaultConfig.params.every(p => p.component ===
+    (p.param.name === 'quality_buttons_pencil' ? 'quality_other' : 'quality')),
+    'All badge/cache controls stay in Quality while pencil moves to Other');
 assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_buttons_pencil'));
 assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_module_periodic_refresh'));
 assert.ok(defaultConfig.params.some(p=>p.param.name==='quality_module_refresh_on_visit'));
@@ -119,6 +132,19 @@ assert.equal(defaultConfig.win.LampaQuality.status().background_refresh,true,
     'Opting in to the new setting enables periodic refresh');
 assert.equal(defaultConfig.timerCalls(),1,'Periodic timer exists but makes no requests until enabled');
 assert.equal(defaultConfig.local.has('quality_module_sql_scope_v1'),true);
+
+const buttonsOnly=launch({collect:false,background:false,
+    onlinefilter:false,buttons:true,sqlcache:false});
+assert.deepEqual(buttonsOnly.components.map(c=>c.component),['quality_other']);
+assert.equal(buttonsOnly.components[0].after,'parser');
+assert.deepEqual(buttonsOnly.params.map(p=>p.param.name),['quality_buttons_pencil']);
+
+const onlineOnly=launch({collect:false,background:false,
+    onlinefilter:true,buttons:false,sqlcache:false});
+assert.deepEqual(onlineOnly.components.map(c=>c.component),['quality_other'],
+    'Online-only mode has a host for the filter settings provided by online-filter.js');
+assert.equal(onlineOnly.params.length,0,
+    'Online filter control is separately provided by online-filter.js');
 
 const allOff=launch({collect:false,background:false,
     onlinefilter:false,buttons:false,sqlcache:false});
