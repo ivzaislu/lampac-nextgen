@@ -375,12 +375,16 @@ let tv=anotherCard('tv');
 assert.equal(win.LampaQualityButtons.status().profile,'tv');
 assert.strictEqual(tv.start.last,tv.book,
     'An unconfigured TV profile starts with its first visible native button');
-// Configure TV independently: move Torrents before Bookmarks.
-open();menu=latest();
-menu.onSelect(menu.items.find(x=>x.title==='Торренты'));
-actions=latest();
-actions.onSelect(actions.items.find(x=>x.action==='up'));
-close();
+// Configure TV independently: move Torrents to the FIRST visual position.
+// There are two dynamically added plugin buttons between Bookmarks and Torrent,
+// so three native editor moves are needed, not one.
+for(let step=0;step<3;step++){
+    open();menu=latest();
+    menu.onSelect(menu.items.find(x=>x.title==='Торренты'));
+    actions=latest();
+    actions.onSelect(actions.items.find(x=>x.action==='up'));
+    close();
+}
 const tvSaved=storage.get('quality_module_buttons_v2_tv');
 assert.ok(tvSaved,'Series must save to their own profile');
 assert.notStrictEqual(tvSaved,movieSaved);
