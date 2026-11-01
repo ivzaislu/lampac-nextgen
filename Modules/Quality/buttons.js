@@ -213,7 +213,12 @@
                 var selected = findCatalog(item && item.id);
                 if (!selected || !selected.node || !selected.node.length) return;
                 setTimeout(function () {
-                    if (isCurrent(captured)) selected.node.trigger('hover:enter');
+                    var current = L.Controller && L.Controller.enabled
+                        ? L.Controller.enabled() : null;
+                    // Opening Settings or another plugin's window after a
+                    // folder choice must cancel the deferred native action.
+                    if (isCurrent(captured) && current && current.name === 'full_start')
+                        selected.node.trigger('hover:enter');
                 }, 0);
             });
         });
