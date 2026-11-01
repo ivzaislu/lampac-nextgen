@@ -253,5 +253,29 @@ function menu(component) {
     assert.equal(lateWin.LampaQuality.status().online_filter_hook,true,
         'App-ready restores a replaced Filter bridge');
 
+
+    // The independent standalone plugin may load before Quality. It marks
+    // Lampa.Filter.__balancer_dual_patched, so Quality must not install a
+    // second constructor wrapper or duplicate its bal:true menu entry.
+    function StandaloneFilter(options) { FakeFilter.call(this, options); }
+    StandaloneFilter.prototype = FakeFilter.prototype;
+    StandaloneFilter.__balancer_dual_patched = true;
+    const externalListeners = {}, externalSettings = [];
+    const independentL = Object.assign({}, L, {
+        Filter: StandaloneFilter,
+        Listener: {follow(name,fn) {externalListeners[name]=fn;}},
+        SettingsApi: {addComponent(){},addParam(param){externalSettings.push(param);}}
+    });
+    const independentWindow = {Lampa: independentL};
+    vm.runInNewContext(script,{
+        window:independentWindow,document,MutationObserver:Mutation,
+        setTimeout,clearTimeout,setInterval(){return{unref(){}};},console
+    },{filename:'quality-external-balancer-plugin.js'});
+    assert.strictEqual(independentL.Filter,StandaloneFilter,
+        'Do not wrap a separately installed balancer plugin twice');
+    assert.equal(independentWindow.LampaQuality.status().online_external_balancer,true);
+    assert.equal(externalSettings.filter(p =>
+        p.param.name==='quality_module_online_source_filter').length,1);
+
     console.log('Quality online: native source, component-less forks, late installation, toggle and isolation OK');
 })().catch(err=>{console.error(err);process.exitCode=1;});
