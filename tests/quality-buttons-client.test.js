@@ -135,6 +135,17 @@ $(nativeTrailer).trigger('hover:focus');
 assert.strictEqual(nativeStart.last,nativeTrailer,
     'TV remote navigation tracks focus for extracted native buttons');
 assert.equal(toggles,0,'Unfolding must not switch the TV controller');
+const lateSource=nativeSource('view--added-plugin','Доп. источник');
+sourceHolder.children.push(lateSource);lateSource.parent=sourceHolder;
+window.LampaQualityButtons.refresh();
+assert.equal(lateSource.attrs['data-quality-buttons-id'],'b:view--added-plugin',
+    'A source added after initial full render is also extracted');
+$(lateSource).trigger('hover:enter');
+assert.equal(lateSource.clicked,1,'Late plugin handler must remain bound');
+assert.strictEqual(nativeStart.last,lateSource);
+assert.equal(Object.keys(nativeOnline.events)
+    .filter(k=>k.endsWith('.qualityButtonsFocus')).length,4,
+    'Repeated refresh must never duplicate custom focus hooks');
 assert.equal(movieButton.style.order,'');
 assert.equal(torrentButton.style.order,'',
     'Native order must remain untouched before the user customizes it');
