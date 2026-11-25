@@ -11,8 +11,10 @@ using Shared.Services;
 using Shared.Services.HTTP;
 using Shared.Services.RxEnumerate;
 using Shared.Services.Utilities;
+using Shared.PlaywrightCore;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -30,8 +32,13 @@ public class CinemarController : BaseOnlineController
     [Route("lite/cinemar")]
     async public Task<ActionResult> Index(string title, string original_title, short year, bool rjson, string href, bool similar, short s = -1, int t = -1, string voice = null)
     {
+        var indexTimer = Stopwatch.StartNew();
+        SearchDiagnostic($"stage=Index start href_present={!string.IsNullOrEmpty(href)} similar={similar} rjson={rjson} season={s} voice_id={t}");
         if (await IsRequestBlocked(rch: true))
+        {
+            SearchDiagnostic("stage=Index blocked=true");
             return badInitMsg;
+        }
 
         #region search
         if (string.IsNullOrEmpty(href))
@@ -41,14 +48,21 @@ public class CinemarController : BaseOnlineController
 
             string searchUrl = $"{init.host}/search/{Uri.EscapeDataString(title)}";
         reset_search:
+            bool searchFactoryRan = false;
             var search = await InvokeCacheResult<SearchModel>($"cinemar:search:v2:{title}:{year}", TimeSpan.FromHours(4), async e =>
             {
+                searchFactoryRan = true;
                 SearchModel result = null;
+                bool callbackRan = false;
+                string transport = rch?.enable == true ? "RCH" : "PlaywrightHttp";
+                SearchDiagnostic($"transport={transport} start");
 
                 if (rch?.enable == true)
                 {
                     await rch.GetSpan(searchUrl, html =>
                     {
+                        callbackRan = true;
+                        LogSearchHtml(html);
                         result = SearchResult(html, title, year);
                     });
                 }
@@ -56,18 +70,32 @@ public class CinemarController : BaseOnlineController
                 {
                     await PlaywrightHttp.GetSpan(init.plugin, searchUrl, html =>
                     {
+                        callbackRan = true;
+                        LogSearchHtml(html);
                         result = SearchResult(html, title, year);
                     }, proxy: proxy_data);
                 }
 
+                SearchDiagnostic($"transport={transport} callback={callbackRan} parsed={result != null} exact={result?.link != null}");
+
                 if (result == null)
+                {
+                    if (transport == "PlaywrightHttp" && !callbackRan)
+                        await DiagnoseSearchTransport(searchUrl);
+
                     return e.Fail("search-result", refresh_proxy: true);
+                }
 
                 return e.Success(result);
             });
 
+            SearchDiagnostic($"factory={(searchFactoryRan ? "executed" : "not-executed")} success={search.IsSuccess}");
+
             if (similar || string.IsNullOrEmpty(search.Value?.link))
+            {
+                SearchDiagnostic($"stage=Index return=similar success={search.IsSuccess} elapsed_ms={indexTimer.ElapsedMilliseconds}");
                 return ContentTpl(search, () => search.Value.similar);
+            }
 
             if (string.IsNullOrEmpty(search.Value?.link))
             {
@@ -86,21 +114,42 @@ public class CinemarController : BaseOnlineController
 
         var embed = await GetEmbed(href);
         if (!embed.IsSuccess)
+        {
+            SearchDiagnostic($"stage=Index return=embed_error elapsed_ms={indexTimer.ElapsedMilliseconds}");
             return OnError(embed.ErrorMsg);
+        }
 
         var cache = await GetPlaylist(href, embed.Value);
-        return ContentTpl(cache,
-            () => BuildResult(cache.Value, title, original_title, year, s, t, rjson, href, voice)
-        );
+        SearchDiagnostic($"stage=Index playlist_success={cache.IsSuccess} elapsed_ms={indexTimer.ElapsedMilliseconds}");
+        return ContentTpl(cache, () =>
+        {
+            var resultTimer = Stopwatch.StartNew();
+            try
+            {
+                var result = BuildResult(cache.Value, title, original_title, year, s, t, rjson, href, voice);
+                SearchDiagnostic($"stage=BuildResult type={result?.GetType().Name} empty={result?.IsEmpty} elapsed_ms={resultTimer.ElapsedMilliseconds} index_elapsed_ms={indexTimer.ElapsedMilliseconds}");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                SearchDiagnostic($"stage=BuildResult error={ex.GetType().Name}");
+                throw;
+            }
+        });
     }
 
     async Task<CacheResult<string>> GetEmbed(string href)
     {
         #region embed
     reset_embed:
+        var timer = Stopwatch.StartNew();
+        bool factoryRan = false;
 
         var embed = await InvokeCacheResult<string>($"cinemar:{href}", TimeSpan.FromHours(4), async e =>
         {
+            factoryRan = true;
+            bool callbackRan = false;
+            string transport = rch?.enable == true ? "RCH" : "PlaywrightHttp";
             string iframeUri = null;
             string targetHref = $"{init.host}/{href}";
 
@@ -108,6 +157,9 @@ public class CinemarController : BaseOnlineController
             {
                 await rch.GetSpan(init.cors(targetHref), html =>
                 {
+                    callbackRan = true;
+                    SearchDiagnostic($"stage=GetEmbed html_chars={html.Length}");
+                    LogSearchHtml(html);
                     iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
                 });
             }
@@ -115,10 +167,14 @@ public class CinemarController : BaseOnlineController
             {
                 await PlaywrightHttp.GetSpan(init.plugin, init.cors(targetHref), html =>
                 {
+                    callbackRan = true;
+                    SearchDiagnostic($"stage=GetEmbed html_chars={html.Length}");
+                    LogSearchHtml(html);
                     iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
                 }, proxy: proxy_data);
             }
 
+            SearchDiagnostic($"stage=GetEmbed transport={transport} callback={callbackRan} iframe_found={!string.IsNullOrEmpty(iframeUri)} elapsed_ms={timer.ElapsedMilliseconds}");
             if (iframeUri == null)
                 return e.Fail("iframeUri", refresh_proxy: true);
 
@@ -130,6 +186,7 @@ public class CinemarController : BaseOnlineController
             return e.Success(embedUrl);
         });
 
+        SearchDiagnostic($"stage=GetEmbed factory={factoryRan} success={embed.IsSuccess} elapsed_ms={timer.ElapsedMilliseconds}");
         if (IsRhubFallback(embed))
             goto reset_embed;
 
@@ -141,10 +198,15 @@ public class CinemarController : BaseOnlineController
     {
         #region iframe
     reset_iframe:
+        var timer = Stopwatch.StartNew();
+        bool factoryRan = false;
 
         // v2 keeps old cached entries without id/data out of the playback path.
         var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"cinemar:playlist:v2:{embedUrl}"), 20, async e =>
         {
+            factoryRan = true;
+            bool callbackRan = false;
+            string transport = rch?.enable == true ? "RCH" : "PlaywrightHttp";
             string fileEncode = null;
             var embedHeaders = httpHeaders(init, HeadersModel.Init("referer", $"{init.host}/{href}"));
 
@@ -152,6 +214,9 @@ public class CinemarController : BaseOnlineController
             {
                 await rch.GetSpan(init.cors(embedUrl), html =>
                 {
+                    callbackRan = true;
+                    SearchDiagnostic($"stage=GetPlaylist html_chars={html.Length}");
+                    LogSearchHtml(html);
                     fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
                 }, embedHeaders);
             }
@@ -159,31 +224,40 @@ public class CinemarController : BaseOnlineController
             {
                 await PlaywrightHttp.GetSpan(init.plugin, init.cors(embedUrl), html =>
                 {
+                    callbackRan = true;
+                    SearchDiagnostic($"stage=GetPlaylist html_chars={html.Length}");
+                    LogSearchHtml(html);
                     fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
                 }, headers: embedHeaders, proxy_data);
             }
 
+            SearchDiagnostic($"stage=GetPlaylist transport={transport} callback={callbackRan} encoded_chars={fileEncode?.Length ?? 0} elapsed_ms={timer.ElapsedMilliseconds}");
             if (string.IsNullOrEmpty(fileEncode))
                 return e.Fail("fileEncode", refresh_proxy: true);
 
+            var decodeTimer = Stopwatch.StartNew();
             string playlistJson = DecodeFile(fileEncode);
+            SearchDiagnostic($"stage=DecodeFile success={!string.IsNullOrEmpty(playlistJson)} decoded_chars={playlistJson?.Length ?? 0} elapsed_ms={decodeTimer.ElapsedMilliseconds}");
             if (string.IsNullOrEmpty(playlistJson))
                 return e.Fail("playlistJson");
 
             try
             {
                 var playlist = JsonConvert.DeserializeObject<List<PlaylistItem>>(playlistJson);
+                SearchDiagnostic($"stage=Deserialize count={playlist?.Count ?? 0} first_has_folder={playlist?.FirstOrDefault()?.folder != null}");
                 if (playlist == null || playlist.Count == 0)
                     return e.Fail("playlist");
 
                 return e.Success(playlist);
             }
-            catch
+            catch (Exception ex)
             {
+                SearchDiagnostic($"stage=Deserialize error={ex.GetType().Name}");
                 return e.Fail("DeserializeObject");
             }
         });
 
+        SearchDiagnostic($"stage=GetPlaylist factory={factoryRan} success={cache.IsSuccess} elapsed_ms={timer.ElapsedMilliseconds}");
         if (IsRhubFallback(cache))
             goto reset_iframe;
         #endregion
@@ -532,12 +606,102 @@ public class CinemarController : BaseOnlineController
     #endregion
 
     #region SearchResult
+    void SearchDiagnostic(string message)
+        => Console.WriteLine($"[Cinemar SEARCH] request={HttpContext?.TraceIdentifier} {message}");
+
+    // Temporary diagnostic probe only: never use its response for search results.
+    async Task DiagnoseSearchTransport(string url)
+    {
+        var timer = Stopwatch.StartNew();
+        string stage = "NewPageAsync";
+
+        try
+        {
+            using (var browser = new PlaywrightBrowser())
+            {
+                SearchDiagnostic($"probe=start browser={(browser.chromium != null ? "chromium" : browser.firefox != null ? "firefox" : "none")} status={PlaywrightBrowser.Status}");
+                var page = await browser.NewPageAsync(init.plugin, proxy: proxy_data);
+                SearchDiagnostic($"probe=page created={page != null} elapsed_ms={timer.ElapsedMilliseconds}");
+
+                if (page == null)
+                    return;
+
+                stage = "GotoAsync";
+                var response = await page.GotoAsync(url, new Microsoft.Playwright.PageGotoOptions
+                {
+                    Timeout = 10_000,
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.Commit
+                });
+
+                if (response == null)
+                {
+                    SearchDiagnostic($"probe=response missing elapsed_ms={timer.ElapsedMilliseconds}");
+                    return;
+                }
+
+                response.Headers.TryGetValue("server", out string server);
+                response.Headers.TryGetValue("cf-mitigated", out string cfMitigated);
+                SearchDiagnostic($"probe=response http_status={response.Status} server={SafeSearchDiagnosticValue(server)} cf_mitigated={SafeSearchDiagnosticValue(cfMitigated)} elapsed_ms={timer.ElapsedMilliseconds}");
+
+                stage = "TextAsync";
+                string html = await response.TextAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                SearchDiagnostic($"probe=body elapsed_ms={timer.ElapsedMilliseconds}");
+                LogSearchHtml(html.AsSpan());
+            }
+        }
+        catch (Exception ex)
+        {
+            SearchDiagnostic($"probe=error stage={stage} type={ex.GetType().Name} message={SafeSearchDiagnosticValue(ex.Message)} elapsed_ms={timer.ElapsedMilliseconds}");
+        }
+        finally
+        {
+            SearchDiagnostic($"probe=end elapsed_ms={timer.ElapsedMilliseconds}");
+        }
+    }
+
+    static string SafeSearchDiagnosticValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "-";
+
+        // Retain the error description, not URLs, query strings or multiline call logs.
+        value = value.Split(new[] { '\r', '\n' }, 2)[0];
+        value = Regex.Replace(value, @"https?://[^\s]+", "[url]", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"[\p{Cc}\p{Cf}]", "");
+        return value.Length > 240 ? value.Substring(0, 240) : value;
+    }
+
+    void LogSearchHtml(ReadOnlySpan<char> html)
+    {
+        try
+        {
+            string text = html.ToString();
+            string pageTitle = HttpUtility.HtmlDecode(Regex.Match(text, @"<title\b[^>]*>(.*?)</title\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline).Groups[1].Value);
+            pageTitle = Regex.Replace(pageTitle ?? string.Empty, @"\s+", " ").Trim();
+            pageTitle = Regex.Replace(pageTitle, @"[\p{Cc}\p{Cf}]", "");
+            if (pageTitle.Length > 160)
+                pageTitle = pageTitle.Substring(0, 160);
+
+            bool Has(string marker) => text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
+
+            SearchDiagnostic($"html_chars={html.Length} page_title={pageTitle} " +
+                $"shortstory={Has("shortstory")} shortstory_meta={Has("shortstory__meta")} " +
+                $"dle_content={Has("dle-content")} cloudflare_challenge={Has("cf-chl-") || Has("/cdn-cgi/challenge-platform/") || Has("Just a moment...")} " +
+                $"access_denied={Has("Access denied")} browser_error={Has("ERR_") || Has("about:neterror")}");
+        }
+        catch (Exception ex)
+        {
+            SearchDiagnostic($"html_diagnostic_error={ex.GetType().Name}");
+        }
+    }
+
     SearchModel SearchResult(ReadOnlySpan<char> html, string title, int year)
     {
         if (html.IsEmpty)
             return null;
 
         var rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+        SearchDiagnostic($"matched_rows={rx.Count}");
         if (rx.Count == 0)
             return null;
 
