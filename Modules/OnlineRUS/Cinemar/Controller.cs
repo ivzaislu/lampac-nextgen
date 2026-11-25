@@ -41,14 +41,21 @@ public class CinemarController : BaseOnlineController
 
             string searchUrl = $"{init.host}/search/{Uri.EscapeDataString(title)}";
         reset_search:
+            bool searchFactoryRan = false;
             var search = await InvokeCacheResult<SearchModel>($"cinemar:search:v2:{title}:{year}", TimeSpan.FromHours(4), async e =>
             {
+                searchFactoryRan = true;
                 SearchModel result = null;
+                bool callbackRan = false;
+                string transport = rch?.enable == true ? "RCH" : "PlaywrightHttp";
+                SearchDiagnostic($"transport={transport} start");
 
                 if (rch?.enable == true)
                 {
                     await rch.GetSpan(searchUrl, html =>
                     {
+                        callbackRan = true;
+                        LogSearchHtml(html);
                         result = SearchResult(html, title, year);
                     });
                 }
@@ -56,15 +63,21 @@ public class CinemarController : BaseOnlineController
                 {
                     await PlaywrightHttp.GetSpan(init.plugin, searchUrl, html =>
                     {
+                        callbackRan = true;
+                        LogSearchHtml(html);
                         result = SearchResult(html, title, year);
                     }, proxy: proxy_data);
                 }
+
+                SearchDiagnostic($"transport={transport} callback={callbackRan} parsed={result != null} exact={result?.link != null}");
 
                 if (result == null)
                     return e.Fail("search-result", refresh_proxy: true);
 
                 return e.Success(result);
             });
+
+            SearchDiagnostic($"factory={(searchFactoryRan ? "executed" : "not-executed")} success={search.IsSuccess}");
 
             if (similar || string.IsNullOrEmpty(search.Value?.link))
                 return ContentTpl(search, () => search.Value.similar);
@@ -532,12 +545,40 @@ public class CinemarController : BaseOnlineController
     #endregion
 
     #region SearchResult
+    void SearchDiagnostic(string message)
+        => Console.WriteLine($"[Cinemar SEARCH] request={HttpContext?.TraceIdentifier} {message}");
+
+    void LogSearchHtml(ReadOnlySpan<char> html)
+    {
+        try
+        {
+            string text = html.ToString();
+            string pageTitle = HttpUtility.HtmlDecode(Regex.Match(text, @"<title\b[^>]*>(.*?)</title\s*>", RegexOptions.IgnoreCase | RegexOptions.Singleline).Groups[1].Value);
+            pageTitle = Regex.Replace(pageTitle ?? string.Empty, @"\s+", " ").Trim();
+            pageTitle = Regex.Replace(pageTitle, @"[\p{Cc}\p{Cf}]", "");
+            if (pageTitle.Length > 160)
+                pageTitle = pageTitle.Substring(0, 160);
+
+            bool Has(string marker) => text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
+
+            SearchDiagnostic($"html_chars={html.Length} page_title={pageTitle} " +
+                $"shortstory={Has("shortstory")} shortstory_meta={Has("shortstory__meta")} " +
+                $"dle_content={Has("dle-content")} cloudflare_challenge={Has("cf-chl-") || Has("/cdn-cgi/challenge-platform/") || Has("Just a moment...")} " +
+                $"access_denied={Has("Access denied")} browser_error={Has("ERR_") || Has("about:neterror")}");
+        }
+        catch (Exception ex)
+        {
+            SearchDiagnostic($"html_diagnostic_error={ex.GetType().Name}");
+        }
+    }
+
     SearchModel SearchResult(ReadOnlySpan<char> html, string title, int year)
     {
         if (html.IsEmpty)
             return null;
 
         var rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+        SearchDiagnostic($"matched_rows={rx.Count}");
         if (rx.Count == 0)
             return null;
 
