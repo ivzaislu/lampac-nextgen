@@ -107,6 +107,7 @@
   <Folder Name="/Modules/OnlineRUS/">
     <Project Path="Modules/OnlineRUS/Aladin/Aladin.csproj" />
     <Project Path="Modules/OnlineRUS/CDNvideohub/CDNvideohub.csproj" />
+    <Project Path="Modules/OnlineRUS/Cinemar/Cinemar.csproj" />
     <Project Path="Modules/OnlineRUS/Collaps/Collaps.csproj" />
     <Project Path="Modules/OnlineRUS/FanCDN/FanCDN.csproj" />
     <Project Path="Modules/OnlineRUS/FlixCDN/FlixCDN.csproj" />
