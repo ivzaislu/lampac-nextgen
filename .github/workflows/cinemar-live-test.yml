@@ -1,0 +1,36 @@
+name: Cinemar diagnostic baseline
+on:
+  push:
+    branches: [cinemar]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Environment and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          {
+            git rev-parse HEAD
+            dotnet --info
+            uname -a
+            free -m
+          } | tee diagnostics/environment.log
+          dotnet build Modules/OnlineRUS/Cinemar/Cinemar.csproj -c Release --verbosity normal 2>&1 | tee diagnostics/cinemar-build.log
+          dotnet publish Core/Core.csproj -c Release -o publish --verbosity normal 2>&1 | tee diagnostics/lampac-publish.log
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: cinemar-baseline-diagnostics
+          path: diagnostics/
+          retention-days: 14
