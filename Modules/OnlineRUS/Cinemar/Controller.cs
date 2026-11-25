@@ -11,8 +11,10 @@ using Shared.Services;
 using Shared.Services.HTTP;
 using Shared.Services.RxEnumerate;
 using Shared.Services.Utilities;
+using Shared.PlaywrightCore;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -72,7 +74,12 @@ public class CinemarController : BaseOnlineController
                 SearchDiagnostic($"transport={transport} callback={callbackRan} parsed={result != null} exact={result?.link != null}");
 
                 if (result == null)
+                {
+                    if (transport == "PlaywrightHttp" && !callbackRan)
+                        await DiagnoseSearchTransport(searchUrl);
+
                     return e.Fail("search-result", refresh_proxy: true);
+                }
 
                 return e.Success(result);
             });
@@ -547,6 +554,68 @@ public class CinemarController : BaseOnlineController
     #region SearchResult
     void SearchDiagnostic(string message)
         => Console.WriteLine($"[Cinemar SEARCH] request={HttpContext?.TraceIdentifier} {message}");
+
+    // Temporary diagnostic probe only: never use its response for search results.
+    async Task DiagnoseSearchTransport(string url)
+    {
+        var timer = Stopwatch.StartNew();
+        string stage = "NewPageAsync";
+
+        try
+        {
+            using (var browser = new PlaywrightBrowser())
+            {
+                SearchDiagnostic($"probe=start browser={(browser.chromium != null ? "chromium" : browser.firefox != null ? "firefox" : "none")} status={PlaywrightBrowser.Status}");
+                var page = await browser.NewPageAsync(init.plugin, proxy: proxy_data);
+                SearchDiagnostic($"probe=page created={page != null} elapsed_ms={timer.ElapsedMilliseconds}");
+
+                if (page == null)
+                    return;
+
+                stage = "GotoAsync";
+                var response = await page.GotoAsync(url, new Microsoft.Playwright.PageGotoOptions
+                {
+                    Timeout = 10_000,
+                    WaitUntil = Microsoft.Playwright.WaitUntilState.Commit
+                });
+
+                if (response == null)
+                {
+                    SearchDiagnostic($"probe=response missing elapsed_ms={timer.ElapsedMilliseconds}");
+                    return;
+                }
+
+                response.Headers.TryGetValue("server", out string server);
+                response.Headers.TryGetValue("cf-mitigated", out string cfMitigated);
+                SearchDiagnostic($"probe=response http_status={response.Status} server={SafeSearchDiagnosticValue(server)} cf_mitigated={SafeSearchDiagnosticValue(cfMitigated)} elapsed_ms={timer.ElapsedMilliseconds}");
+
+                stage = "TextAsync";
+                string html = await response.TextAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                SearchDiagnostic($"probe=body elapsed_ms={timer.ElapsedMilliseconds}");
+                LogSearchHtml(html.AsSpan());
+            }
+        }
+        catch (Exception ex)
+        {
+            SearchDiagnostic($"probe=error stage={stage} type={ex.GetType().Name} message={SafeSearchDiagnosticValue(ex.Message)} elapsed_ms={timer.ElapsedMilliseconds}");
+        }
+        finally
+        {
+            SearchDiagnostic($"probe=end elapsed_ms={timer.ElapsedMilliseconds}");
+        }
+    }
+
+    static string SafeSearchDiagnosticValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "-";
+
+        // Retain the error description, not URLs, query strings or multiline call logs.
+        value = value.Split(new[] { '\r', '\n' }, 2)[0];
+        value = Regex.Replace(value, @"https?://[^\s]+", "[url]", RegexOptions.IgnoreCase);
+        value = Regex.Replace(value, @"[\p{Cc}\p{Cf}]", "");
+        return value.Length > 240 ? value.Substring(0, 240) : value;
+    }
 
     void LogSearchHtml(ReadOnlySpan<char> html)
     {
