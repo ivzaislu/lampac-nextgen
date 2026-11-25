@@ -14,6 +14,7 @@ using Shared.Services.RxEnumerate;
 using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -27,10 +28,45 @@ public class KinogoController : BaseOnlineController
 {
     public KinogoController() : base(ModInit.conf) { }
 
+    // Temporary diagnostics: no URLs, titles, tokens or playlist contents in logs.
+    void PerfLog(string stage, long elapsedMs, string detail = null)
+    {
+        Console.WriteLine($"[Kinogo PERF] request={HttpContext?.TraceIdentifier} {stage}: {elapsedMs} ms{(detail == null ? "" : " " + detail)}");
+    }
+
+    IDisposable Perf(string stage) => new PerfTimer(ms => PerfLog(stage, ms));
+
+    sealed class PerfTimer : IDisposable
+    {
+        readonly Stopwatch timer = Stopwatch.StartNew();
+        readonly Action<long> log;
+
+        public PerfTimer(Action<long> log) => this.log = log;
+
+        public void Dispose()
+        {
+            timer.Stop();
+            log(timer.ElapsedMilliseconds);
+        }
+    }
+
+    async Task<T> PerfAsync<T>(string stage, Func<Task<T>> action)
+    {
+        using var timer = Perf(stage);
+        return await action();
+    }
+
+    async Task PerfAsync(string stage, Func<Task> action)
+    {
+        using var timer = Perf(stage);
+        await action();
+    }
+
     [HttpGet, Staticache(manually: true)]
     [Route("lite/kinogo")]
     async public Task<ActionResult> Index(string title, string original_title, short year, bool rjson, string href, bool similar, short s = -1, int t = -1, string voice = null)
     {
+        using var totalPerf = Perf("Index.Total");
         if (await IsRequestBlocked(rch: true))
             return badInitMsg;
 
@@ -42,23 +78,30 @@ public class KinogoController : BaseOnlineController
 
             string searchUrl = $"{init.host}/search/{Uri.EscapeDataString(title)}";
         reset_search:
+            var searchTimer = Stopwatch.StartNew();
+            bool searchFactoryRan = false;
             var search = await InvokeCacheResult<SearchModel>($"kinogo:search:v2:{title}:{year}", TimeSpan.FromHours(4), async e =>
             {
+                searchFactoryRan = true;
+                using var factoryPerf = Perf("Search.Factory");
                 SearchModel result = null;
 
-                if (rch?.enable == true)
+                using (Perf("Search.HTTP"))
                 {
-                    await rch.GetSpan(searchUrl, html =>
+                    if (rch?.enable == true)
                     {
-                        result = SearchResult(html, title, year);
-                    });
-                }
-                else
-                {
-                    await PlaywrightHttp.GetSpan(init.plugin, searchUrl, html =>
+                        await rch.GetSpan(searchUrl, html =>
+                        {
+                            result = SearchResult(html, title, year);
+                        });
+                    }
+                    else
                     {
-                        result = SearchResult(html, title, year);
-                    }, proxy: proxy_data);
+                        await PlaywrightHttp.GetSpan(init.plugin, searchUrl, html =>
+                        {
+                            result = SearchResult(html, title, year);
+                        }, proxy: proxy_data);
+                    }
                 }
 
                 if (result == null)
@@ -66,6 +109,8 @@ public class KinogoController : BaseOnlineController
 
                 return e.Success(result);
             });
+
+            PerfLog("Search.Total", searchTimer.ElapsedMilliseconds, $"factory={(searchFactoryRan ? "executed" : "not-executed")}");
 
             if (similar || string.IsNullOrEmpty(search.Value?.link))
                 return ContentTpl(search, () => search.Value.similar);
@@ -91,7 +136,11 @@ public class KinogoController : BaseOnlineController
 
         var cache = await GetPlaylist(href, embed.Value);
         return ContentTpl(cache,
-            () => BuildResult(cache.Value, title, original_title, year, s, t, rjson, href, voice)
+            () =>
+            {
+                using var resultPerf = Perf("BuildResult");
+                return BuildResult(cache.Value, title, original_title, year, s, t, rjson, href, voice);
+            }
         );
     }
 
@@ -100,24 +149,31 @@ public class KinogoController : BaseOnlineController
         #region embed
     reset_embed:
 
+        var embedTimer = Stopwatch.StartNew();
+        bool embedFactoryRan = false;
         var embed = await InvokeCacheResult<string>($"kinogo:{href}", TimeSpan.FromHours(4), async e =>
         {
+            embedFactoryRan = true;
+            using var factoryPerf = Perf("GetEmbed.Factory");
             string iframeUri = null;
             string targetHref = $"{init.host}/{href}";
 
-            if (rch?.enable == true)
+            using (Perf("GetEmbed.HTTP"))
             {
-                await rch.GetSpan(init.cors(targetHref), html =>
+                if (rch?.enable == true)
                 {
-                    iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
-                });
-            }
-            else
-            {
-                await PlaywrightHttp.GetSpan(init.plugin, init.cors(targetHref), html =>
+                    await rch.GetSpan(init.cors(targetHref), html =>
+                    {
+                        iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
+                    });
+                }
+                else
                 {
-                    iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
-                }, proxy: proxy_data);
+                    await PlaywrightHttp.GetSpan(init.plugin, init.cors(targetHref), html =>
+                    {
+                        iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
+                    }, proxy: proxy_data);
+                }
             }
 
             if (iframeUri == null)
@@ -131,6 +187,8 @@ public class KinogoController : BaseOnlineController
             return e.Success(embedUrl);
         });
 
+        PerfLog("GetEmbed.Total", embedTimer.ElapsedMilliseconds, $"factory={(embedFactoryRan ? "executed" : "not-executed")}");
+
         if (IsRhubFallback(embed))
             goto reset_embed;
 
@@ -143,25 +201,32 @@ public class KinogoController : BaseOnlineController
         #region iframe
     reset_iframe:
 
+        var playlistTimer = Stopwatch.StartNew();
+        bool playlistFactoryRan = false;
         // v2 keeps old cached entries without id/data out of the playback path.
         var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"kinogo:playlist:v2:{embedUrl}"), 20, async e =>
         {
+            playlistFactoryRan = true;
+            using var factoryPerf = Perf("GetPlaylist.Factory");
             string fileEncode = null;
             var embedHeaders = httpHeaders(init, HeadersModel.Init("referer", $"{init.host}/{href}"));
 
-            if (rch?.enable == true)
+            using (Perf("GetPlaylist.HTTP"))
             {
-                await rch.GetSpan(init.cors(embedUrl), html =>
+                if (rch?.enable == true)
                 {
-                    fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
-                }, embedHeaders);
-            }
-            else
-            {
-                await PlaywrightHttp.GetSpan(init.plugin, init.cors(embedUrl), html =>
+                    await rch.GetSpan(init.cors(embedUrl), html =>
+                    {
+                        fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
+                    }, embedHeaders);
+                }
+                else
                 {
-                    fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
-                }, headers: embedHeaders, proxy_data);
+                    await PlaywrightHttp.GetSpan(init.plugin, init.cors(embedUrl), html =>
+                    {
+                        fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
+                    }, headers: embedHeaders, proxy_data);
+                }
             }
 
             if (string.IsNullOrEmpty(fileEncode))
@@ -173,6 +238,7 @@ public class KinogoController : BaseOnlineController
 
             try
             {
+                using var deserializePerf = Perf("GetPlaylist.Deserialize");
                 var playlist = JsonConvert.DeserializeObject<List<PlaylistItem>>(playlistJson);
                 if (playlist == null || playlist.Count == 0)
                     return e.Fail("playlist");
@@ -184,6 +250,8 @@ public class KinogoController : BaseOnlineController
                 return e.Fail("DeserializeObject");
             }
         });
+
+        PerfLog("GetPlaylist.Total", playlistTimer.ElapsedMilliseconds, $"factory={(playlistFactoryRan ? "executed" : "not-executed")}");
 
         if (IsRhubFallback(cache))
             goto reset_iframe;
@@ -198,6 +266,7 @@ public class KinogoController : BaseOnlineController
     [Route("lite/kinogo/video.m3u8")]
     async public Task<ActionResult> Video(string href, string id, string title, bool play = false)
     {
+        using var totalPerf = Perf("Video.Total");
         if (await IsRequestBlocked(rch: true, rch_check: !play))
             return badInitMsg;
 
@@ -223,23 +292,30 @@ public class KinogoController : BaseOnlineController
         string origin = embedUri.GetLeftPart(UriPartial.Authority);
         var streamHeaders = HeadersModel.Init(("referer", embed.Value), ("origin", origin));
 
+        var videoTimer = Stopwatch.StartNew();
+        bool videoFactoryRan = false;
         var cache = await InvokeCacheResult<PlaylistItem>(ipkey($"kinogo:video:v2:{embed.Value}:{id}"), 5, async e =>
         {
+            videoFactoryRan = true;
+            using var factoryPerf = Perf("Video.Load.Factory");
             // The provider expects the opaque data value as a JSON string.
             var apiHeaders = httpHeaders(init, HeadersModel.Init(("referer", embed.Value), ("origin", origin), ("content-type", "application/json")));
             string apiUrl = init.cors($"{origin}/api/playlist/load", apiHeaders, requestInfo);
             string body = JsonConvert.SerializeObject(item.data);
             JObject response;
 
-            if (rch?.enable == true)
-                response = await rch.Post<JObject>(apiUrl, body, apiHeaders);
-            else
+            using (Perf("Video.Load.HTTP"))
             {
-                using var content = new StringContent(body, Encoding.UTF8, "application/json");
-                response = await Http.Post<JObject>(apiUrl, content,
-                    timeoutSeconds: init.httptimeout,
-                    headers: apiHeaders.Where(h => !h.name.Equals("content-type", StringComparison.OrdinalIgnoreCase)).ToList(),
-                    proxy: init.useproxy ? proxy : null, httpversion: init.httpversion);
+                if (rch?.enable == true)
+                    response = await rch.Post<JObject>(apiUrl, body, apiHeaders);
+                else
+                {
+                    using var content = new StringContent(body, Encoding.UTF8, "application/json");
+                    response = await Http.Post<JObject>(apiUrl, content,
+                        timeoutSeconds: init.httptimeout,
+                        headers: apiHeaders.Where(h => !h.name.Equals("content-type", StringComparison.OrdinalIgnoreCase)).ToList(),
+                        proxy: init.useproxy ? proxy : null, httpversion: init.httpversion);
+                }
             }
 
             var success = response?["success"];
@@ -259,6 +335,8 @@ public class KinogoController : BaseOnlineController
 
             return e.Success(media);
         });
+
+        PerfLog("Video.Load.Total", videoTimer.ElapsedMilliseconds, $"factory={(videoFactoryRan ? "executed" : "not-executed")}");
 
         if (!cache.IsSuccess)
             return OnError(cache.ErrorMsg);
@@ -594,20 +672,24 @@ public class KinogoController : BaseOnlineController
     #region DecodeFile
     async Task<string> DecodeFile(OnlinesSettings init, string fileEncode)
     {
+        using var totalPerf = Perf("DecodeFile.Total");
         try
         {
             using (var browser = new PlaywrightBrowser())
             {
-                var page = await browser.NewPageAsync(init.plugin).ConfigureAwait(false);
+                var page = await PerfAsync("DecodeFile.NewPageAsync", () => browser.NewPageAsync(init.plugin)).ConfigureAwait(false);
                 if (page == null)
                     return null;
 
-                await page.AddScriptTagAsync(new()
+                await PerfAsync("DecodeFile.AddScriptTag", async () =>
                 {
-                    Content = ModInit.playerjs
+                    await page.AddScriptTagAsync(new()
+                    {
+                        Content = ModInit.playerjs
+                    });
                 });
 
-                return await page.EvaluateAsync<string>("(input) => decodePlayerjsFile(input)", fileEncode);
+                return await PerfAsync("DecodeFile.EvaluateAsync", () => page.EvaluateAsync<string>("(input) => decodePlayerjsFile(input)", fileEncode));
             }
         }
         catch { return null; }
