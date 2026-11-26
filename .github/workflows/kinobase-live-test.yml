@@ -258,38 +258,55 @@ jobs:
     timeout-minutes: 4
     permissions: {}
     steps:
-      - name: Test HTTPS connectivity and reported country
+      - name: Test HTTP and SOCKS5 candidates in parallel
         shell: bash
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
           trap 'rm -rf "$work"' EXIT
           endpoint='https://www.cloudflare.com/cdn-cgi/trace'
-          working=0
           test_proxy() {
-            local label="$1"
-            shift
+            local label="$1" slot="$2"
+            shift 2
             local meta rc country
             rc=0
             meta="$(curl --silent --show-error --fail \
-              --connect-timeout 6 --max-time 15 --max-filesize 8192 \
-              --proto '=https' --output "$work/body" \
+              --connect-timeout 8 --max-time 20 --max-filesize 8192 \
+              --proto '=https' --output "$work/body-$slot" \
               --write-out '%{http_code} %{ssl_verify_result} %{time_total}' \
-              "$@" "$endpoint" 2>"$work/error")" || rc=$?
+              "$@" "$endpoint" 2>"$work/error-$slot")" || rc=$?
             if [[ "$rc" -ne 0 ]]; then
               printf '%s: curl_exit=%s http_tls_seconds=%s\n' "$label" "$rc" "$meta"
               return 1
             fi
-            country="$(awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print $2; exit}' "$work/body")"
+            country="$(awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print $2; exit}' "$work/body-$slot")"
             printf '%s: http_tls_seconds=%s reported_country=%s\n' "$label" "$meta" "${country:-unknown}"
             [[ "$meta" == '200 0 '* && -n "$country" ]]
           }
-          test_proxy direct --noproxy '*' --proxy '' || true
-          for candidate in 116.204.166.199:8080 188.132.249.148:8080 5.26.111.181:8080; do
-            if test_proxy "$candidate" --noproxy '' --proxy "http://$candidate"; then
+          test_proxy direct direct --noproxy '*' --proxy '' || true
+          candidates=(
+            http://194.124.36.14:8080
+            http://201.7.28.13:8080
+            http://188.132.150.149:8080
+            http://188.132.249.144:8080
+            socks5h://38.10.71.218:1080
+            socks5h://89.144.20.144:10800
+            socks5h://163.5.53.209:1080
+            socks5h://83.217.9.235:2080
+          )
+          pids=()
+          for i in "${!candidates[@]}"; do
+            candidate="${candidates[$i]}"
+            test_proxy "$candidate" "$i" --noproxy '' --proxy "$candidate" >"$work/result-$i" &
+            pids+=("$!")
+          done
+          working=0
+          for i in "${!pids[@]}"; do
+            if wait "${pids[$i]}"; then
               working=$((working + 1))
             fi
+            cat "$work/result-$i"
           done
-          echo "HTTPS connectivity verified: $working/3"
+          echo "HTTPS connectivity verified: $working/${#candidates[@]}"
           echo 'No requests to Kinobase or media endpoints through proxies.'
           [[ "$working" -gt 0 ]]
