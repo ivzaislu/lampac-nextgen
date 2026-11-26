@@ -4,141 +4,19 @@ on:
     branches: [cinemar]
     paths:
       - '.github/workflows/kinobase-proxy-connectivity.yml'
+      - '.github/scripts/kinobase-proxy-candidates.sh'
   workflow_dispatch:
-permissions: {}
+permissions:
+  contents: read
 jobs:
   proxy-connectivity:
     name: Public proxy connectivity (neutral endpoint)
     runs-on: ubuntu-26.04
     timeout-minutes: 4
-    permissions: {}
     steps:
-      - name: Test HTTP and SOCKS5 candidates in parallel
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check fresh public candidates
         shell: bash
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          endpoint='https://www.cloudflare.com/cdn-cgi/trace'
-          test_proxy() {
-            local label="$1" slot="$2"
-            shift 2
-            local meta rc country
-            rc=0
-            meta="$(curl --silent --show-error --fail \
-              --connect-timeout 12 --max-time 25 --max-filesize 8192 \
-              --proto '=https' --output "$work/body-$slot" \
-              --write-out '%{http_code} %{ssl_verify_result} %{time_total}' \
-              "$@" "$endpoint" 2>"$work/error-$slot")" || rc=$?
-            if [[ "$rc" -ne 0 ]]; then
-              printf '%s: curl_exit=%s http_tls_seconds=%s\n' "$label" "$rc" "$meta"
-              return 1
-            fi
-            country="$(awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print $2; exit}' "$work/body-$slot")"
-            printf '%s: http_tls_seconds=%s reported_country=%s\n' "$label" "$meta" "${country:-unknown}"
-            [[ "$meta" == '200 0 '* && -n "$country" ]]
-          }
-          test_proxy direct direct --noproxy '*' --proxy '' || true
-          # Read the public list on each run; no account/API credentials.
-          python3 - <<'PY' >"$work/candidates"
-          import ipaddress
-          import re
-          import sys
-          import urllib.request
-          from html.parser import HTMLParser
-
-          class Rows(HTMLParser):
-              def __init__(self):
-                  super().__init__(convert_charrefs=True)
-                  self.rows = []
-                  self.row = None
-                  self.cell = None
-
-              def handle_starttag(self, tag, attrs):
-                  if tag == 'tr':
-                      self.row = []
-                  elif tag in ('td', 'th') and self.row is not None:
-                      self.cell = []
-                  elif self.cell is not None and tag == 'img':
-                      self.cell.extend(v for k, v in attrs if k in ('alt', 'title') and v)
-
-              def handle_data(self, data):
-                  if self.cell is not None:
-                      self.cell.append(data)
-
-              def handle_endtag(self, tag):
-                  if tag in ('td', 'th') and self.row is not None and self.cell is not None:
-                      self.row.append(' '.join(' '.join(self.cell).split()))
-                      self.cell = None
-                  elif tag == 'tr' and self.row is not None:
-                      self.rows.append(self.row)
-                      self.row = None
-                      self.cell = None
-
-          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-          candidates = {}
-          for page in range(1, 4):
-              url = f'https://proxymania.su/free-proxy?type=&country=RU&speed=&page={page}'
-              try:
-                  with opener.open(url, timeout=15) as response:
-                      raw = response.read(2_000_001)
-                      if len(raw) > 2_000_000:
-                          raise ValueError('page too large')
-                      html = raw.decode(response.headers.get_content_charset() or 'utf-8', errors='replace')
-              except Exception as error:
-                  print(f'ProxyMania page {page}: {type(error).__name__}', file=sys.stderr)
-                  break
-              parser = Rows()
-              parser.feed(html)
-              added = 0
-              for cells in parser.rows:
-                  if len(cells) < 3:
-                      continue
-                  address = re.search(r'(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?!\d)', cells[0])
-                  if not address or not re.search(r'\b(?:Russia|Russian Federation|RU)\b|Россия|Российская Федерация', cells[1], re.I):
-                      continue
-                  try:
-                      ip = ipaddress.ip_address(address[1])
-                      port = int(address[2])
-                  except ValueError:
-                      continue
-                  if ip.version != 4 or not ip.is_global or not 1 <= port <= 65535:
-                      continue
-                  protocol = cells[2].upper().strip()
-                  if protocol == 'SOCKS5':
-                      scheme = 'socks5h'
-                  elif protocol in ('HTTP', 'HTTPS', 'HTTP/HTTPS'):
-                      scheme = 'http'
-                  else:
-                      continue
-                  candidate = f'{scheme}://{ip}:{port}'
-                  if candidate not in candidates:
-                      speed = re.search(r'(\d+)\s*(?:ms|мс)', cells[4], re.I) if len(cells) > 4 else None
-                      candidates[candidate] = int(speed[1]) if speed else 999999
-                      added += 1
-              print(f'ProxyMania page {page}: new candidates={added}', file=sys.stderr)
-              if len(candidates) >= 12 or not added:
-                  break
-          if not candidates:
-              sys.exit('No valid candidates found; source unavailable or table format changed')
-          for candidate in sorted(candidates, key=candidates.get)[:12]:
-              print(candidate)
-          PY
-          mapfile -t candidates <"$work/candidates"
-          echo "Fresh candidates: ${#candidates[@]}"
-          pids=()
-          for i in "${!candidates[@]}"; do
-            candidate="${candidates[$i]}"
-            test_proxy "$candidate" "$i" --noproxy '' --proxy "$candidate" >"$work/result-$i" &
-            pids+=("$!")
-          done
-          working=0
-          for i in "${!pids[@]}"; do
-            if wait "${pids[$i]}"; then
-              working=$((working + 1))
-            fi
-            cat "$work/result-$i"
-          done
-          echo "HTTPS connectivity verified: $working/${#candidates[@]}"
-          echo 'No requests to Kinobase or media endpoints through proxies.'
-          [[ "$working" -gt 0 ]]
+        run: bash .github/scripts/kinobase-proxy-candidates.sh "$RUNNER_TEMP/kinobase-verified-proxies"
