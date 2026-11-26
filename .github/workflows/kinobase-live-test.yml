@@ -113,7 +113,7 @@ jobs:
           set -euo pipefail
           export CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           "$CHROME_BIN" --version | tee diagnostics/chromium.log
-          node <<'JS' | tee diagnostics/browser.log
+          cat > "$RUNNER_TEMP/kinobase-browser.cjs" <<'JS'
           const fs = require('node:fs');
           const path = require('node:path');
           const { chromium } = require(path.resolve('publish/.playwright/package/index.js'));
@@ -190,8 +190,25 @@ jobs:
             let browser;
             let pageErrors = 0;
             try {
-              browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true });
-              const page = await browser.newPage();
+              const proxy = process.env.KINOBASE_DIAGNOSTIC_PROXY;
+              browser = await chromium.launch({
+                executablePath: process.env.CHROME_BIN, headless: true,
+                ...(proxy ? { proxy: { server: proxy } } : {})
+              });
+              const page = await browser.newPage(proxy ? { serviceWorkers: 'block' } : {});
+              if (proxy) {
+                // No third-party requests, media playback, or certificate overrides.
+                await page.route('**/*', async route => {
+                  const request = route.request();
+                  const url = new URL(request.url());
+                  if (url.origin !== target.origin || request.resourceType() === 'media' ||
+                      /\.(?:m3u8|mpd|mp4|m4s|ts|webm|aac)(?:$|\/)/i.test(url.pathname)) {
+                    await route.abort();
+                    return;
+                  }
+                  await route.continue();
+                });
+              }
               page.on('response', response => {
                 const h = response.headers();
                 record(response.request(), response.status(), h['content-type'] || '', h['cf-mitigated'] === 'challenge');
@@ -203,6 +220,14 @@ jobs:
               page.on('pageerror', () => pageErrors++);
               const navigation = await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
               console.log('navigation_http=' + (navigation?.status() ?? 0));
+              if (navigation && navigation.status() === 200) {
+                const raw = await navigation.text().catch(() => '');
+                console.log('initial_html ' + JSON.stringify({
+                  chars: raw.length,
+                  playerjs_constructor: /\bnew\s+Playerjs\s*\(/i.test(raw),
+                  geo_notice: /недоступно\s+для\s+просмотра\s+в\s+вашей\s+стране|not available in your (?:country|region)/i.test(raw)
+                }));
+              }
               await page.waitForLoadState('load', { timeout: 10000 }).catch(() => {});
               await page.waitForTimeout(5000);
               const summary = await page.evaluate(() => {
@@ -221,7 +246,7 @@ jobs:
                   video_elements: document.querySelectorAll('video').length,
                   iframe_elements: document.querySelectorAll('iframe').length,
                   alert_present: !!document.querySelector('.alert'),
-                  geo_notice: /недоступно\s+(?:в|для)\s+(?:ваш|регион|стран)|географическ|not available in your (?:country|region)|geo.block/i.test(text)
+                  geo_notice: /недоступно\s+(?:для\s+просмотра\s+)?(?:в|для)\s+(?:ваш|регион|стран)|географическ|not available in your (?:country|region)|geo.block/i.test(text)
                 };
               });
               console.log('DOM ' + JSON.stringify(summary));
@@ -245,6 +270,23 @@ jobs:
           }
           main();
           JS
+          node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser.log
+      - name: Compare public page availability through candidate proxy
+        shell: bash
+        env:
+          KINOBASE_DIAGNOSTIC_PROXY: http://188.132.150.149:8080
+        run: |
+          set -euo pipefail
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          echo 'Proxy observation: HTTPS verification enabled; same-origin non-media browser requests only.'
+          trace="$(mktemp)"
+          trap 'rm -f "$trace"' EXIT
+          curl --silent --show-error --fail --connect-timeout 8 --max-time 20 \
+            --max-filesize 8192 --proto '=https' --noproxy '' \
+            --proxy "$KINOBASE_DIAGNOSTIC_PROXY" \
+            --output "$trace" https://www.cloudflare.com/cdn-cgi/trace
+          awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print "proxy_reported_country=" $2; exit}' "$trace"
+          node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser-proxy.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
