@@ -4,9 +4,17 @@
 #:property JsonSerializerIsReflectionEnabledByDefault=true
 #:project ../../Modules/OnlineRUS/Kinobase/Kinobase.csproj
 
-// Offline contract check; all data are synthetic, no provider or media requests.
+// Default: synthetic fixtures, including real loopback HTTP. Optional direct metadata observation.
 using Kinobase;
+using System.Net;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
+
+if (args.Contains("--observe-direct"))
+    return await ObserveDirect();
 
 int failed = 0;
 int total = 0;
@@ -117,8 +125,120 @@ await Check("HTTP-first leaves Uppod unchanged", async () =>
     var result = await HttpFirst(true, false, "<div id=\"playlists\">" + episodes + "</div>", Marker(movie), 0, 1);
     Require(result?.serial?.Length == 1 && result.quality == "1080p", "Uppod changed");
 });
+await Check("loopback HTTP: actual transport and fallback", async () =>
+{
+    var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
+    builder.Logging.ClearProviders();
+    builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
+    await using var app = builder.Build();
+    int requests = 0;
+    app.MapGet("/valid", () =>
+    {
+        Interlocked.Increment(ref requests);
+        return Results.Text(Marker(episodes), "text/html; charset=utf-8");
+    });
+    app.MapGet("/missing", () =>
+    {
+        Interlocked.Increment(ref requests);
+        return Results.Text("<html>No player</html>", "text/html; charset=utf-8");
+    });
+    app.MapGet("/unavailable", () =>
+    {
+        Interlocked.Increment(ref requests);
+        return Results.StatusCode(503);
+    });
+    await app.StartAsync();
+    try
+    {
+        string origin = app.Urls.Single().TrimEnd('/');
+        using var client = new HttpClient(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
+        {
+            Timeout = TimeSpan.FromSeconds(5)
+        };
+        int fallbackCalls = 0;
+        var conf = new ModuleConf("Kinobase", origin, true, hdr: true) { nativehttp = true };
+        var invoke = new KinobaseInvoke(null, conf, _ =>
+        {
+            fallbackCalls++;
+            return Task.FromResult(Marker(movie));
+        }, value => value);
+
+        var valid = await invoke.Embed("valid", true, uri => client.GetStringAsync(uri));
+        Require(valid?.serial?.Length == 1 && valid.quality == "1080p", "loopback result");
+        Require(requests == 1 && fallbackCalls == 0, "unexpected fallback on 200");
+        foreach (string route in new[] { "missing", "unavailable" })
+        {
+            var result = await invoke.Embed(route, true, uri => client.GetStringAsync(uri));
+            Require(result?.content == movie, "fallback after " + route);
+        }
+        Require(requests == 3 && fallbackCalls == 2, "unexpected transport/fallback counts");
+        conf.nativehttp = false;
+        var disabled = await invoke.Embed("valid", true, uri => client.GetStringAsync(uri));
+        Require(disabled?.content == movie && requests == 3 && fallbackCalls == 3, "disabled path made HTTP request");
+    }
+    finally { await app.StopAsync(); }
+});
 Console.WriteLine($"Kinobase offline self-check: {total - failed}/{total} passed");
 return failed == 0 ? 0 : 1;
+
+// Direct public metadata only. No proxies, scripts, cookies, media or player values logged.
+static async Task<int> ObserveDirect()
+{
+    const string origin = "https://kinobase.org";
+    try
+    {
+        using var client = new HttpClient(new HttpClientHandler
+        {
+            UseProxy = false, AllowAutoRedirect = false
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(25),
+            MaxResponseContentBufferSize = 4 * 1024 * 1024
+        };
+        var searchUrl = origin + "/search?query=" + Uri.EscapeDataString("Ночь живых мертвецов");
+        string search = await client.GetStringAsync(searchUrl);
+        var document = new HtmlAgilityPack.HtmlDocument();
+        document.LoadHtml(search);
+        var href = document.DocumentNode.SelectNodes("//a[@href]")?
+            .Select(node => node.GetAttributeValue("href", ""))
+            .FirstOrDefault(value => value.StartsWith("/film/") || value.StartsWith("/serial/"));
+        if (href == null || !Uri.TryCreate(new Uri(origin), href, out var target) ||
+            target.Scheme != "https" || target.Host != "kinobase.org" || !target.IsDefaultPort)
+        {
+            Console.WriteLine("Direct observation: no recognized public detail link");
+            return 1;
+        }
+        bool detailOk = false;
+        int fallbackCalls = 0;
+        var conf = new ModuleConf("Kinobase", origin, true, hdr: true) { nativehttp = true };
+        var invoke = new KinobaseInvoke(null, conf, _ =>
+        {
+            fallbackCalls++;
+            return Task.FromResult<string>(null);
+        }, value => value);
+        var result = await invoke.Embed(target.PathAndQuery.TrimStart('/'), true, async uri =>
+        {
+            if (uri != target.AbsoluteUri)
+                throw new InvalidOperationException("Unexpected detail URI");
+            using var response = await client.GetAsync(uri);
+            Console.WriteLine("Direct detail HTTP=" + (int)response.StatusCode);
+            if (response.StatusCode != HttpStatusCode.OK)
+                return null;
+            string html = await response.Content.ReadAsStringAsync();
+            detailOk = true;
+            Console.WriteLine("Direct detail chars=" + html.Length);
+            return html;
+        });
+        Console.WriteLine($"Direct observation: detail_ok={detailOk} native_result={result != null} fallback_required={fallbackCalls > 0}");
+        Console.WriteLine("Public HTML observation only; playback and full provider compatibility not validated.");
+        return detailOk ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("Direct observation failed: " + ex.GetType().Name);
+        return 1;
+    }
+}
 
 static string Marker(string value) => "<div id=\"playerjsfile\">" + value + "</div>";
 
