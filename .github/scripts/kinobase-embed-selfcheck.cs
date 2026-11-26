@@ -7,6 +7,10 @@
 // Default: synthetic fixtures, including real loopback HTTP. Optional direct metadata observation.
 using Kinobase;
 using System.Net;
+using System.Net.Sockets;
+using System.Net.Http;
+using Shared.Models.Base;
+using Shared.Services;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -14,7 +18,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
 if (args.Contains("--observe-direct"))
-    return await ObserveDirect();
+    return await ObserveDirect(args.Contains("--hydra"));
 
 int failed = 0;
 int total = 0;
@@ -182,21 +186,53 @@ Console.WriteLine($"Kinobase offline self-check: {total - failed}/{total} passed
 return failed == 0 ? 0 : 1;
 
 // Direct public metadata only. No proxies, scripts, cookies, media or player values logged.
-static async Task<int> ObserveDirect()
+static async Task<int> ObserveDirect(bool useHydra)
 {
     const string origin = "https://kinobase.org";
+    Console.WriteLine("Direct transport=" + (useHydra ? "HttpHydra" : "HttpClient"));
+    var previousFactory = Shared.Services.Http.httpClientFactory;
     try
     {
-        using var client = new HttpClient(new HttpClientHandler
+        using var client = new HttpClient(new ObservationHandler(new HttpClientHandler
         {
-            UseProxy = false, AllowAutoRedirect = false
-        })
+            UseProxy = false,
+            UseCookies = false,
+            AllowAutoRedirect = false,
+            AutomaticDecompression = DecompressionMethods.All
+        }))
         {
             Timeout = TimeSpan.FromSeconds(25),
             MaxResponseContentBufferSize = 4 * 1024 * 1024
         };
-        var searchUrl = origin + "/search?query=" + Uri.EscapeDataString("Ночь живых мертвецов");
-        string search = await client.GetStringAsync(searchUrl);
+        var conf = new ModuleConf("Kinobase", origin, true, hdr: true)
+        {
+            nativehttp = true, httpversion = 2, httptimeout = 25, useproxy = false
+        };
+        HttpHydra hydra = null;
+        if (useHydra)
+        {
+            // The factory must be non-null for FriendlyHttp to honor RegisterHttp.
+            // Keep TLS validation and direct-only transport in this isolated probe.
+            Shared.Services.Http.httpClientFactory = new ObservationFactory(client);
+            hydra = new HttpHydra(conf, null, new RequestModel(), null, null);
+            hydra.RegisterHttp(client);
+        }
+        async Task<string> Fetch(string url)
+        {
+            if (hydra != null)
+                return await hydra.Get(url, addheaders: HeadersModel.Init("referer", origin));
+            using var response = await client.GetAsync(url);
+            return response.StatusCode == HttpStatusCode.OK
+                ? await response.Content.ReadAsStringAsync() : null;
+        }
+
+        string search = await Fetch(origin + "/search?query=" + Uri.EscapeDataString("Ночь живых мертвецов"));
+        if (string.IsNullOrEmpty(search))
+        {
+            Console.WriteLine("Direct observation: search returned no usable HTML");
+            return 1;
+        }
+        Console.WriteLine("Direct search chars=" + search.Length);
         var document = new HtmlAgilityPack.HtmlDocument();
         document.LoadHtml(search);
         var href = document.DocumentNode.SelectNodes("//a[@href]")?
@@ -210,7 +246,6 @@ static async Task<int> ObserveDirect()
         }
         bool detailOk = false;
         int fallbackCalls = 0;
-        var conf = new ModuleConf("Kinobase", origin, true, hdr: true) { nativehttp = true };
         var invoke = new KinobaseInvoke(null, conf, _ =>
         {
             fallbackCalls++;
@@ -220,13 +255,9 @@ static async Task<int> ObserveDirect()
         {
             if (uri != target.AbsoluteUri)
                 throw new InvalidOperationException("Unexpected detail URI");
-            using var response = await client.GetAsync(uri);
-            Console.WriteLine("Direct detail HTTP=" + (int)response.StatusCode);
-            if (response.StatusCode != HttpStatusCode.OK)
-                return null;
-            string html = await response.Content.ReadAsStringAsync();
-            detailOk = true;
-            Console.WriteLine("Direct detail chars=" + html.Length);
+            string html = await Fetch(uri);
+            detailOk = !string.IsNullOrEmpty(html);
+            Console.WriteLine("Direct detail chars=" + (html?.Length ?? 0));
             return html;
         });
         Console.WriteLine($"Direct observation: detail_ok={detailOk} native_result={result != null} fallback_required={fallbackCalls > 0}");
@@ -235,8 +266,12 @@ static async Task<int> ObserveDirect()
     }
     catch (Exception ex)
     {
-        Console.WriteLine("Direct observation failed: " + ex.GetType().Name);
+        ObservationHandler.LogFailure("Direct observation", ex);
         return 1;
+    }
+    finally
+    {
+        Shared.Services.Http.httpClientFactory = previousFactory;
     }
 }
 
@@ -287,4 +322,56 @@ async Task Check(string name, Func<Task> action)
 static void Require(bool condition, string message)
 {
     if (!condition) throw new InvalidOperationException(message);
+}
+
+sealed class ObservationFactory(HttpClient client) : IHttpClientFactory
+{
+    public HttpClient CreateClient(string name) => client;
+}
+
+sealed class ObservationHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+{
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        var uri = request.RequestUri;
+        if (uri == null || uri.Scheme != "https" || uri.Host != "kinobase.org" || !uri.IsDefaultPort)
+            throw new InvalidOperationException("Unexpected diagnostic destination");
+        string stage = uri.AbsolutePath == "/search" ? "search" : "detail";
+        Console.WriteLine($"Direct {stage} request_version={request.Version}");
+        try
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            Console.WriteLine($"Direct {stage} HTTP={(int)response.StatusCode} version={response.Version}");
+            try
+            {
+                if (response.StatusCode == HttpStatusCode.OK)
+                    await response.Content.LoadIntoBufferAsync(4 * 1024 * 1024).WaitAsync(cancellationToken);
+                return response;
+            }
+            catch
+            {
+                response.Dispose();
+                throw;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogFailure("Direct " + stage, ex);
+            throw;
+        }
+    }
+
+    public static void LogFailure(string stage, Exception ex)
+    {
+        Console.WriteLine(stage + " error_type=" + ex.GetType().Name);
+        for (Exception current = ex; current != null; current = current.InnerException)
+        {
+            if (current is HttpRequestException http)
+                Console.WriteLine($"  http_error={http.HttpRequestError} status={(int?)http.StatusCode}");
+            else if (current is SocketException socket)
+                Console.WriteLine("  socket_error=" + socket.SocketErrorCode);
+            else
+                Console.WriteLine("  exception_type=" + current.GetType().Name);
+        }
+    }
 }

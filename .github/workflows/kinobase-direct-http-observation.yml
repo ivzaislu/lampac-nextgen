@@ -12,6 +12,10 @@ jobs:
   direct:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [client, hydra]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -30,4 +34,11 @@ jobs:
           dotnet --version
           test "$(dotnet --version)" = "$sdk"
       - name: Observe direct public HTML with native Embed
-        run: dotnet run --configuration Release --file .github/scripts/kinobase-embed-selfcheck.cs -- --observe-direct
+        shell: bash
+        env:
+          TRANSPORT: ${{ matrix.transport }}
+        run: |
+          set -euo pipefail
+          args=(--observe-direct)
+          if [[ "$TRANSPORT" == hydra ]]; then args+=(--hydra); fi
+          dotnet run --configuration Release --file .github/scripts/kinobase-embed-selfcheck.cs -- "${args[@]}"
