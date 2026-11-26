@@ -12,11 +12,11 @@ namespace Cinemar;
 
 public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
 {
-    public static OnlinesSettings conf;
+    public static CinemarSettings conf;
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
-        if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
+        if (conf.useplaywright && PlaywrightBrowser.Status == PlaywrightStatus.disabled)
             return null;
 
         return new List<ModuleOnlineItem>()
@@ -27,7 +27,7 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
 
     public List<ModuleOnlineSpiderItem> Spider(HttpContext httpContext, RequestModel requestInfo, string host, OnlineSpiderModel args)
     {
-        if (PlaywrightBrowser.Status == PlaywrightStatus.disabled)
+        if (conf.useplaywright && PlaywrightBrowser.Status == PlaywrightStatus.disabled)
             return null;
 
         return new List<ModuleOnlineSpiderItem>()
@@ -51,7 +51,7 @@ public class ModInit : IModuleLoaded, IModuleOnline, IModuleOnlineSpider
 
     void updateConf()
     {
-        conf = ModuleInvoke.Init("Cinemar", new OnlinesSettings("Cinemar", "https://kinogo.luxury")
+        conf = ModuleInvoke.Init("Cinemar", new CinemarSettings()
         {
             displayindex = 531,
             rch_access = "apk",

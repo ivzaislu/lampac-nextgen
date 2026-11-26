@@ -1,7 +1,15 @@
 using Shared.Models.Templates;
+using Shared.Models.Online.Settings;
 using System.Collections.Generic;
 
 namespace Cinemar;
+
+public class CinemarSettings : OnlinesSettings
+{
+    public CinemarSettings() : base("Cinemar", "https://kinogo.luxury") { }
+
+    public bool useplaywright { get; set; } = true;
+}
 
 public class SearchModel
 {

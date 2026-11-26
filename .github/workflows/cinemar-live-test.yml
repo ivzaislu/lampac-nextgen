@@ -1,4 +1,4 @@
-name: Cinemar diagnostic baseline
+name: Cinemar live transport comparison
 on:
   push:
     branches: [cinemar]
@@ -6,7 +6,11 @@ on:
 permissions:
   contents: read
 jobs:
-  baseline:
+  live:
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [playwright, http]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -27,41 +31,65 @@ jobs:
           } | tee diagnostics/environment.log
           dotnet build Modules/OnlineRUS/Cinemar/Cinemar.csproj -c Release --verbosity normal 2>&1 | tee diagnostics/cinemar-build.log
           dotnet publish Core/Core.csproj -c Release -o publish --verbosity normal 2>&1 | tee diagnostics/lampac-publish.log
-      - name: Live Cinemar smoke test (Playwright baseline)
+      - name: Live Cinemar smoke test (${{ matrix.transport }})
+        env:
+          CINEMAR_TRANSPORT: ${{ matrix.transport }}
         shell: bash
         run: |
           set -euo pipefail
-          chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
-          "$chrome" --version | tee diagnostics/chromium.log
-          jq -n --arg chrome "$chrome" '{
+          chrome=""
+          useplaywright=false
+          if [[ "$CINEMAR_TRANSPORT" == playwright ]]; then
+            useplaywright=true
+            chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+            "$chrome" --version | tee diagnostics/chromium.log
+            test -f publish/.playwright/package/index.js
+          fi
+          echo "transport=$CINEMAR_TRANSPORT chromium=$useplaywright rch=false" | tee diagnostics/live-test.log
+          jq -n --arg chrome "$chrome" --argjson pw "$useplaywright" '{
             listen: {ip: "127.0.0.1", port: 9118, ResponseCancelAfter: 90},
             BaseModule: {LoadModules: ["Cinemar"], SkipModules: []},
-            chromium: {enable: true, Headless: true, executablePath: $chrome},
+            chromium: {enable: $pw, Headless: true, executablePath: $chrome},
             firefox: {enable: false, Headless: true},
             rch: {enable: false},
-            Cinemar: {enable: true, enabled: true, rhub: false, httptimeout: 30}
+            Cinemar: {enable: true, enabled: true, rhub: false, useplaywright: $pw, httptimeout: 30}
           }' > publish/init.conf
           test -f publish/module/OnlineRUS/Cinemar/manifest.json
-          test -f publish/.playwright/package/index.js
           export CINEMAR_DIAGNOSTICS=1
           (cd publish && exec dotnet Core.dll) > diagnostics/lampac-live.log 2>&1 &
           pid=$!
-          trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true' EXIT
+          tmp="$(mktemp -d)"
+          cleanup() {
+            rc=$?
+            if [[ -r "/proc/$pid/status" ]]; then
+              grep -E '^(VmRSS|VmHWM):' "/proc/$pid/status" | tee -a diagnostics/live-test.log || true
+            fi
+            if (( rc != 0 )); then
+              echo "FAIL: transport=$CINEMAR_TRANSPORT exit=$rc" | tee -a diagnostics/live-test.log
+              tail -n 100 diagnostics/lampac-live.log
+            fi
+            kill "$pid" 2>/dev/null || true
+            rm -rf "$tmp"
+          }
+          trap cleanup EXIT
           base=http://127.0.0.1:9118
           for i in $(seq 1 90); do
             kill -0 "$pid"
-            if curl -fsS --max-time 2 "$base/version" >/dev/null 2>&1 && grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log; then
+            if curl -fsS --max-time 2 "$base/version" >/dev/null 2>&1 && { [[ "$useplaywright" == false ]] || grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log; }; then
               break
             fi
             sleep 2
           done
-          grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log
+          if [[ "$useplaywright" == true ]]; then
+            grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log
+          elif grep -q 'Chromium: LaunchAsync' diagnostics/lampac-live.log; then
+            echo 'ERROR: Chromium started in HTTP mode'
+            exit 1
+          fi
           curl -fsS --max-time 5 "$base/version" >/dev/null
           grep -F "compilation Cinemar" diagnostics/lampac-live.log
 
           # Exercise the real module with an actual search, no injected HTML or cache.
-          tmp="$(mktemp -d)"
-          trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
           # Independent HTTP observation, never substitutes for the real module test.
           upstream="$(python3 -c 'from urllib.parse import quote; print("https://kinogo.luxury/search/" + quote("Ночь живых мертвецов"))')"
           {
@@ -137,6 +165,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: cinemar-baseline-diagnostics
+          name: cinemar-${{ matrix.transport }}-diagnostics
           path: diagnostics/
           retention-days: 14
