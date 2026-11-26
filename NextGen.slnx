@@ -131,6 +131,7 @@
     <Project Path="Modules/OnlineRUS/VkMovie/VkMovie.csproj" />
     <Project Path="Modules/OnlineRUS/Zetflix/Zetflix.csproj" />
     <Project Path="Modules/OnlineRUS/ZetflixDB/ZetflixDB.csproj" />
+    <Project Path="Modules/OnlineRUS/ZFilmHD/ZFilmHD.csproj" />
   </Folder>
   <Folder Name="/Modules/OnlineUKR/">
     <Project Path="Modules/OnlineUKR/Ashdi/Ashdi.csproj" />

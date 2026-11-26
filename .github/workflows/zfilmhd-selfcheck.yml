@@ -1,0 +1,46 @@
+name: ZFilmHD catalogue self-check
+on:
+  push:
+    branches: [cinemar]
+    paths:
+      - 'Modules/OnlineRUS/ZFilmHD/**'
+      - '.github/scripts/zfilmhd-selfcheck.cs'
+      - '.github/workflows/zfilmhd-selfcheck.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  catalogue:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [offline, direct]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Pin installed .NET 10 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$(dotnet --list-sdks | awk '$1 ~ /^10\.0\.[0-9]+$/ {print $1}' | sort -V | tail -n 1)"
+          test -n "$sdk"
+          test ! -e global.json
+          printf '{"sdk":{"version":"%s","rollForward":"disable","allowPrerelease":false}}\n' "$sdk" > global.json
+          dotnet --version
+      - name: Build provider
+        run: dotnet build Modules/OnlineRUS/ZFilmHD/ZFilmHD.csproj -c Release --nologo
+      - name: Check catalogue
+        env:
+          CHECK: ${{ matrix.check }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$CHECK" == direct ]]; then args=(--observe); fi
+          dotnet run --configuration Release --file .github/scripts/zfilmhd-selfcheck.cs -- "${args[@]}"
