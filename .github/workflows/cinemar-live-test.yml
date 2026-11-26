@@ -35,16 +35,17 @@ jobs:
           "$chrome" --version | tee diagnostics/chromium.log
           jq -n --arg chrome "$chrome" '{
             listen: {ip: "127.0.0.1", port: 9118, ResponseCancelAfter: 90},
-            BaseModule: {LoadModules: ["^Cinemar$"], SkipModules: []},
+            BaseModule: {LoadModules: ["Cinemar"], SkipModules: []},
             chromium: {enable: true, Headless: true, executablePath: $chrome},
             firefox: {enable: false, Headless: true},
             rch: {enable: false},
             Cinemar: {enable: true, enabled: true, rhub: false, httptimeout: 30}
           }' > publish/init.conf
+          test -f publish/module/OnlineRUS/Cinemar/manifest.json
           test -f publish/.playwright/package/index.js
           (cd publish && exec dotnet Core.dll) > diagnostics/lampac-live.log 2>&1 &
           pid=$!
-          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true' EXIT
           base=http://127.0.0.1:9118
           for i in $(seq 1 90); do
             kill -0 "$pid"
@@ -55,10 +56,11 @@ jobs:
           done
           grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log
           curl -fsS --max-time 5 "$base/version" >/dev/null
+          grep -F "compilation Cinemar" diagnostics/lampac-live.log
 
           # Exercise the real module with an actual search, no injected HTML or cache.
           tmp="$(mktemp -d)"
-          trap 'kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+          trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
           curl -fsS --max-time 90 -G "$base/lite/cinemar" \
             --data-urlencode 'title=Ночь живых мертвецов' \
             --data-urlencode 'year=1968' \
