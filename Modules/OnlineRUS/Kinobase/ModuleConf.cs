@@ -20,4 +20,7 @@ public class ModuleConf : BaseSettings
     public bool playerjs { get; set; }
 
     public bool hdr { get; set; }
+
+    // Opt-in HTTP-first probe; default keeps the existing browser path.
+    public bool nativehttp { get; set; }
 }

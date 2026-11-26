@@ -1,3 +1,4 @@
+using HtmlAgilityPack;
 using Shared.Models.Base;
 using Shared.Models.Templates;
 using Shared.Services.RxEnumerate;
@@ -85,12 +86,24 @@ public struct KinobaseInvoke
     #endregion
 
     #region Embed
-    async public Task<EmbedModel> Embed(string link, bool playerjs)
+    async public Task<EmbedModel> Embed(string link, bool playerjs, Func<string, Task<string>> onhttp = null)
     {
         if (string.IsNullOrEmpty(link))
             return null;
 
-        string news = await onget($"{apihost}/{link}");
+        string url = $"{apihost}/{link}";
+        if (playerjs && init.nativehttp && onhttp != null)
+        {
+            try
+            {
+                var native = ParseHttpPlayerJs(await onhttp(url));
+                if (native != null)
+                    return native;
+            }
+            catch { /* The existing browser path remains the fallback. */ }
+        }
+
+        string news = await onget(url);
         if (string.IsNullOrEmpty(news))
             return null;
 
@@ -152,6 +165,32 @@ public struct KinobaseInvoke
             #endregion
         }
     }
+    // Experimental direct HTML path: only consume an existing, unambiguous text marker.
+    // No script evaluation, additional endpoints, or changes to access controls.
+    static EmbedModel ParseHttpPlayerJs(string html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return null;
+
+        var document = new HtmlDocument();
+        document.LoadHtml(html);
+
+        // Keep notices and ambiguous/missing data on the established browser path.
+        if (document.DocumentNode.SelectSingleNode("//*[contains(concat(' ', normalize-space(@class), ' '), ' alert ')]") != null)
+            return null;
+
+        var markers = document.DocumentNode.SelectNodes("//div[@id='playerjsfile']");
+        if (markers?.Count != 1)
+            return null;
+
+        var marker = markers[0];
+        if (marker.ChildNodes.Any(n => n.NodeType != HtmlNodeType.Text))
+            return null;
+
+        string value = marker.InnerHtml;
+        return string.IsNullOrWhiteSpace(value) ? null : ParsePlayerJsPayload(value);
+    }
+
     // Parses an already supplied PlayerJS file value; no browser or network I/O.
     public static EmbedModel ParsePlayerJsPayload(string video)
     {

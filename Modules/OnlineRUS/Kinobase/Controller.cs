@@ -69,7 +69,8 @@ public class KinobaseController : BaseOnlineController<ModuleConf>
 
         var cache = await InvokeCacheResult<EmbedModel>($"kinobase:view:{href}:{proxyManager?.CurrentProxyIp}", 20, textJson: true, onget: async e =>
         {
-            var content = await oninvk.Embed(href, init.playerjs);
+            var content = await oninvk.Embed(href, init.playerjs,
+                uri => httpHydra.Get(uri, addheaders: HeadersModel.Init("referer", init.host)));
             if (content == null)
                 return e.Fail("embed");
 

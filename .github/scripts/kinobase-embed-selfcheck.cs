@@ -73,8 +73,75 @@ await Check("existing Uppod playlist", async () =>
     var result = await Embed("<div id=\"playlists\">" + episodes + "</div>", false);
     Require(result?.serial?.Length == 1 && result.quality == "1080p", $"Uppod quality={result?.quality ?? "<null>"}, count={result?.serial?.Length}");
 });
+await Check("HTTP-first disabled by default", async () =>
+{
+    var result = await HttpFirst(false, true, Marker(movie), Marker(episodes), 0, 1);
+    Require(result?.content == movie, "default browser result changed");
+});
+await Check("HTTP-first valid supplied marker", async () =>
+{
+    var result = await HttpFirst(true, true, Marker(movie), Marker(episodes), 1, 0);
+    Require(result?.serial?.Length == 1 && result.quality == "1080p", "direct data not used");
+});
+await Check("HTTP-first fallback on missing marker", async () =>
+{
+    var result = await HttpFirst(true, true, Marker(movie), "<html>No player</html>", 1, 1);
+    Require(result?.content == movie, "fallback failed");
+});
+await Check("HTTP-first fallback on malformed JSON", async () =>
+{
+    var result = await HttpFirst(true, true, Marker(movie), Marker("[bad]"), 1, 1);
+    Require(result?.content == movie, "fallback failed");
+});
+await Check("HTTP-first fallback on ambiguous or non-element markers", async () =>
+{
+    foreach (string html in new[] { "<!--" + Marker(episodes) + "-->", Marker(episodes) + Marker(episodes), "<div id=\"playerjsfile\"><b>data</b></div>", "<div id=\"playerjsfile\"> </div>" })
+    {
+        var result = await HttpFirst(true, true, Marker(movie), html, 1, 1);
+        Require(result?.content == movie, "ambiguous marker accepted");
+    }
+});
+await Check("HTTP-first preserves existing notice path", async () =>
+{
+    var alert = "<div class=\"alert\"><h3>Test unavailable</h3></div>";
+    var result = await HttpFirst(true, true, alert, alert + Marker(episodes), 1, 1);
+    Require(result?.IsEmpty == true && result.errormsg == "Test unavailable", "notice changed");
+});
+await Check("HTTP-first fallback on transport exception", async () =>
+{
+    var result = await HttpFirst(true, true, Marker(movie), null, 1, 1, failHttp: true);
+    Require(result?.content == movie, "fallback failed");
+});
+await Check("HTTP-first leaves Uppod unchanged", async () =>
+{
+    var result = await HttpFirst(true, false, "<div id=\"playlists\">" + episodes + "</div>", Marker(movie), 0, 1);
+    Require(result?.serial?.Length == 1 && result.quality == "1080p", "Uppod changed");
+});
 Console.WriteLine($"Kinobase offline self-check: {total - failed}/{total} passed");
 return failed == 0 ? 0 : 1;
+
+static string Marker(string value) => "<div id=\"playerjsfile\">" + value + "</div>";
+
+async Task<EmbedModel> HttpFirst(bool enabled, bool playerjs, string browserHtml, string httpHtml, int expectedHttp, int expectedBrowser, bool failHttp = false)
+{
+    int httpCalls = 0, browserCalls = 0;
+    var conf = new ModuleConf("Kinobase", "https://example.invalid", playerjs, hdr: true) { nativehttp = enabled };
+    var invoke = new KinobaseInvoke(null, conf, url =>
+    {
+        Require(url == "https://example.invalid/fixture", "unexpected browser URL");
+        browserCalls++;
+        return Task.FromResult(browserHtml);
+    }, value => value);
+    var result = await invoke.Embed("fixture", playerjs, url =>
+    {
+        Require(url == "https://example.invalid/fixture", "unexpected HTTP URL");
+        httpCalls++;
+        if (failHttp) throw new InvalidOperationException("synthetic transport failure");
+        return Task.FromResult(httpHtml);
+    });
+    Require(httpCalls == expectedHttp && browserCalls == expectedBrowser, $"HTTP={httpCalls}, browser={browserCalls}");
+    return result;
+}
 
 async Task<EmbedModel> Embed(string html, bool playerjs)
 {
