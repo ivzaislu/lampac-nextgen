@@ -20,7 +20,17 @@ jobs:
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x
+      - name: Pin installed .NET 10 SDK for this job
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk="$(dotnet --list-sdks | awk '$1 ~ /^10\.0\.[0-9]+$/ {print $1}' | sort -V | tail -n 1)"
+          test -n "$sdk"
+          test ! -e global.json
+          printf '{"sdk":{"version":"%s","rollForward":"disable","allowPrerelease":false}}\n' "$sdk" > global.json
+          dotnet --version
+          test "$(dotnet --version)" = "$sdk"
       - name: Build Kinobase
         run: dotnet build Modules/OnlineRUS/Kinobase/Kinobase.csproj -c Release --nologo
       - name: Check native payload and existing Embed contract
-        run: dotnet run --file .github/scripts/kinobase-embed-selfcheck.cs
+        run: dotnet run --configuration Release --file .github/scripts/kinobase-embed-selfcheck.cs
