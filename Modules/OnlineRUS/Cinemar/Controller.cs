@@ -22,39 +22,9 @@ using System.Web;
 
 namespace Cinemar;
 
-public class CinemarController : BaseOnlineController<CinemarSettings>
+public class CinemarController : BaseOnlineController
 {
     public CinemarController() : base(ModInit.conf) { }
-
-    static void Trace(string message)
-    {
-        if (Environment.GetEnvironmentVariable("CINEMAR_DIAGNOSTICS") == "1")
-            Console.WriteLine($"Cinemar parser: {message}");
-    }
-
-    string TransportKey => init.useplaywright ? "playwright" : "http";
-
-    async Task ReadHtml(string stage, string url, Action<ReadOnlySpan<char>> parse, IReadOnlyList<HeadersModel> headers = null)
-    {
-        if (init.useplaywright)
-        {
-            Trace($"{stage} transport=playwright");
-            await PlaywrightHttp.GetSpan(init.plugin, url, parse, headers: headers, proxy: proxy_data);
-            return;
-        }
-
-        Trace($"{stage} transport=http");
-        var result = await Http.BaseGet(url, timeoutSeconds: init.httptimeout,
-            headers: headers ?? httpHeaders(init), proxy: init.useproxy ? proxy : null,
-            httpversion: init.httpversion);
-
-        int status = (int)result.response.StatusCode;
-        bool challenge = result.response.Headers.TryGetValues("cf-mitigated", out var values)
-            && values.Any(value => value.Equals("challenge", StringComparison.OrdinalIgnoreCase));
-        Trace($"{stage} upstream_http={status} cloudflare_challenge={challenge} html_chars={result.content?.Length ?? 0}");
-        if (status == 200 && !string.IsNullOrEmpty(result.content))
-            parse(result.content.AsSpan());
-    }
 
     [HttpGet, Staticache(manually: true)]
     [Route("lite/cinemar")]
@@ -71,7 +41,7 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
 
             string searchUrl = $"{init.host}/search/{Uri.EscapeDataString(title)}";
         reset_search:
-            var search = await InvokeCacheResult<SearchModel>($"cinemar:search:v3:{TransportKey}:{title}:{year}", TimeSpan.FromHours(4), async e =>
+            var search = await InvokeCacheResult<SearchModel>($"cinemar:search:v2:{title}:{year}", TimeSpan.FromHours(4), async e =>
             {
                 SearchModel result = null;
 
@@ -84,13 +54,12 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
                 }
                 else
                 {
-                    await ReadHtml("search", searchUrl, html =>
+                    await PlaywrightHttp.GetSpan(init.plugin, searchUrl, html =>
                     {
                         result = SearchResult(html, title, year);
-                    });
+                    }, proxy: proxy_data);
                 }
 
-                Trace($"search parsed={result != null} exact={!string.IsNullOrEmpty(result?.link)} similar={result?.similar?.Length ?? 0}");
                 if (result == null)
                     return e.Fail("search-result", refresh_proxy: true);
 
@@ -130,7 +99,7 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
         #region embed
     reset_embed:
 
-        var embed = await InvokeCacheResult<string>($"cinemar:embed:v3:{TransportKey}:{href}", TimeSpan.FromHours(4), async e =>
+        var embed = await InvokeCacheResult<string>($"cinemar:{href}", TimeSpan.FromHours(4), async e =>
         {
             string iframeUri = null;
             string targetHref = $"{init.host}/{href}";
@@ -144,13 +113,12 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
             }
             else
             {
-                await ReadHtml("embed", init.cors(targetHref), html =>
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(targetHref), html =>
                 {
                     iframeUri = Rx.Match(html, "<iframe [^>]+data-src=\"([^\"]+)\"");
-                });
+                }, proxy: proxy_data);
             }
 
-            Trace($"embed iframe_found={!string.IsNullOrEmpty(iframeUri)}");
             if (iframeUri == null)
                 return e.Fail("iframeUri", refresh_proxy: true);
 
@@ -175,7 +143,7 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
     reset_iframe:
 
         // v2 keeps old cached entries without id/data out of the playback path.
-        var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"cinemar:playlist:v3:{TransportKey}:{embedUrl}"), 20, async e =>
+        var cache = await InvokeCacheResult<List<PlaylistItem>>(ipkey($"cinemar:playlist:v2:{embedUrl}"), 20, async e =>
         {
             string fileEncode = null;
             var embedHeaders = httpHeaders(init, HeadersModel.Init("referer", $"{init.host}/{href}"));
@@ -189,25 +157,22 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
             }
             else
             {
-                await ReadHtml("playlist", init.cors(embedUrl), html =>
+                await PlaywrightHttp.GetSpan(init.plugin, init.cors(embedUrl), html =>
                 {
                     fileEncode = Rx.Match(html, "\"file\":\"([^\"]+)\"");
-                }, headers: embedHeaders);
+                }, headers: embedHeaders, proxy_data);
             }
 
-            Trace($"playlist encoded_chars={fileEncode?.Length ?? 0}");
             if (string.IsNullOrEmpty(fileEncode))
                 return e.Fail("fileEncode", refresh_proxy: true);
 
             string playlistJson = DecodeFile(fileEncode);
-            Trace($"playlist decoded_chars={playlistJson?.Length ?? 0}");
             if (string.IsNullOrEmpty(playlistJson))
                 return e.Fail("playlistJson");
 
             try
             {
                 var playlist = JsonConvert.DeserializeObject<List<PlaylistItem>>(playlistJson);
-                Trace($"playlist items={playlist?.Count ?? 0}");
                 if (playlist == null || playlist.Count == 0)
                     return e.Fail("playlist");
 
@@ -276,7 +241,6 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
                     proxy: init.useproxy ? proxy : null, httpversion: init.httpversion);
             }
 
-            Trace($"video response_json={response != null} file_present={response?["file"] != null || (response?["data"] as JObject)?["file"] != null}");
             var success = response?["success"];
             if (response == null || (success != null && success.Type != JTokenType.Null
                 && (success.Type != JTokenType.Boolean || !success.Value<bool>())))
@@ -570,12 +534,10 @@ public class CinemarController : BaseOnlineController<CinemarSettings>
     #region SearchResult
     SearchModel SearchResult(ReadOnlySpan<char> html, string title, int year)
     {
-        Trace($"search html_chars={html.Length}");
         if (html.IsEmpty)
             return null;
 
         var rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
-        Trace($"search matched_blocks={rx.Count}");
         if (rx.Count == 0)
             return null;
 

@@ -1,4 +1,4 @@
-name: Cinemar live transport comparison
+name: Cinemar diagnostic baseline
 on:
   push:
     branches: [cinemar]
@@ -6,11 +6,7 @@ on:
 permissions:
   contents: read
 jobs:
-  live:
-    strategy:
-      fail-fast: false
-      matrix:
-        transport: [playwright, playwright-headed, http]
+  baseline:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -31,154 +27,10 @@ jobs:
           } | tee diagnostics/environment.log
           dotnet build Modules/OnlineRUS/Cinemar/Cinemar.csproj -c Release --verbosity normal 2>&1 | tee diagnostics/cinemar-build.log
           dotnet publish Core/Core.csproj -c Release -o publish --verbosity normal 2>&1 | tee diagnostics/lampac-publish.log
-      - name: Live Cinemar smoke test (${{ matrix.transport }})
-        env:
-          CINEMAR_TRANSPORT: ${{ matrix.transport }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          chrome=""
-          useplaywright=false
-          headless=true
-          browser_status=headless
-          if [[ "$CINEMAR_TRANSPORT" == playwright-headed ]]; then
-            headless=false
-            browser_status=NoHeadless
-            if [[ ! -x /usr/bin/Xvfb ]] || ! command -v xdpyinfo >/dev/null; then
-              sudo apt-get update
-              sudo apt-get install -y xvfb x11-utils
-            fi
-          fi
-          if [[ "$CINEMAR_TRANSPORT" != http ]]; then
-            useplaywright=true
-            chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
-            "$chrome" --version | tee diagnostics/chromium.log
-            test -f publish/.playwright/package/index.js
-          fi
-          echo "transport=$CINEMAR_TRANSPORT chromium=$useplaywright headless=$headless rch=false" | tee diagnostics/live-test.log
-          jq -n --arg chrome "$chrome" --argjson pw "$useplaywright" --argjson headless "$headless" '{
-            listen: {ip: "127.0.0.1", port: 9118, ResponseCancelAfter: 90},
-            BaseModule: {LoadModules: ["Cinemar"], SkipModules: []},
-            chromium: {enable: $pw, Headless: $headless, executablePath: $chrome},
-            firefox: {enable: false, Headless: true},
-            rch: {enable: false},
-            Cinemar: {enable: true, enabled: true, rhub: false, useplaywright: $pw, httptimeout: 30}
-          }' > publish/init.conf
-          test -f publish/module/OnlineRUS/Cinemar/manifest.json
-          export CINEMAR_DIAGNOSTICS=1
-          (cd publish && exec dotnet Core.dll) > diagnostics/lampac-live.log 2>&1 &
-          pid=$!
-          tmp="$(mktemp -d)"
-          cleanup() {
-            rc=$?
-            if [[ -r "/proc/$pid/status" ]]; then
-              grep -E '^(VmRSS|VmHWM):' "/proc/$pid/status" | tee -a diagnostics/live-test.log || true
-            fi
-            if (( rc != 0 )); then
-              echo "FAIL: transport=$CINEMAR_TRANSPORT exit=$rc" | tee -a diagnostics/live-test.log
-              tail -n 100 diagnostics/lampac-live.log
-            fi
-            kill "$pid" 2>/dev/null || true
-            rm -rf "$tmp"
-          }
-          trap cleanup EXIT
-          base=http://127.0.0.1:9118
-          for i in $(seq 1 90); do
-            kill -0 "$pid"
-            if curl -fsS --max-time 2 "$base/version" >/dev/null 2>&1 && { [[ "$useplaywright" == false ]] || grep -Eiq "Chromium: v.* / $browser_status / True" diagnostics/lampac-live.log; }; then
-              break
-            fi
-            sleep 2
-          done
-          if [[ "$useplaywright" == true ]]; then
-            grep -Eiq "Chromium: v.* / $browser_status / True" diagnostics/lampac-live.log
-          elif grep -q 'Chromium: LaunchAsync' diagnostics/lampac-live.log; then
-            echo 'ERROR: Chromium started in HTTP mode'
-            exit 1
-          fi
-          if [[ "$headless" == false ]]; then
-            grep -F "Playwright: Xvfb 99" diagnostics/lampac-live.log
-            DISPLAY=:99 xdpyinfo | grep -E "dimensions:|depth of root window:" | tee diagnostics/xvfb.log
-          fi
-          curl -fsS --max-time 5 "$base/version" >/dev/null
-          grep -F "compilation Cinemar" diagnostics/lampac-live.log
-
-          # Exercise the real module with an actual search, no injected HTML or cache.
-          # Independent HTTP observation, never substitutes for the real module test.
-          upstream="$(python3 -c 'from urllib.parse import quote; print("https://kinogo.luxury/search/" + quote("Ночь живых мертвецов"))')"
-          {
-            echo '=== DNS: kinogo.luxury ==='
-            getent ahosts kinogo.luxury || true
-            curl --version | head -n 2
-          } | tee diagnostics/upstream-network.log
-          for probe in root search; do
-            url="$upstream"
-            if [[ "$probe" == root ]]; then url="https://kinogo.luxury/"; fi
-            echo "=== HTTP probe: $probe ===" | tee -a diagnostics/upstream-network.log
-            curl -sS --max-time 30 --max-redirs 5 -L "$url" \
-              -D "$tmp/$probe.headers" -o "$tmp/$probe.html" \
-              -w 'HTTP %{http_code} protocol=%{http_version} remote_ip=%{remote_ip} redirects=%{num_redirects} dns=%{time_namelookup}s tcp=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s bytes=%{size_download} tls_verify=%{ssl_verify_result}\n' \
-              | tee -a diagnostics/upstream-network.log || true
-            python3 - "$tmp/$probe.headers" "$tmp/$probe.html" <<'PY' | tee -a diagnostics/upstream-network.log
-          import pathlib, sys, hashlib, re
-          from urllib.parse import urlsplit
-          headers, body = map(pathlib.Path, sys.argv[1:])
-          if headers.exists():
-              allow = {"server", "content-type", "cf-mitigated", "cf-ray", "cf-cache-status", "retry-after", "via"}
-              for line in headers.read_text(errors="replace").splitlines():
-                  if line.startswith("HTTP/"):
-                      print(line)
-                  elif ":" in line:
-                      key, value = line.split(":", 1)
-                      if key.lower() in allow:
-                          print(f"{key}: {value.strip()[:200]}")
-                      elif key.lower() == "location":
-                          parsed = urlsplit(value.strip())
-                          print("redirect_host=" + (parsed.hostname or "(relative)"))
-          if body.exists():
-              raw = body.read_bytes()
-              text = raw.lower()
-              markers = {
-                  "cf_challenge": b"cf-chl-" in text or b"/cdn-cgi/challenge-platform" in text,
-                  "just_a_moment": b"just a moment" in text,
-                  "access_denied": b"access denied" in text or b"you have been blocked" in text,
-                  "error_1020": b"error 1020" in text,
-                  "captcha": b"captcha" in text,
-                  "shortstory": b"shortstory" in text,
-                  "iframe": b"<iframe" in text,
-              }
-              print(f"body_bytes={len(raw)} sha256={hashlib.sha256(raw).hexdigest()}")
-              print("markers: " + " ".join(f"{k}={int(v)}" for k, v in markers.items()))
-          PY
-          done
-          curl -fsS --max-time 90 -G "$base/lite/cinemar" \
-            --data-urlencode 'title=Ночь живых мертвецов' \
-            --data-urlencode 'year=1968' \
-            --data-urlencode 'rjson=true' \
-            --data-urlencode 'similar=true' \
-            -o "$tmp/search.json" -w 'search: HTTP %{http_code}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log
-          jq -e '.type == "similar" and (.data | type == "array" and length > 0)' "$tmp/search.json" >/dev/null
-          jq '{type, count: (.data | length)}' "$tmp/search.json" | tee -a diagnostics/live-test.log
-
-          curl -fsS --max-time 90 -G "$base/lite/cinemar" \
-            --data-urlencode 'title=Ночь живых мертвецов' \
-            --data-urlencode 'year=1968' \
-            --data-urlencode 'rjson=true' \
-            -o "$tmp/movie.json" -w 'playlist: HTTP %{http_code}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log
-          jq -e '.type == "movie" and (.data | type == "array" and length > 0)' "$tmp/movie.json" >/dev/null
-          jq '{type, count: (.data | length), methods: [.data[].method]}' "$tmp/movie.json" | tee -a diagnostics/live-test.log
-          video="$(jq -er '[.data[] | select(.method == "call") | .url | select(type == "string" and contains("/lite/cinemar/video?"))][0]' "$tmp/movie.json")"
-          # Only follow the local module's own video endpoint.
-          [[ "$video" == "$base/lite/cinemar/video?"* ]]
-          curl -fsS --max-time 90 "$video" -o "$tmp/video.json" \
-            -w 'video API: HTTP %{http_code}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log
-          jq -e '.method == "play" and (.url | type == "string" and length > 0)' "$tmp/video.json" >/dev/null
-          jq '{method, qualities: ((.quality // {}) | keys), subtitles: ((.subtitles // []) | length)}' "$tmp/video.json" | tee -a diagnostics/live-test.log
-          echo 'PASS: live search, playlist and video API' | tee -a diagnostics/live-test.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: cinemar-${{ matrix.transport }}-diagnostics
+          name: cinemar-baseline-diagnostics
           path: diagnostics/
           retention-days: 14

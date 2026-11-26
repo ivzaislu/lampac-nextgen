@@ -93,9 +93,6 @@ public static class PlaywrightHttp
     }
     #endregion
 
-    static bool CinemarTrace(string plugin) => string.Equals(plugin, "Cinemar", StringComparison.OrdinalIgnoreCase)
-        && Environment.GetEnvironmentVariable("CINEMAR_DIAGNOSTICS") == "1";
-
     #region GetSpan
     async public static Task GetSpan(string plugin, string url, Action<ReadOnlySpan<char>> spanAction, IReadOnlyList<HeadersModel> headers = null, (string ip, string username, string password) proxy = default, List<Cookie> cookies = null)
     {
@@ -104,8 +101,6 @@ public static class PlaywrightHttp
         using (var msm = PoolInvk.msm.GetStream())
         {
             bool success = await GetReaderAsync(plugin, url, msm.Write, headers, proxy, cookies, timeout);
-            if (CinemarTrace(plugin))
-                Console.WriteLine($"Cinemar transport: body success={success} bytes={msm.Length}");
             if (success)
             {
                 msm.Position = 0;
@@ -139,18 +134,12 @@ public static class PlaywrightHttp
     {
         const int rawSize = 32 * 1024;
         const int bufferByteSize = rawSize * 4;
-        bool trace = CinemarTrace(plugin);
-        if (trace)
-            Console.WriteLine($"Cinemar transport: Playwright start proxy={proxy.ip != null} timeout_ms={timeout}");
 
         using (var browser = new PlaywrightBrowser())
         {
             var page = await browser.NewPageAsync(plugin, headers?.ToDictionary(), proxy).ConfigureAwait(false);
             if (page == null)
-            {
-                if (trace) Console.WriteLine("Cinemar transport: page unavailable");
                 return false;
-            }
 
             if (cookies != null)
                 await page.Context.AddCookiesAsync(cookies).ConfigureAwait(false);
@@ -176,8 +165,6 @@ public static class PlaywrightHttp
                         int statusCode = root.TryGetProperty("responseStatusCode", out JsonElement statusProp)
                             ? statusProp.GetInt32()
                             : 0;
-                        if (trace)
-                            Console.WriteLine($"Cinemar transport: upstream HTTP {statusCode}");
 
                         if (statusCode >= 300 && statusCode < 400)
                         {
@@ -321,10 +308,7 @@ public static class PlaywrightHttp
                     ).ConfigureAwait(false);
 
                     if (completedTask != done.Task)
-                    {
-                        if (trace) Console.WriteLine("Cinemar transport: response timeout");
                         return false;
-                    }
 
                     bool ok = await done.Task.ConfigureAwait(false);
 
@@ -346,9 +330,8 @@ public static class PlaywrightHttp
 
                     return true;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    if (trace) Console.WriteLine($"Cinemar transport: exception={ex.GetType().Name}");
                     return false;
                 }
                 finally
