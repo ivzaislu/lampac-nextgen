@@ -64,11 +64,51 @@ jobs:
           trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
           # Independent HTTP observation, never substitutes for the real module test.
           upstream="$(python3 -c 'from urllib.parse import quote; print("https://kinogo.luxury/search/" + quote("Ночь живых мертвецов"))')"
-          curl -sS --max-time 30 -L "$upstream" -o "$tmp/upstream.html" \
-            -w 'direct HTTP: %{http_code}, %{content_type}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log || true
-          if [[ -f "$tmp/upstream.html" ]]; then
-            python3 -c 'import sys; b=open(sys.argv[1],"rb").read().lower(); print("direct HTML: shortstory=%d iframe=%d" % (b.count(b"shortstory"), b.count(b"<iframe")))' "$tmp/upstream.html" | tee -a diagnostics/live-test.log
-          fi
+          {
+            echo '=== DNS: kinogo.luxury ==='
+            getent ahosts kinogo.luxury || true
+            curl --version | head -n 2
+          } | tee diagnostics/upstream-network.log
+          for probe in root search; do
+            url="$upstream"
+            if [[ "$probe" == root ]]; then url="https://kinogo.luxury/"; fi
+            echo "=== HTTP probe: $probe ===" | tee -a diagnostics/upstream-network.log
+            curl -sS --max-time 30 --max-redirs 5 -L "$url" \
+              -D "$tmp/$probe.headers" -o "$tmp/$probe.html" \
+              -w 'HTTP %{http_code} protocol=%{http_version} remote_ip=%{remote_ip} redirects=%{num_redirects} dns=%{time_namelookup}s tcp=%{time_connect}s tls=%{time_appconnect}s ttfb=%{time_starttransfer}s total=%{time_total}s bytes=%{size_download} tls_verify=%{ssl_verify_result}\n' \
+              | tee -a diagnostics/upstream-network.log || true
+            python3 - "$tmp/$probe.headers" "$tmp/$probe.html" <<'PY' | tee -a diagnostics/upstream-network.log
+          import pathlib, sys, hashlib, re
+          from urllib.parse import urlsplit
+          headers, body = map(pathlib.Path, sys.argv[1:])
+          if headers.exists():
+              allow = {"server", "content-type", "cf-mitigated", "cf-ray", "cf-cache-status", "retry-after", "via"}
+              for line in headers.read_text(errors="replace").splitlines():
+                  if line.startswith("HTTP/"):
+                      print(line)
+                  elif ":" in line:
+                      key, value = line.split(":", 1)
+                      if key.lower() in allow:
+                          print(f"{key}: {value.strip()[:200]}")
+                      elif key.lower() == "location":
+                          parsed = urlsplit(value.strip())
+                          print("redirect_host=" + (parsed.hostname or "(relative)"))
+          if body.exists():
+              raw = body.read_bytes()
+              text = raw.lower()
+              markers = {
+                  "cf_challenge": b"cf-chl-" in text or b"/cdn-cgi/challenge-platform" in text,
+                  "just_a_moment": b"just a moment" in text,
+                  "access_denied": b"access denied" in text or b"you have been blocked" in text,
+                  "error_1020": b"error 1020" in text,
+                  "captcha": b"captcha" in text,
+                  "shortstory": b"shortstory" in text,
+                  "iframe": b"<iframe" in text,
+              }
+              print(f"body_bytes={len(raw)} sha256={hashlib.sha256(raw).hexdigest()}")
+              print("markers: " + " ".join(f"{k}={int(v)}" for k, v in markers.items()))
+          PY
+          done
           curl -fsS --max-time 90 -G "$base/lite/cinemar" \
             --data-urlencode 'title=Ночь живых мертвецов' \
             --data-urlencode 'year=1968' \
