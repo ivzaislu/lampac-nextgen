@@ -110,26 +110,7 @@ public struct KinobaseInvoke
                     return null;
                 }
 
-                if (video.EndsWith("]"))
-                {
-                    var res = JsonSerializer.Deserialize<Season[]>(video, new JsonSerializerOptions
-                    {
-                        AllowTrailingCommas = true
-                    });
-
-                    if (res == null || res.Length == 0)
-                        return null;
-
-                    return new EmbedModel()
-                    {
-                        serial = res,
-                        quality = (video.Contains("2160.") || video.Contains("2160_")) ? "2160p" : (video.Contains("1440.") || video.Contains("1440_")) ? "1440p" : (video.Contains("1080.") || video.Contains("1080_")) ? "1080p" : video.Contains("720.") ? "720p" : video.Contains("480.") ? "480p" : "360p"
-                    };
-                }
-                else
-                {
-                    return new EmbedModel() { content = video };
-                }
+                return ParsePlayerJsPayload(video);
             }
             catch { return null; }
         }
@@ -171,6 +152,38 @@ public struct KinobaseInvoke
             #endregion
         }
     }
+    // Parses an already supplied PlayerJS file value; no browser or network I/O.
+    public static EmbedModel ParsePlayerJsPayload(string video)
+    {
+        if (string.IsNullOrEmpty(video))
+            return null;
+
+        try
+        {
+            if (video.EndsWith("]"))
+            {
+                var res = JsonSerializer.Deserialize<Season[]>(video, new JsonSerializerOptions
+                {
+                    AllowTrailingCommas = true
+                });
+
+                if (res == null || res.Length == 0)
+                    return null;
+
+                return new EmbedModel()
+                {
+                    serial = res,
+                    quality = (video.Contains("2160.") || video.Contains("2160_")) ? "2160p" : (video.Contains("1440.") || video.Contains("1440_")) ? "1440p" : (video.Contains("1080.") || video.Contains("1080_")) ? "1080p" : video.Contains("720.") ? "720p" : video.Contains("480.") ? "480p" : "360p"
+                };
+            }
+            else
+            {
+                return new EmbedModel() { content = video };
+            }
+        }
+        catch { return null; }
+    }
+
     #endregion
 
     #region Tpl
