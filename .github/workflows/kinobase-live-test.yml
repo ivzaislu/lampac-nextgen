@@ -189,13 +189,23 @@ jobs:
           async function main() {
             let browser;
             let pageErrors = 0;
+            let localPlayerRequests = 0;
             try {
               const proxy = process.env.KINOBASE_DIAGNOSTIC_PROXY;
+              const localPlayer = process.env.KINOBASE_LOCAL_PLAYER === '1';
+              if (localPlayer && !proxy) throw new Error('Missing diagnostic proxy');
+              console.log('local_player_mode=' + localPlayer);
               browser = await chromium.launch({
                 executablePath: process.env.CHROME_BIN, headless: true,
                 ...(proxy ? { proxy: { server: proxy } } : {})
               });
               const page = await browser.newPage(proxy ? { serviceWorkers: 'block' } : {});
+              if (localPlayer) {
+                await page.context().addCookies([{
+                  name: 'player_settings', value: 'new|mp4|1',
+                  domain: target.hostname, path: '/'
+                }]);
+              }
               if (proxy) {
                 // No third-party requests, media playback, or certificate overrides.
                 await page.route('**/*', async route => {
@@ -204,6 +214,14 @@ jobs:
                   if (url.origin !== target.origin || request.resourceType() === 'media' ||
                       /\.(?:m3u8|mpd|mp4|m4s|ts|webm|aac)(?:$|\/)/i.test(url.pathname)) {
                     await route.abort();
+                    return;
+                  }
+                  if (localPlayer && request.resourceType() === 'script' && /\/playerjs\.[^/]*js$/i.test(url.pathname)) {
+                    localPlayerRequests++;
+                    await route.fulfill({
+                      contentType: 'application/javascript',
+                      path: path.resolve('Modules/OnlineRUS/Kinobase/players/playerjs.js')
+                    });
                     return;
                   }
                   await route.continue();
@@ -250,6 +268,14 @@ jobs:
                 };
               });
               console.log('DOM ' + JSON.stringify(summary));
+              console.log('local_player_requests=' + localPlayerRequests);
+              if (localPlayer) {
+                const observation = await page.evaluate(() => {
+                  const el = document.querySelector('#playerjsfile');
+                  return { marker_present: !!el, marker_nonempty: !!el?.textContent?.trim() };
+                });
+                console.log('local_player_observation ' + JSON.stringify(observation));
+              }
               const notices = await page.locator('.alert').allTextContents();
               console.log('alert_count=' + notices.length);
               for (const notice of notices.slice(0, 8)) console.log('alert_text=' + JSON.stringify(safeNotice(notice)));
@@ -287,6 +313,15 @@ jobs:
             --output "$trace" https://www.cloudflare.com/cdn-cgi/trace
           awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print "proxy_reported_country=" $2; exit}' "$trace"
           node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser-proxy.log
+      - name: Compare repository PlayerJS in diagnostic browser
+        shell: bash
+        env:
+          KINOBASE_DIAGNOSTIC_PROXY: http://188.132.150.149:8080
+          KINOBASE_LOCAL_PLAYER: '1'
+        run: |
+          set -euo pipefail
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser-local-player.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
