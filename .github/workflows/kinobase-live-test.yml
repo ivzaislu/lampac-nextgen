@@ -297,31 +297,42 @@ jobs:
           main();
           JS
           node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser.log
-      - name: Compare public page availability through candidate proxy
+      - name: Check repository PlayerJS through reachable candidate
         shell: bash
         env:
-          KINOBASE_DIAGNOSTIC_PROXY: http://188.132.150.149:8080
-        run: |
-          set -euo pipefail
-          export CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
-          echo 'Proxy observation: HTTPS verification enabled; same-origin non-media browser requests only.'
-          trace="$(mktemp)"
-          trap 'rm -f "$trace"' EXIT
-          curl --silent --show-error --fail --connect-timeout 8 --max-time 20 \
-            --max-filesize 8192 --proto '=https' --noproxy '' \
-            --proxy "$KINOBASE_DIAGNOSTIC_PROXY" \
-            --output "$trace" https://www.cloudflare.com/cdn-cgi/trace
-          awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print "proxy_reported_country=" $2; exit}' "$trace"
-          node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser-proxy.log
-      - name: Compare repository PlayerJS in diagnostic browser
-        shell: bash
-        env:
-          KINOBASE_DIAGNOSTIC_PROXY: http://188.132.150.149:8080
           KINOBASE_LOCAL_PLAYER: '1'
         run: |
           set -euo pipefail
           export CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
-          node "$RUNNER_TEMP/kinobase-browser.cjs" | tee diagnostics/browser-local-player.log
+          trace="$(mktemp)"
+          trap 'rm -f "$trace"' EXIT
+          candidates=(
+            http://31.130.153.132:3128
+            http://176.236.222.13:8080
+            http://188.132.150.51:8080
+          )
+          for candidate in "${candidates[@]}"; do
+            echo "candidate=$candidate"
+            if ! curl --silent --show-error --fail --connect-timeout 12 --max-time 25 \
+                --max-filesize 8192 --proto '=https' --noproxy '' \
+                --proxy "$candidate" --output "$trace" https://www.cloudflare.com/cdn-cgi/trace; then
+              echo 'proxy_connectivity_failed'
+              continue
+            fi
+            awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print "proxy_reported_country=" $2; exit}' "$trace"
+            log="diagnostics/browser-local-player-$(echo "$candidate" | tr -cd '0-9').log"
+            if KINOBASE_DIAGNOSTIC_PROXY="$candidate" node "$RUNNER_TEMP/kinobase-browser.cjs" | tee "$log"; then
+              if grep -Fq 'local_player_observation {"marker_present":true,"marker_nonempty":true}' "$log"; then
+                echo 'PASS: repository PlayerJS diagnostic marker populated'
+                exit 0
+              fi
+              echo 'local_player_marker_not_confirmed'
+            else
+              echo 'browser_observation_failed'
+            fi
+          done
+          echo 'FAIL: no candidate confirmed repository PlayerJS diagnostic marker'
+          exit 1
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
@@ -329,61 +340,3 @@ jobs:
           name: kinobase-http-browser-diagnostics
           path: diagnostics/
           retention-days: 14
-  proxy-connectivity:
-    name: Public proxy connectivity (neutral endpoint)
-    runs-on: ubuntu-26.04
-    timeout-minutes: 4
-    permissions: {}
-    steps:
-      - name: Test HTTP and SOCKS5 candidates in parallel
-        shell: bash
-        run: |
-          set -euo pipefail
-          work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
-          endpoint='https://www.cloudflare.com/cdn-cgi/trace'
-          test_proxy() {
-            local label="$1" slot="$2"
-            shift 2
-            local meta rc country
-            rc=0
-            meta="$(curl --silent --show-error --fail \
-              --connect-timeout 8 --max-time 20 --max-filesize 8192 \
-              --proto '=https' --output "$work/body-$slot" \
-              --write-out '%{http_code} %{ssl_verify_result} %{time_total}' \
-              "$@" "$endpoint" 2>"$work/error-$slot")" || rc=$?
-            if [[ "$rc" -ne 0 ]]; then
-              printf '%s: curl_exit=%s http_tls_seconds=%s\n' "$label" "$rc" "$meta"
-              return 1
-            fi
-            country="$(awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print $2; exit}' "$work/body-$slot")"
-            printf '%s: http_tls_seconds=%s reported_country=%s\n' "$label" "$meta" "${country:-unknown}"
-            [[ "$meta" == '200 0 '* && -n "$country" ]]
-          }
-          test_proxy direct direct --noproxy '*' --proxy '' || true
-          candidates=(
-            http://194.124.36.14:8080
-            http://201.7.28.13:8080
-            http://188.132.150.149:8080
-            http://188.132.249.144:8080
-            socks5h://38.10.71.218:1080
-            socks5h://89.144.20.144:10800
-            socks5h://163.5.53.209:1080
-            socks5h://83.217.9.235:2080
-          )
-          pids=()
-          for i in "${!candidates[@]}"; do
-            candidate="${candidates[$i]}"
-            test_proxy "$candidate" "$i" --noproxy '' --proxy "$candidate" >"$work/result-$i" &
-            pids+=("$!")
-          done
-          working=0
-          for i in "${!pids[@]}"; do
-            if wait "${pids[$i]}"; then
-              working=$((working + 1))
-            fi
-            cat "$work/result-$i"
-          done
-          echo "HTTPS connectivity verified: $working/${#candidates[@]}"
-          echo 'No requests to Kinobase or media endpoints through proxies.'
-          [[ "$working" -gt 0 ]]
