@@ -1,0 +1,67 @@
+name: Kinobase proxy connectivity diagnostics
+on:
+  push:
+    branches: [cinemar]
+    paths:
+      - '.github/workflows/kinobase-proxy-connectivity.yml'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  proxy-connectivity:
+    name: Public proxy connectivity (neutral endpoint)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 4
+    permissions: {}
+    steps:
+      - name: Test HTTP and SOCKS5 candidates in parallel
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          endpoint='https://www.cloudflare.com/cdn-cgi/trace'
+          test_proxy() {
+            local label="$1" slot="$2"
+            shift 2
+            local meta rc country
+            rc=0
+            meta="$(curl --silent --show-error --fail \
+              --connect-timeout 12 --max-time 25 --max-filesize 8192 \
+              --proto '=https' --output "$work/body-$slot" \
+              --write-out '%{http_code} %{ssl_verify_result} %{time_total}' \
+              "$@" "$endpoint" 2>"$work/error-$slot")" || rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+              printf '%s: curl_exit=%s http_tls_seconds=%s\n' "$label" "$rc" "$meta"
+              return 1
+            fi
+            country="$(awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print $2; exit}' "$work/body-$slot")"
+            printf '%s: http_tls_seconds=%s reported_country=%s\n' "$label" "$meta" "${country:-unknown}"
+            [[ "$meta" == '200 0 '* && -n "$country" ]]
+          }
+          test_proxy direct direct --noproxy '*' --proxy '' || true
+          candidates=(
+            http://176.236.222.13:8080
+            http://195.62.50.208:8080
+            http://185.146.138.151:8080
+            http://176.88.166.219:8080
+            http://188.132.150.51:8080
+            socks5h://79.98.32.107:1080
+            http://194.44.255.112:8080
+            http://31.130.153.132:3128
+          )
+          pids=()
+          for i in "${!candidates[@]}"; do
+            candidate="${candidates[$i]}"
+            test_proxy "$candidate" "$i" --noproxy '' --proxy "$candidate" >"$work/result-$i" &
+            pids+=("$!")
+          done
+          working=0
+          for i in "${!pids[@]}"; do
+            if wait "${pids[$i]}"; then
+              working=$((working + 1))
+            fi
+            cat "$work/result-$i"
+          done
+          echo "HTTPS connectivity verified: $working/${#candidates[@]}"
+          echo 'No requests to Kinobase or media endpoints through proxies.'
+          [[ "$working" -gt 0 ]]
