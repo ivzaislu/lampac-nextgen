@@ -252,7 +252,7 @@ public class CinemarController : BaseOnlineController
                     proxy: init.useproxy ? proxy : null, httpversion: init.httpversion);
             }
 
-            Trace($"video response_json={response != null} file_present={response?["file"] != null || response?["data"]?["file"] != null}");
+            Trace($"video response_json={response != null} file_present={response?["file"] != null || (response?["data"] as JObject)?["file"] != null}");
             var success = response?["success"];
             if (response == null || (success != null && success.Type != JTokenType.Null
                 && (success.Type != JTokenType.Boolean || !success.Value<bool>())))
