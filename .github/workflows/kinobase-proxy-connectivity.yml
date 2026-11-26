@@ -39,20 +39,93 @@ jobs:
             [[ "$meta" == '200 0 '* && -n "$country" ]]
           }
           test_proxy direct direct --noproxy '*' --proxy '' || true
-          candidates=(
-            http://89.108.81.40:8118
-            http://185.234.228.76:8080
-            http://147.45.138.183:3128
-            http://85.198.81.95:3128
-            http://87.225.77.73:8888
-            http://92.62.149.82:8080
-            socks5h://194.9.233.171:1080
-            socks5h://31.172.215.67:1080
-            socks5h://81.31.246.178:1080
-            socks5h://188.243.46.125:1080
-            socks5h://212.57.118.110:1080
-            socks5h://85.142.124.27:1080
-          )
+          # Read the public list on each run; no account/API credentials.
+          python3 - <<'PY' >"$work/candidates"
+          import ipaddress
+          import re
+          import sys
+          import urllib.request
+          from html.parser import HTMLParser
+
+          class Rows(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.rows = []
+                  self.row = None
+                  self.cell = None
+
+              def handle_starttag(self, tag, attrs):
+                  if tag == 'tr':
+                      self.row = []
+                  elif tag in ('td', 'th') and self.row is not None:
+                      self.cell = []
+                  elif self.cell is not None and tag == 'img':
+                      self.cell.extend(v for k, v in attrs if k in ('alt', 'title') and v)
+
+              def handle_data(self, data):
+                  if self.cell is not None:
+                      self.cell.append(data)
+
+              def handle_endtag(self, tag):
+                  if tag in ('td', 'th') and self.row is not None and self.cell is not None:
+                      self.row.append(' '.join(' '.join(self.cell).split()))
+                      self.cell = None
+                  elif tag == 'tr' and self.row is not None:
+                      self.rows.append(self.row)
+                      self.row = None
+                      self.cell = None
+
+          opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+          candidates = {}
+          for page in range(1, 4):
+              url = f'https://proxymania.su/free-proxy?type=&country=RU&speed=&page={page}'
+              try:
+                  with opener.open(url, timeout=15) as response:
+                      raw = response.read(2_000_001)
+                      if len(raw) > 2_000_000:
+                          raise ValueError('page too large')
+                      html = raw.decode(response.headers.get_content_charset() or 'utf-8', errors='replace')
+              except Exception as error:
+                  print(f'ProxyMania page {page}: {type(error).__name__}', file=sys.stderr)
+                  break
+              parser = Rows()
+              parser.feed(html)
+              added = 0
+              for cells in parser.rows:
+                  if len(cells) < 3:
+                      continue
+                  address = re.search(r'(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?!\d)', cells[0])
+                  if not address or not re.search(r'\b(?:Russia|Russian Federation|RU)\b|Россия|Российская Федерация', cells[1], re.I):
+                      continue
+                  try:
+                      ip = ipaddress.ip_address(address[1])
+                      port = int(address[2])
+                  except ValueError:
+                      continue
+                  if ip.version != 4 or not ip.is_global or not 1 <= port <= 65535:
+                      continue
+                  protocol = cells[2].upper().strip()
+                  if protocol == 'SOCKS5':
+                      scheme = 'socks5h'
+                  elif protocol in ('HTTP', 'HTTPS', 'HTTP/HTTPS'):
+                      scheme = 'http'
+                  else:
+                      continue
+                  candidate = f'{scheme}://{ip}:{port}'
+                  if candidate not in candidates:
+                      speed = re.search(r'(\d+)\s*(?:ms|мс)', cells[4], re.I) if len(cells) > 4 else None
+                      candidates[candidate] = int(speed[1]) if speed else 999999
+                      added += 1
+              print(f'ProxyMania page {page}: new candidates={added}', file=sys.stderr)
+              if len(candidates) >= 12 or not added:
+                  break
+          if not candidates:
+              sys.exit('No valid candidates found; source unavailable or table format changed')
+          for candidate in sorted(candidates, key=candidates.get)[:12]:
+              print(candidate)
+          PY
+          mapfile -t candidates <"$work/candidates"
+          echo "Fresh candidates: ${#candidates[@]}"
           pids=()
           for i in "${!candidates[@]}"; do
             candidate="${candidates[$i]}"
