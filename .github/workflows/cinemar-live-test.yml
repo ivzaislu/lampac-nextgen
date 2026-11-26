@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        transport: [playwright, http]
+        transport: [playwright, playwright-headed, http]
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -39,17 +39,27 @@ jobs:
           set -euo pipefail
           chrome=""
           useplaywright=false
-          if [[ "$CINEMAR_TRANSPORT" == playwright ]]; then
+          headless=true
+          browser_status=headless
+          if [[ "$CINEMAR_TRANSPORT" == playwright-headed ]]; then
+            headless=false
+            browser_status=NoHeadless
+            if [[ ! -x /usr/bin/Xvfb ]] || ! command -v xdpyinfo >/dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y xvfb x11-utils
+            fi
+          fi
+          if [[ "$CINEMAR_TRANSPORT" != http ]]; then
             useplaywright=true
             chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
             "$chrome" --version | tee diagnostics/chromium.log
             test -f publish/.playwright/package/index.js
           fi
-          echo "transport=$CINEMAR_TRANSPORT chromium=$useplaywright rch=false" | tee diagnostics/live-test.log
-          jq -n --arg chrome "$chrome" --argjson pw "$useplaywright" '{
+          echo "transport=$CINEMAR_TRANSPORT chromium=$useplaywright headless=$headless rch=false" | tee diagnostics/live-test.log
+          jq -n --arg chrome "$chrome" --argjson pw "$useplaywright" --argjson headless "$headless" '{
             listen: {ip: "127.0.0.1", port: 9118, ResponseCancelAfter: 90},
             BaseModule: {LoadModules: ["Cinemar"], SkipModules: []},
-            chromium: {enable: $pw, Headless: true, executablePath: $chrome},
+            chromium: {enable: $pw, Headless: $headless, executablePath: $chrome},
             firefox: {enable: false, Headless: true},
             rch: {enable: false},
             Cinemar: {enable: true, enabled: true, rhub: false, useplaywright: $pw, httptimeout: 30}
@@ -75,16 +85,20 @@ jobs:
           base=http://127.0.0.1:9118
           for i in $(seq 1 90); do
             kill -0 "$pid"
-            if curl -fsS --max-time 2 "$base/version" >/dev/null 2>&1 && { [[ "$useplaywright" == false ]] || grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log; }; then
+            if curl -fsS --max-time 2 "$base/version" >/dev/null 2>&1 && { [[ "$useplaywright" == false ]] || grep -Eiq "Chromium: v.* / $browser_status / True" diagnostics/lampac-live.log; }; then
               break
             fi
             sleep 2
           done
           if [[ "$useplaywright" == true ]]; then
-            grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log
+            grep -Eiq "Chromium: v.* / $browser_status / True" diagnostics/lampac-live.log
           elif grep -q 'Chromium: LaunchAsync' diagnostics/lampac-live.log; then
             echo 'ERROR: Chromium started in HTTP mode'
             exit 1
+          fi
+          if [[ "$headless" == false ]]; then
+            grep -F "Playwright: Xvfb 99" diagnostics/lampac-live.log
+            DISPLAY=:99 xdpyinfo | grep -E "dimensions:|depth of root window:" | tee diagnostics/xvfb.log
           fi
           curl -fsS --max-time 5 "$base/version" >/dev/null
           grep -F "compilation Cinemar" diagnostics/lampac-live.log
