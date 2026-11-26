@@ -26,6 +26,12 @@ public class CinemarController : BaseOnlineController
 {
     public CinemarController() : base(ModInit.conf) { }
 
+    static void Trace(string message)
+    {
+        if (Environment.GetEnvironmentVariable("CINEMAR_DIAGNOSTICS") == "1")
+            Console.WriteLine($"Cinemar parser: {message}");
+    }
+
     [HttpGet, Staticache(manually: true)]
     [Route("lite/cinemar")]
     async public Task<ActionResult> Index(string title, string original_title, short year, bool rjson, string href, bool similar, short s = -1, int t = -1, string voice = null)
@@ -60,6 +66,7 @@ public class CinemarController : BaseOnlineController
                     }, proxy: proxy_data);
                 }
 
+                Trace($"search parsed={result != null} exact={!string.IsNullOrEmpty(result?.link)} similar={result?.similar?.Length ?? 0}");
                 if (result == null)
                     return e.Fail("search-result", refresh_proxy: true);
 
@@ -119,6 +126,7 @@ public class CinemarController : BaseOnlineController
                 }, proxy: proxy_data);
             }
 
+            Trace($"embed iframe_found={!string.IsNullOrEmpty(iframeUri)}");
             if (iframeUri == null)
                 return e.Fail("iframeUri", refresh_proxy: true);
 
@@ -163,16 +171,19 @@ public class CinemarController : BaseOnlineController
                 }, headers: embedHeaders, proxy_data);
             }
 
+            Trace($"playlist encoded_chars={fileEncode?.Length ?? 0}");
             if (string.IsNullOrEmpty(fileEncode))
                 return e.Fail("fileEncode", refresh_proxy: true);
 
             string playlistJson = DecodeFile(fileEncode);
+            Trace($"playlist decoded_chars={playlistJson?.Length ?? 0}");
             if (string.IsNullOrEmpty(playlistJson))
                 return e.Fail("playlistJson");
 
             try
             {
                 var playlist = JsonConvert.DeserializeObject<List<PlaylistItem>>(playlistJson);
+                Trace($"playlist items={playlist?.Count ?? 0}");
                 if (playlist == null || playlist.Count == 0)
                     return e.Fail("playlist");
 
@@ -241,6 +252,7 @@ public class CinemarController : BaseOnlineController
                     proxy: init.useproxy ? proxy : null, httpversion: init.httpversion);
             }
 
+            Trace($"video response_json={response != null} file_present={response?["file"] != null || response?["data"]?["file"] != null}");
             var success = response?["success"];
             if (response == null || (success != null && success.Type != JTokenType.Null
                 && (success.Type != JTokenType.Boolean || !success.Value<bool>())))
@@ -534,10 +546,12 @@ public class CinemarController : BaseOnlineController
     #region SearchResult
     SearchModel SearchResult(ReadOnlySpan<char> html, string title, int year)
     {
+        Trace($"search html_chars={html.Length}");
         if (html.IsEmpty)
             return null;
 
         var rx = Rx.Matches("<div id=\"[0-9]+\" class=\"shortstory\">(.*?)<div class=\"shortstory__meta\">", html, 0, RegexOptions.Singleline);
+        Trace($"search matched_blocks={rx.Count}");
         if (rx.Count == 0)
             return null;
 

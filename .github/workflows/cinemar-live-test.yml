@@ -43,6 +43,7 @@ jobs:
           }' > publish/init.conf
           test -f publish/module/OnlineRUS/Cinemar/manifest.json
           test -f publish/.playwright/package/index.js
+          export CINEMAR_DIAGNOSTICS=1
           (cd publish && exec dotnet Core.dll) > diagnostics/lampac-live.log 2>&1 &
           pid=$!
           trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true' EXIT
@@ -61,6 +62,13 @@ jobs:
           # Exercise the real module with an actual search, no injected HTML or cache.
           tmp="$(mktemp -d)"
           trap 'rc=$?; if (( rc != 0 )); then tail -n 100 diagnostics/lampac-live.log; fi; kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+          # Independent HTTP observation, never substitutes for the real module test.
+          upstream="$(python3 -c 'from urllib.parse import quote; print("https://kinogo.luxury/search/" + quote("Ночь живых мертвецов"))')"
+          curl -sS --max-time 30 -L "$upstream" -o "$tmp/upstream.html" \
+            -w 'direct HTTP: %{http_code}, %{content_type}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log || true
+          if [[ -f "$tmp/upstream.html" ]]; then
+            python3 -c 'import sys; b=open(sys.argv[1],"rb").read().lower(); print("direct HTML: shortstory=%d iframe=%d" % (b.count(b"shortstory"), b.count(b"<iframe")))' "$tmp/upstream.html" | tee -a diagnostics/live-test.log
+          fi
           curl -fsS --max-time 90 -G "$base/lite/cinemar" \
             --data-urlencode 'title=Ночь живых мертвецов' \
             --data-urlencode 'year=1968' \
