@@ -27,6 +27,62 @@ jobs:
           } | tee diagnostics/environment.log
           dotnet build Modules/OnlineRUS/Cinemar/Cinemar.csproj -c Release --verbosity normal 2>&1 | tee diagnostics/cinemar-build.log
           dotnet publish Core/Core.csproj -c Release -o publish --verbosity normal 2>&1 | tee diagnostics/lampac-publish.log
+      - name: Live Cinemar smoke test (Playwright baseline)
+        shell: bash
+        run: |
+          set -euo pipefail
+          chrome="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          "$chrome" --version | tee diagnostics/chromium.log
+          jq -n --arg chrome "$chrome" '{
+            listen: {ip: "127.0.0.1", port: 9118, ResponseCancelAfter: 90},
+            BaseModule: {LoadModules: ["^Cinemar$"], SkipModules: []},
+            chromium: {enable: true, Headless: true, executablePath: $chrome},
+            firefox: {enable: false, Headless: true},
+            rch: {enable: false},
+            Cinemar: {enable: true, enabled: true, rhub: false, httptimeout: 30}
+          }' > publish/init.conf
+          test -f publish/.playwright/package/index.js
+          (cd publish && exec dotnet Core.dll) > diagnostics/lampac-live.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          base=http://127.0.0.1:9118
+          for i in $(seq 1 90); do
+            kill -0 "$pid"
+            if curl -fsS --max-time 2 "$base/version" >/dev/null 2>&1 && grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log; then
+              break
+            fi
+            sleep 2
+          done
+          grep -Eq 'Chromium: v.* / headless / True' diagnostics/lampac-live.log
+          curl -fsS --max-time 5 "$base/version" >/dev/null
+
+          # Exercise the real module with an actual search, no injected HTML or cache.
+          tmp="$(mktemp -d)"
+          trap 'kill "$pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+          curl -fsS --max-time 90 -G "$base/lite/cinemar" \
+            --data-urlencode 'title=Ночь живых мертвецов' \
+            --data-urlencode 'year=1968' \
+            --data-urlencode 'rjson=true' \
+            --data-urlencode 'similar=true' \
+            -o "$tmp/search.json" -w 'search: HTTP %{http_code}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log
+          jq -e '.type == "similar" and (.data | type == "array" and length > 0)' "$tmp/search.json" >/dev/null
+          jq '{type, count: (.data | length)}' "$tmp/search.json" | tee -a diagnostics/live-test.log
+
+          curl -fsS --max-time 90 -G "$base/lite/cinemar" \
+            --data-urlencode 'title=Ночь живых мертвецов' \
+            --data-urlencode 'year=1968' \
+            --data-urlencode 'rjson=true' \
+            -o "$tmp/movie.json" -w 'playlist: HTTP %{http_code}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log
+          jq -e '.type == "movie" and (.data | type == "array" and length > 0)' "$tmp/movie.json" >/dev/null
+          jq '{type, count: (.data | length), methods: [.data[].method]}' "$tmp/movie.json" | tee -a diagnostics/live-test.log
+          video="$(jq -er '[.data[] | select(.method == "call") | .url | select(type == "string" and contains("/lite/cinemar/video?"))][0]' "$tmp/movie.json")"
+          # Only follow the local module's own video endpoint.
+          [[ "$video" == "$base/lite/cinemar/video?"* ]]
+          curl -fsS --max-time 90 "$video" -o "$tmp/video.json" \
+            -w 'video API: HTTP %{http_code}, %{time_total}s, %{size_download} bytes\n' | tee -a diagnostics/live-test.log
+          jq -e '.method == "play" and (.url | type == "string" and length > 0)' "$tmp/video.json" >/dev/null
+          jq '{method, qualities: ((.quality // {}) | keys), subtitles: ((.subtitles // []) | length)}' "$tmp/video.json" | tee -a diagnostics/live-test.log
+          echo 'PASS: live search, playlist and video API' | tee -a diagnostics/live-test.log
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
