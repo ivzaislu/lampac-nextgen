@@ -1,8 +1,12 @@
 #:sdk Microsoft.NET.Sdk.Web
+#:property PublishAot=false
+#:property PublishTrimmed=false
+#:property JsonSerializerIsReflectionEnabledByDefault=true
 #:project ../../Modules/OnlineRUS/Kinobase/Kinobase.csproj
 
 // Offline contract check; all data are synthetic, no provider or media requests.
 using Kinobase;
+using System.Text.Json;
 
 int failed = 0;
 int total = 0;
@@ -10,6 +14,15 @@ const string movie = "[720p]fixture_720.mp4";
 const string episodes = """[{"title":"1 серия","file":"[1080p]fixture_1080.mp4","subtitle":"[Русский]fixture.vtt"}]""";
 const string seasons = """[{"title":"1 сезон","folder":[{"title":"1 серия","file":"[2160p]fixture_2160.mp4"}]}]""";
 
+Console.WriteLine($"JSON reflection enabled: {JsonSerializer.IsReflectionEnabledByDefault}");
+await Check("JSON environment and episode fixture", () =>
+{
+    Require(JsonSerializer.IsReflectionEnabledByDefault, "reflection serialization disabled");
+    var decoded = JsonSerializer.Deserialize<Season[]>(episodes, new JsonSerializerOptions { AllowTrailingCommas = true });
+    Require(decoded?.Length == 1, "JSON episode count");
+    Require(decoded[0].file == "[1080p]fixture_1080.mp4", "JSON file field");
+    return Task.CompletedTask;
+});
 await Check("native movie", () =>
 {
     var result = KinobaseInvoke.ParsePlayerJsPayload(movie);
@@ -19,14 +32,14 @@ await Check("native movie", () =>
 await Check("native episodes and subtitles", () =>
 {
     var result = KinobaseInvoke.ParsePlayerJsPayload(episodes);
-    Require(result?.quality == "1080p" && result.serial?.Length == 1, "episode quality or count");
+    Require(result?.quality == "1080p" && result.serial?.Length == 1, $"episode quality={result?.quality ?? "<null>"}, count={result?.serial?.Length}");
     Require(result.serial[0].subtitle == "[Русский]fixture.vtt", "subtitle changed");
     return Task.CompletedTask;
 });
 await Check("native nested seasons", () =>
 {
     var result = KinobaseInvoke.ParsePlayerJsPayload(seasons);
-    Require(result?.quality == "2160p" && result.serial?.Length == 1, "season quality or count");
+    Require(result?.quality == "2160p" && result.serial?.Length == 1, $"season quality={result?.quality ?? "<null>"}, count={result?.serial?.Length}");
     Require(result.serial[0].folder?.Length == 1, "nested episode missing");
     return Task.CompletedTask;
 });
@@ -44,7 +57,7 @@ await Check("existing browser-marker path: movie", async () =>
 await Check("existing browser-marker path: series", async () =>
 {
     var result = await Embed("<div id=\"playerjsfile\">" + episodes + "</div>", true);
-    Require(result?.serial?.Length == 1 && result.quality == "1080p", "series marker contract changed");
+    Require(result?.serial?.Length == 1 && result.quality == "1080p", $"series marker quality={result?.quality ?? "<null>"}, count={result?.serial?.Length}");
 });
 await Check("existing alert path", async () =>
 {
@@ -58,7 +71,7 @@ await Check("missing marker", async () =>
 await Check("existing Uppod playlist", async () =>
 {
     var result = await Embed("<div id=\"playlists\">" + episodes + "</div>", false);
-    Require(result?.serial?.Length == 1 && result.quality == "1080p", "Uppod contract changed");
+    Require(result?.serial?.Length == 1 && result.quality == "1080p", $"Uppod quality={result?.quality ?? "<null>"}, count={result?.serial?.Length}");
 });
 Console.WriteLine($"Kinobase offline self-check: {total - failed}/{total} passed");
 return failed == 0 ? 0 : 1;
