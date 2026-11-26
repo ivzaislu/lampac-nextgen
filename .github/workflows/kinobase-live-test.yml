@@ -11,9 +11,11 @@ permissions:
 jobs:
   live:
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: 10.0.x
@@ -28,7 +30,8 @@ jobs:
           set -euo pipefail
           getent ahosts kinobase.org | tee diagnostics/dns.log || true
           python3 - <<'PY' | tee diagnostics/http.log
-          import urllib.request, urllib.error, urllib.parse, re, time
+          import urllib.request, urllib.error, urllib.parse, re, time, os
+          from pathlib import Path
           from html.parser import HTMLParser
 
           base = "https://kinobase.org"
@@ -89,16 +92,115 @@ jobs:
           if not parser.links:
               print("FAIL: no recognized detail links")
               raise SystemExit(1)
-          detail = probe("detail", urllib.parse.urljoin(base, parser.links[0]))
+          detail_url = urllib.parse.urljoin(base, parser.links[0])
+          if urllib.parse.urlsplit(detail_url).hostname != "kinobase.org":
+              raise SystemExit("FAIL: unexpected detail host")
+          detail = probe("detail", detail_url)
           if detail is None:
               print("FAIL: detail unavailable")
               raise SystemExit(1)
+          Path(os.environ["RUNNER_TEMP"], "kinobase-detail-url").write_text(detail_url, encoding="utf-8")
           print("PASS: live HTTP search and detail access; player parsing not yet validated")
           PY
+      - name: Publish host for bundled Playwright
+        run: |
+          set -euo pipefail
+          dotnet publish Core/Core.csproj -c Release -o publish --nologo 2>&1 | tee diagnostics/publish.log
+          test -f publish/.playwright/package/index.js
+      - name: Live browser network and DOM comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          "$CHROME_BIN" --version | tee diagnostics/chromium.log
+          node <<'JS' | tee diagnostics/browser.log
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const { chromium } = require(path.resolve('publish/.playwright/package/index.js'));
+          const target = new URL(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'kinobase-detail-url'), 'utf8').trim());
+          if (target.protocol !== 'https:' || target.hostname !== 'kinobase.org') throw new Error('Unexpected detail origin');
+
+          // Record categories and statuses only; never persist query strings,
+          // request bodies, cookies, playlist values, or media URLs.
+          const counts = new Map();
+          function classify(raw, type) {
+            try {
+              const u = new URL(raw);
+              if (!['http:', 'https:'].includes(u.protocol)) return null;
+              const same = u.hostname === target.hostname;
+              let route = 'other';
+              if (type === 'document') route = 'document';
+              else if (type === 'script') {
+                const file = u.pathname.split('/').pop() || '';
+                route = /^(?:playerjs|uppod|jquery|boot)(?:[.\w-]*)\.js$/i.test(file) ? file : 'script';
+              } else if (['xhr', 'fetch'].includes(type)) {
+                route = /(?:^|\/)(?:ajax|api|player|playlist)(?:\/|\.|$)/i.test(u.pathname) ? 'player-or-api' : 'other-api';
+              } else if (type === 'media') route = 'media';
+              return { host: same ? target.hostname : u.hostname, route };
+            } catch { return null; }
+          }
+          function record(request, status, contentType = '', challenge = false) {
+            const type = request.resourceType();
+            if (!['document', 'script', 'xhr', 'fetch', 'media'].includes(type)) return;
+            const info = classify(request.url(), type);
+            if (!info) return;
+            const key = JSON.stringify({ type, ...info, status, contentType: contentType.split(';')[0], challenge });
+            counts.set(key, (counts.get(key) || 0) + 1);
+          }
+          async function main() {
+            let browser;
+            let pageErrors = 0;
+            try {
+              browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true });
+              const page = await browser.newPage();
+              page.on('response', response => {
+                const h = response.headers();
+                record(response.request(), response.status(), h['content-type'] || '', h['cf-mitigated'] === 'challenge');
+              });
+              page.on('requestfailed', request => record(request, 'failed'));
+              page.on('pageerror', () => pageErrors++);
+              const navigation = await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              console.log('navigation_http=' + (navigation?.status() ?? 0));
+              await page.waitForLoadState('load', { timeout: 10000 }).catch(() => {});
+              await page.waitForTimeout(5000);
+              const summary = await page.evaluate(() => {
+                const text = document.body?.innerText || '';
+                const scripts = Array.from(document.scripts);
+                const inline = scripts.filter(s => !s.src).map(s => s.textContent || '').join('\n');
+                return {
+                  dom_chars: document.documentElement.outerHTML.length,
+                  external_scripts: scripts.filter(s => s.src).length,
+                  inline_scripts: scripts.filter(s => !s.src).length,
+                  playerjs_constructor_inline: /\bnew\s+Playerjs\s*\(/i.test(inline),
+                  file_property_inline: /\bfile\s*:/i.test(inline),
+                  playerjsfile_node: !!document.querySelector('#playerjsfile'),
+                  playlists_node: !!document.querySelector('#playlists'),
+                  player_container: !!document.querySelector('#videoplayer, #player, .player'),
+                  video_elements: document.querySelectorAll('video').length,
+                  iframe_elements: document.querySelectorAll('iframe').length,
+                  alert_present: !!document.querySelector('.alert'),
+                  geo_notice: /недоступно\s+(?:в|для)\s+(?:ваш|регион|стран)|географическ|not available in your (?:country|region)|geo.block/i.test(text)
+                };
+              });
+              console.log('DOM ' + JSON.stringify(summary));
+              console.log('page_errors=' + pageErrors);
+              for (const [key, count] of counts) console.log('network ' + key + ' count=' + count);
+              if (!navigation || navigation.status() !== 200) process.exitCode = 1;
+              else console.log('PASS: live browser observation; playback and regional access not validated');
+            } catch (e) {
+              console.error('browser_diagnostic_error=' + (e?.name || 'Error'));
+              for (const [key, count] of counts) console.log('network ' + key + ' count=' + count);
+              process.exitCode = 1;
+            } finally {
+              if (browser) await browser.close();
+            }
+          }
+          main();
+          JS
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: kinobase-http-diagnostics
+          name: kinobase-http-browser-diagnostics
           path: diagnostics/
           retention-days: 14
