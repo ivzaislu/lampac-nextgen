@@ -252,3 +252,44 @@ jobs:
           name: kinobase-http-browser-diagnostics
           path: diagnostics/
           retention-days: 14
+  proxy-connectivity:
+    name: Public proxy connectivity (neutral endpoint)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 4
+    permissions: {}
+    steps:
+      - name: Test HTTPS connectivity and reported country
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          endpoint='https://www.cloudflare.com/cdn-cgi/trace'
+          working=0
+          test_proxy() {
+            local label="$1"
+            shift
+            local meta rc country
+            rc=0
+            meta="$(curl --silent --show-error --fail \
+              --connect-timeout 6 --max-time 15 --max-filesize 8192 \
+              --proto '=https' --output "$work/body" \
+              --write-out '%{http_code} %{ssl_verify_result} %{time_total}' \
+              "$@" "$endpoint" 2>"$work/error")" || rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+              printf '%s: curl_exit=%s http_tls_seconds=%s\n' "$label" "$rc" "$meta"
+              return 1
+            fi
+            country="$(awk -F= '$1=="loc" && $2 ~ /^[A-Z][A-Z]$/ {print $2; exit}' "$work/body")"
+            printf '%s: http_tls_seconds=%s reported_country=%s\n' "$label" "$meta" "${country:-unknown}"
+            [[ "$meta" == '200 0 '* && -n "$country" ]]
+          }
+          test_proxy direct --noproxy '*' --proxy '' || true
+          for candidate in 116.204.166.199:8080 188.132.249.148:8080 5.26.111.181:8080; do
+            if test_proxy "$candidate" --noproxy '' --proxy "http://$candidate"; then
+              working=$((working + 1))
+            fi
+          done
+          echo "HTTPS connectivity verified: $working/3"
+          echo 'No requests to Kinobase or media endpoints through proxies.'
+          [[ "$working" -gt 0 ]]
