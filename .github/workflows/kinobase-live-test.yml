@@ -1,0 +1,104 @@
+name: Kinobase live HTTP diagnostics
+on:
+  push:
+    branches: [cinemar]
+    paths:
+      - '.github/workflows/kinobase-live-test.yml'
+      - 'Modules/OnlineRUS/Kinobase/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  live:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Build Kinobase
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          dotnet build Modules/OnlineRUS/Kinobase/Kinobase.csproj -c Release --nologo 2>&1 | tee diagnostics/build.log
+      - name: Live HTTP metadata and HTML structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          getent ahosts kinobase.org | tee diagnostics/dns.log || true
+          python3 - <<'PY' | tee diagnostics/http.log
+          import urllib.request, urllib.error, urllib.parse, re, time
+          from html.parser import HTMLParser
+
+          base = "https://kinobase.org"
+          title = "Ночь живых мертвецов"
+
+          def probe(label, url):
+              start = time.monotonic()
+              try:
+                  response = urllib.request.urlopen(url, timeout=25)
+              except urllib.error.HTTPError as e:
+                  response = e
+              except (OSError, urllib.error.URLError) as e:
+                  print(f"{label}: connection_error={type(e).__name__}")
+                  return None
+              with response:
+                  status = response.status
+                  headers = response.headers
+                  raw = response.read(4 * 1024 * 1024 + 1)
+                  print(f"{label}: HTTP={status} bytes={len(raw)} elapsed_ms={(time.monotonic()-start)*1000:.0f} final_host={urllib.parse.urlsplit(response.geturl()).hostname}")
+                  for key in ("server", "content-type", "cf-mitigated", "cf-ray", "retry-after"):
+                      if headers.get(key):
+                          print(f"  {key}: {headers[key]}")
+                  if len(raw) > 4 * 1024 * 1024:
+                      print("  body_limit_exceeded")
+                      return None
+                  body = raw.decode(headers.get_content_charset() or "utf-8", errors="replace")
+                  print("  markers: " + " ".join(f"{k}={int(bool(re.search(p, body, re.I)))}" for k,p in {
+                      "challenge": r"cf-chl-|/cdn-cgi/challenge-platform|just a moment",
+                      "search_items": r'<li\s+class="x1 item">',
+                      "playerjs_constructor": r'\bnew\s+Playerjs\s*\(',
+                      "playerjs_script": r'playerjs\.[^" ]*js',
+                      "file_property": r'\bfile\s*:',
+                      "playerjsfile": r'id=["\x27]playerjsfile["\x27]',
+                      "uppod": r'uppod',
+                      "playlists": r'id=["\x27]playlists["\x27]',
+                      "alert": r'class=["\x27]alert["\x27]',
+                  }.items()))
+                  return body if status == 200 and headers.get("cf-mitigated", "").lower() != "challenge" and urllib.parse.urlsplit(response.geturl()).hostname == "kinobase.org" else None
+
+          class Links(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.links = []
+              def handle_starttag(self, tag, attrs):
+                  if tag == "a":
+                      href = dict(attrs).get("href", "")
+                      if href.startswith(("/film/", "/serial/")):
+                          self.links.append(href)
+
+          root = probe("root", base + "/")
+          search = probe("search", base + "/search?" + urllib.parse.urlencode({"query": title}))
+          if search is None:
+              print("FAIL: search unavailable; detail not tested")
+              raise SystemExit(1)
+          parser = Links()
+          parser.feed(search)
+          print(f"search: detail_candidates={len(set(parser.links))}")
+          if not parser.links:
+              print("FAIL: no recognized detail links")
+              raise SystemExit(1)
+          detail = probe("detail", urllib.parse.urljoin(base, parser.links[0]))
+          if detail is None:
+              print("FAIL: detail unavailable")
+              raise SystemExit(1)
+          print("PASS: live HTTP search and detail access; player parsing not yet validated")
+          PY
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: kinobase-http-diagnostics
+          path: diagnostics/
+          retention-days: 14
