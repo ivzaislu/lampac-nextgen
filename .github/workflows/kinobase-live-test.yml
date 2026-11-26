@@ -123,6 +123,45 @@ jobs:
           // Record categories and statuses only; never persist query strings,
           // request bodies, cookies, playlist values, or media URLs.
           const counts = new Map();
+          const xhrDetails = [];
+          const pending = [];
+          // Only ordinary visible notice text, not response HTML or player data.
+          function safeNotice(text) {
+            return String(text || '').replace(/https?:\/\/\S+|www\.\S+/gi, '[url]')
+              .replace(/[A-Za-z0-9_-]{20,}/g, '[redacted]')
+              .replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 350);
+          }
+          async function inspectXhr(response) {
+            const request = response.request();
+            const url = new URL(request.url());
+            if (url.hostname !== target.hostname || !['xhr', 'fetch'].includes(request.resourceType())) return;
+            const headers = response.headers();
+            const entry = {
+              method: request.method(),
+              path_shape: url.pathname.split('/').map(p => /^[a-z][a-z_.-]{0,30}$/i.test(p) ? p : p ? '[value]' : '').join('/'),
+              query_count: Array.from(url.searchParams).length,
+              status: response.status(),
+              content_type: (headers['content-type'] || '').split(';')[0]
+            };
+            const len = Number(headers['content-length'] || 0);
+            if (len <= 1024 * 1024 && /text\/html|json|javascript|text\/plain/i.test(entry.content_type)) {
+              try {
+                const body = await response.text();
+                entry.body_chars = body.length;
+                if (body.length <= 1024 * 1024) {
+                  entry.markers = {
+                    alert: /class\s*=\s*["'][^"']*\balert\b/i.test(body),
+                    comments: /\bcomments?\b|комментар/iu.test(body),
+                    playerjs: /\bPlayerjs\b/i.test(body),
+                    file_property: /(?:\bfile\b|["']file["'])\s*:/i.test(body),
+                    playlist: /\bplaylist\b/i.test(body),
+                    geo: /(?:географическ|геоблок|регион|вашей стране|your country|your region|geo.block)/iu.test(body)
+                  };
+                }
+              } catch { entry.body_unavailable = true; }
+            }
+            xhrDetails.push(entry);
+          }
           function classify(raw, type) {
             try {
               const u = new URL(raw);
@@ -156,6 +195,9 @@ jobs:
               page.on('response', response => {
                 const h = response.headers();
                 record(response.request(), response.status(), h['content-type'] || '', h['cf-mitigated'] === 'challenge');
+                if (['xhr', 'fetch'].includes(response.request().resourceType())) {
+                  pending.push(inspectXhr(response).catch(() => {}));
+                }
               });
               page.on('requestfailed', request => record(request, 'failed'));
               page.on('pageerror', () => pageErrors++);
@@ -183,6 +225,12 @@ jobs:
                 };
               });
               console.log('DOM ' + JSON.stringify(summary));
+              const notices = await page.locator('.alert').allTextContents();
+              console.log('alert_count=' + notices.length);
+              for (const notice of notices.slice(0, 8)) console.log('alert_text=' + JSON.stringify(safeNotice(notice)));
+              console.log('page_title=' + JSON.stringify(safeNotice(await page.title())));
+              await Promise.race([Promise.allSettled(pending), new Promise(resolve => setTimeout(resolve, 5000))]);
+              for (const entry of xhrDetails) console.log('xhr_detail ' + JSON.stringify(entry));
               console.log('page_errors=' + pageErrors);
               for (const [key, count] of counts) console.log('network ' + key + ' count=' + count);
               if (!navigation || navigation.status() !== 200) process.exitCode = 1;
