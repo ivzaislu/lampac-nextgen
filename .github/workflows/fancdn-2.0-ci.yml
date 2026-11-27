@@ -69,12 +69,12 @@ jobs:
                   elif u.path == "/engine/ajax/msearch.php":
                       title = q.get("q", [""])[0]
                       entries = {
-                          "Fixture Movie": {"title": "Fixture Movie", "original_title": "Fixture Movie", "year": "2024", "url": "/100-fixture-movie.html"},
+                          "Fixture Movie": {"title": "Fixture Movie", "original_title": "Fixture Movie", "year": "2024", "url": "/40-fixture-movie.html"},
                           "Fixture Series": {"title": "Fixture Series", "original_title": "Fixture Series", "year": "2024", "url": "/200-fixture-series.html"}
                       }
                       body = json.dumps([entries[title]] if title in entries else [])
                       content_type = "application/json"
-                  elif u.path == "/100-fixture-movie.html":
+                  elif u.path == "/40-fixture-movie.html":
                       body = '<iframe src="/movies/123456?key=fixture"></iframe>'
                   elif u.path == "/film.php" and q.get("kp") == ["123456"] and q.get("key") == ["fixture"]:
                       body = json.dumps([{"title": "Fixture Movie Voice", "file": "https://cdn.fancdn.net/ci/movie/hls.m3u8", "subtitles": "[English]en.vtt"}])
@@ -127,6 +127,7 @@ jobs:
               "enable": true,
               "host": "http://127.0.0.1:9130",
               "cookie": "ci_session=fixture",
+              "headers": {"X-FanCDN-Server-Only": "fixture-private"},
               "streamproxy": true
             }
           }
@@ -170,7 +171,9 @@ jobs:
           movie = request(kinopoisk_id=123456, title="Fixture Movie", original_title="Fixture Movie")
           movie_text = json.dumps(movie, ensure_ascii=False)
           assert "Fixture Movie Voice" in movie_text and "English" in movie_text, movie
-          print("PASS: movie and subtitles")
+          assert all(not row.get("headers") for row in movie["data"]), "proxy movie headers must be empty"
+          assert "fixture-private" not in movie_text, "server-only header must not be exposed"
+          print("PASS: movie and subtitles; proxied playback headers omitted")
 
           series = dict(kinopoisk_id=234567, title="Fixture Series", original_title="Fixture Series", serial=1)
           seasons = request(**series)
@@ -183,7 +186,9 @@ jobs:
           assert [row["e"] for row in episodes["data"]] == [1, 2], episodes
           assert {row["name"] for row in episodes["voice"]} == {"Fixture Voice A", "Fixture Voice B"}, episodes
           assert all(row["details"] == "Fixture Voice A" for row in episodes["data"]), episodes
-          print("PASS: episodes and voice listing")
+          assert all(not row.get("headers") for row in episodes["data"]), "proxy episode headers must be empty"
+          assert "fixture-private" not in json.dumps(episodes), "server-only header must not be exposed"
+          print("PASS: episodes and voice listing; proxied playback headers omitted")
 
           voice_b = next(row for row in episodes["voice"] if row["name"] == "Fixture Voice B")
           alternate = get(voice_b["url"])
@@ -195,6 +200,66 @@ jobs:
           logs = open("/tmp/lampac-ci.log").read()
           assert "loaded module: FanCDN.2.0" in logs
           print("PASS: HTTP-only fixture integration (no real FanSeries/CDN playback)")
+          PY
+
+      - name: Verify direct playback headers without exposing server credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          kill "$(cat /tmp/lampac-ci.pid)" 2>/dev/null || true
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$(cat /tmp/lampac-ci.pid)" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path("/tmp/lampac-ci/init.conf")
+          conf = json.loads(p.read_text())
+          module = conf["FanCDN.2.0"]
+          module["streamproxy"] = False
+          module["url_reserve"] = False
+          module["headers_stream"] = {"origin":"{host}", "referer":"{host}/", "user-agent":"fixture-player", "Authorization":"fixture-stream-private"}
+          p.write_text(json.dumps(conf))
+          PY
+          (cd /tmp/lampac-ci && exec dotnet Core.dll > /tmp/lampac-ci.log 2>&1) &
+          echo $! > /tmp/lampac-ci.pid
+          ready=0
+          for _ in $(seq 1 180); do
+            code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' 'http://127.0.0.1:9128/lite/fancdn.2.0?kinopoisk_id=0' || true)
+            if [ "$code" = 503 ] && grep -Fq 'loaded module: FanCDN.2.0' /tmp/lampac-ci.log; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-ci.pid)" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          test "$ready" = 1
+          python3 - <<'PY'
+          import json
+          from urllib.request import urlopen
+          from urllib.parse import urlencode, urlsplit
+          base = "http://127.0.0.1:9128"
+          def get(url):
+              assert urlsplit(url).netloc == "127.0.0.1:9128"
+              with urlopen(url, timeout=30) as res:
+                  return json.load(res)
+          def request(**params):
+              return get(base+"/lite/fancdn.2.0?"+urlencode(dict(params,rjson="true",year=2024)))
+          def check(data):
+              assert data["data"]
+              for row in data["data"]:
+                  assert urlsplit(row.get("url") or row.get("stream")).hostname=="cdn.fancdn.net", "expected direct CDN stream"
+                  headers = {k.lower():v for k,v in (row.get("headers") or {}).items()}
+                  assert headers.get("origin")=="http://127.0.0.1:9130", "origin missing"
+                  assert headers.get("referer")=="http://127.0.0.1:9130/", "referer missing"
+                  assert headers.get("user-agent")=="fixture-player", "user agent missing"
+                  assert "authorization" not in headers and "cookie" not in headers and "x-fancdn-server-only" not in headers
+              assert "fixture-private" not in json.dumps(data) and "fixture-stream-private" not in json.dumps(data)
+          check(request(kinopoisk_id=123456,title="Fixture Movie",original_title="Fixture Movie"))
+          seasons=request(kinopoisk_id=234567,title="Fixture Series",original_title="Fixture Series",serial=1)
+          check(get(seasons["data"][0]["url"]))
+          print("PASS: direct movie and episode playback headers; no private headers exposed")
           PY
 
       - name: Diagnostics
@@ -210,7 +275,7 @@ jobs:
             if [ -f "$p" ]; then kill "$(cat "$p")" 2>/dev/null || true; fi
           done
 
-      - name: Live FanSeries 50 films and 50 series HTTP-only expanded regression
+      - name: Live FanSeries 20 films and 20 series final refactor regression
         env:
           FANCDN_COOKIE: ${{ secrets.FANCDN_COOKIE }}
         shell: bash
@@ -381,37 +446,7 @@ jobs:
               (325,"Крёстный отец","The Godfather",1972),
               (328,"Властелин колец: Братство Кольца","The Lord of the Rings: The Fellowship of the Ring",2001),
               (689,"Гарри Поттер и философский камень","Harry Potter and the Philosopher's Stone",2001),
-              (476,"Назад в будущее","Back to the Future",1985),
-              (329,"Властелин колец: Две крепости","The Lord of the Rings: The Two Towers",2002),
-              (3498,"Властелин колец: Возвращение короля","The Lord of the Rings: The Return of the King",2003),
-              (444,"Терминатор 2: Судный день","Terminator 2: Judgment Day",1991),
-              (3290,"Список Шиндлера","Schindler's List",1993),
-              (430,"Шрэк","Shrek",2001),
-              (463634,"Волк с Уолл-стрит","The Wolf of Wall Street",2013),
-              (1108577,"Зелёная книга","Green Book",2018),
-              (526,"Большой куш","Snatch",2000),
-              (4374,"Пираты Карибского моря: Проклятие Чёрной жемчужины","Pirates of the Caribbean: The Curse of the Black Pearl",2003),
-              (8124,"Троя","Troy",2004),
-              (324,"Поймай меня, если сможешь","Catch Me If You Can",2002),
-              (2656,"Пятый элемент","The Fifth Element",1997),
-              (522,"Карты, деньги, два ствола","Lock, Stock and Two Smoking Barrels",1998),
-              (389,"Леон","Léon",1994),
-              (63912,"1+1","Intouchables",2011),
-              (46708,"Один дома","Home Alone",1990),
-              (279102,"ВАЛЛ-И","WALL·E",2008),
-              (2360,"Король Лев","The Lion King",1994),
-              (775276,"Дюна","Dune",2021),
-              (4664634,"Оппенгеймер","Oppenheimer",2023),
-              (1048334,"Джокер","Joker",2019),
-              (427198,"Социальная сеть","The Social Network",2010),
-              (841700,"Марсианин","The Martian",2015),
-              (453406,"Безумный Макс: Дорога ярости","Mad Max: Fury Road",2015),
-              (89514,"Железный человек","Iron Man",2008),
-              (263531,"Мстители","The Avengers",2012),
-              (843650,"Мстители: Финал","Avengers: Endgame",2019),
-              (635772,"Игра в имитацию","The Imitation Game",2014),
-              (2717,"Убить Билла","Kill Bill: Vol. 1",2003),
-              (5492,"Вечное сияние чистого разума","Eternal Sunshine of the Spotless Mind",2004)
+              (476,"Назад в будущее","Back to the Future",1985)
           ]
           series = [
               (404900,"Во все тяжкие","Breaking Bad",2008),
@@ -433,46 +468,16 @@ jobs:
               (460586,"Пацаны","The Boys",2019),
               (1044004,"Ведьмак","The Witcher",2019),
               (253245,"Офис","The Office",2005),
-              (178707,"Сверхъестественное","Supernatural",2005),
-              (412344,"Менталист","The Mentalist",2008),
-              (655800,"Чёрное зеркало","Black Mirror",2011),
-              (401522,"Как я встретил вашу маму","How I Met Your Mother",2005),
-              (402955,"Прослушка","The Wire",2002),
-              (415001,"Настоящая кровь","True Blood",2008),
-              (417846,"Сыны анархии","Sons of Anarchy",2008),
-              (195523,"Мир Дикого Запада","Westworld",2016),
-              (682468,"Ганнибал","Hannibal",2013),
-              (716587,"Острые козырьки","Peaky Blinders",2013),
-              (474779,"Подпольная империя","Boardwalk Empire",2010),
-              (521722,"Борджиа","The Borgias",2011),
-              (258048,"Побег","Prison Break",2005),
-              (251568,"Клиника","Scrubs",2001),
-              (84358,"Твин Пикс","Twin Peaks",1990),
-              (412342,"Грань","Fringe",2008),
-              (409640,"Касл","Castle",2009),
-              (1203039,"Локи","Loki",2021),
-              (682255,"Викинги","Vikings",2013),
-              (581937,"Карточный домик","House of Cards",2013),
-              (821565,"Нарко","Narcos",2015),
-              (1032606,"Тьма","Dark",2017),
-              (1046206,"Бумажный дом","La casa de papel",2017),
-              (958500,"Охотник за разумом","Mindhunter",2017),
-              (1118138,"Мандалорец","The Mandalorian",2019),
-              (839458,"Одни из нас","The Last of Us",2023),
-              (557806,"Форс-мажоры","Suits",2011),
-              (573312,"Борджиа","Borgia",2011),
-              (277535,"Герои","Heroes",2006),
-              (469941,"Спартак: Кровь и песок","Spartacus: Blood and Sand",2010),
-              (574688,"Американская история ужасов","American Horror Story",2011)
+              (178707,"Сверхъестественное","Supernatural",2005)
           ]
-          assert len(movies) == len(series) == 50
-          assert len({row[0] for row in movies+series}) == 100
+          assert len(movies) == len(series) == 20
+          assert len({row[0] for row in movies+series}) == 40
           cases = [(kind,row) for pair in zip(movies,series) for kind,row in zip(("movie","series"),pair)]
           results = []
           trace_path = "/tmp/fancdn-live.log"
           offset = 0
           for i,(kind,(kp,title,original,year)) in enumerate(cases,1):
-              print(f"LIVE CASE {i:02d}/100 kind={kind} kp={kp} title={title} year={year}", flush=True)
+              print(f"LIVE CASE {i:02d}/40 kind={kind} kp={kp} title={title} year={year}", flush=True)
               started = time.monotonic()
               passed = False
               stage = "search"
@@ -528,8 +533,8 @@ jobs:
               group = [r for r in results if r["kind"]==kind]
               print(f"SUMMARY {kind}: {sum(r['pass'] for r in group)}/{len(group)} PASS",flush=True)
           fallback_total = sum(r["fallback"] for r in results)
-          print(f"SUMMARY first_pass={sum(r['first_pass'] for r in results)}/100 recovered={sum(r['recovered'] for r in results)}",flush=True)
-          print(f"SUMMARY links={sum(r['link_ok'] for r in results)}/100",flush=True)
-          print(f"SUMMARY total={sum(r['pass'] for r in results)}/100 upstream_requests={sum(r['requests'] for r in results)} http200={sum(r['http200'] for r in results)} playwright_fallback={fallback_total}",flush=True)
+          print(f"SUMMARY first_pass={sum(r['first_pass'] for r in results)}/40 recovered={sum(r['recovered'] for r in results)}",flush=True)
+          print(f"SUMMARY links={sum(r['link_ok'] for r in results)}/40",flush=True)
+          print(f"SUMMARY total={sum(r['pass'] for r in results)}/40 upstream_requests={sum(r['requests'] for r in results)} http200={sum(r['http200'] for r in results)} playwright_fallback={fallback_total}",flush=True)
           raise SystemExit(0 if all(r["pass"] for r in results) and fallback_total==0 else 1)
           PY

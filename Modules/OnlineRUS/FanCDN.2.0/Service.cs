@@ -88,7 +88,7 @@ public struct FanCDN2_0Invoke
             return new FanCDN2_0SerialEpisode
             {
                 episode = episodeNumber,
-                title = ExtractEpisodeTitle(episodePage) ?? $"{episodeNumber} серия",
+                title = $"{episodeNumber} серия",
                 streams = streams
             };
         }
@@ -279,15 +279,6 @@ public struct FanCDN2_0Invoke
         return $"{uri.Scheme}://{uri.Authority}{rootPath}/{season}-season.html";
     }
 
-    static string ExtractEpisodeTitle(string html)
-    {
-        if (string.IsNullOrWhiteSpace(html))
-            return null;
-
-        Match title = Regex.Match(html, "<h1\\b[^>]*class=[\"'][^\"']*\\bpage-title\\b[^\"']*[\"'][^>]*>(.*?)</h1>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        return title.Success ? CleanText(title.Groups[1].Value) : null;
-    }
-
     static string CleanText(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -358,11 +349,29 @@ public struct FanCDN2_0Invoke
         return null;
     }
 
-    static string RouteBase(string localHost)
+    static string SeriesRoute(string localHost, string imdb_id, long kinopoisk_id, string title, string original_title, short year, bool rjson)
     {
-        return string.IsNullOrWhiteSpace(localHost)
+        string route = string.IsNullOrWhiteSpace(localHost)
             ? "/lite/fancdn.2.0"
             : localHost.TrimEnd('/') + "/lite/fancdn.2.0";
+
+        return $"{route}?rjson={rjson}&serial=1&kinopoisk_id={kinopoisk_id}&imdb_id={HttpUtility.UrlEncode(imdb_id)}&title={HttpUtility.UrlEncode(title)}&original_title={HttpUtility.UrlEncode(original_title)}&year={year}";
+    }
+
+    static IReadOnlyList<HeadersModel> PlaybackHeaders(string link, IReadOnlyList<HeadersModel> headers)
+    {
+        if (string.IsNullOrEmpty(link))
+            return null;
+
+        // A reserve URL starts with the direct stream, so it still needs playback headers.
+        int reserve = link.IndexOf(" or ", StringComparison.Ordinal);
+        string primary = reserve < 0 ? link : link.Substring(0, reserve);
+        if (Uri.TryCreate(primary, UriKind.Absolute, out Uri uri) &&
+            uri.AbsolutePath.Contains("/proxy/", StringComparison.OrdinalIgnoreCase) &&
+            NormalizeFanCdnUrl(primary) == null)
+            return null;
+
+        return headers;
     }
     #endregion
 
@@ -391,12 +400,13 @@ public struct FanCDN2_0Invoke
                 }
             }
 
+            string link = onstreamfile.Invoke(movie.file);
             mtpl.Append(
                 movie.title,
-                onstreamfile.Invoke(movie.file),
+                link,
                 subtitles: subtitles,
                 vast: vast,
-                headers: headers
+                headers: PlaybackHeaders(link, headers)
             );
         }
 
@@ -408,17 +418,14 @@ public struct FanCDN2_0Invoke
         if (seasons == null || seasons.Count == 0)
             return default;
 
-        string route = RouteBase(localHost);
-        string encTitle = HttpUtility.UrlEncode(title);
-        string encOriginal = HttpUtility.UrlEncode(original_title);
-        string encImdb = HttpUtility.UrlEncode(imdb_id);
+        string route = SeriesRoute(localHost, imdb_id, kinopoisk_id, title, original_title, year, rjson);
 
         var tpl = new SeasonTpl(seasons.Count);
         foreach (int season in seasons)
         {
             tpl.Append(
                 $"{season} сезон",
-                $"{route}?rjson={rjson}&serial=1&kinopoisk_id={kinopoisk_id}&imdb_id={encImdb}&title={encTitle}&original_title={encOriginal}&year={year}&s={season}",
+                $"{route}&s={season}",
                 season
             );
         }
@@ -491,10 +498,7 @@ public struct FanCDN2_0Invoke
             }
         }
 
-        string route = RouteBase(localHost);
-        string encTitle = HttpUtility.UrlEncode(title);
-        string encOriginal = HttpUtility.UrlEncode(original_title);
-        string encImdb = HttpUtility.UrlEncode(imdb_id);
+        string route = SeriesRoute(localHost, imdb_id, kinopoisk_id, title, original_title, year, rjson);
 
         var vtpl = new VoiceTpl();
         foreach (string name in voiceOrder)
@@ -503,7 +507,7 @@ public struct FanCDN2_0Invoke
             vtpl.Append(
                 name,
                 name.Equals(selectedVoice, StringComparison.OrdinalIgnoreCase),
-                $"{route}?rjson={rjson}&serial=1&kinopoisk_id={kinopoisk_id}&imdb_id={encImdb}&title={encTitle}&original_title={encOriginal}&year={year}&s={serial.season}&voice={encVoice}"
+                $"{route}&s={serial.season}&voice={encVoice}"
             );
         }
 
@@ -514,14 +518,15 @@ public struct FanCDN2_0Invoke
             if (episode.streams == null || !episode.streams.TryGetValue(selectedVoice, out string stream) || string.IsNullOrEmpty(stream))
                 continue;
 
+            string link = onstreamfile.Invoke(stream);
             etpl.Append(
                 $"{episode.episode} серия",
                 title ?? original_title,
                 serial.season,
                 episode.episode.ToString(),
-                onstreamfile.Invoke(stream),
+                link,
                 voice_name: selectedVoice,
-                headers: headers,
+                headers: PlaybackHeaders(link, headers),
                 vast: vast
             );
         }
