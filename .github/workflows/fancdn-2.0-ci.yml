@@ -1,0 +1,35 @@
+name: FanCDN 2.0 module CI
+
+on:
+  push:
+    branches: [fancdn-2.0-ci]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-module:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate module manifest
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          module = Path("Modules/OnlineRUS/FanCDN.2.0")
+          manifest = json.loads((module / "manifest.json").read_text())
+          assert manifest["dynamic"] is True
+          assert set(manifest["tree"]) == {p.name for p in module.glob("*.cs")}
+          print("Manifest matches module source files")
+          PY
+      - name: Build FanCDN.2.0
+        run: dotnet build Modules/OnlineRUS/FanCDN.2.0/FanCDN.2.0.csproj --configuration Release --verbosity minimal -p:PlaywrightPlatform=linux-x64
