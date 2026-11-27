@@ -4,7 +4,6 @@ using Shared.Models.Events;
 using Shared.Models.Module;
 using Shared.Models.Module.Interfaces;
 using Shared.Models.Online.Settings;
-using Shared.PlaywrightCore;
 using Shared.Services;
 using System.Collections.Generic;
 
@@ -16,7 +15,7 @@ public class ModInit : IModuleLoaded, IModuleOnline
 
     public List<ModuleOnlineItem> Invoke(HttpContext httpContext, RequestModel requestInfo, string host, OnlineEventsModel args)
     {
-        if (PlaywrightBrowser.Status == PlaywrightStatus.disabled || string.IsNullOrEmpty(conf.cookie))
+        if (string.IsNullOrEmpty(conf.cookie))
             return null;
 
         var online = new List<ModuleOnlineItem>();
