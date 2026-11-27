@@ -153,33 +153,40 @@ jobs:
           from urllib.parse import urlencode
           import json
 
-          def request(**params):
-              params.update(rjson="true", year=2024)
-              url = "http://127.0.0.1:9128/lite/fancdn.2.0?" + urlencode(params)
+          def get(url):
               with urlopen(url, timeout=30) as response:
                   body = response.read().decode()
                   assert response.status == 200, (response.status, body)
-                  json.loads(body)
-                  return body
+                  return json.loads(body)
+
+          def request(**params):
+              params.update(rjson="true", year=2024)
+              return get("http://127.0.0.1:9128/lite/fancdn.2.0?" + urlencode(params))
 
           movie = request(kinopoisk_id=123456, title="Fixture Movie", original_title="Fixture Movie")
-          assert "Fixture Movie Voice" in movie, movie
-          assert "English" in movie, movie
+          movie_text = json.dumps(movie, ensure_ascii=False)
+          assert "Fixture Movie Voice" in movie_text and "English" in movie_text, movie
           print("PASS: movie and subtitles")
 
           series = dict(kinopoisk_id=234567, title="Fixture Series", original_title="Fixture Series", serial=1)
           seasons = request(**series)
-          assert "1 сезон" in seasons and "2 сезон" in seasons, seasons
+          assert seasons["type"] == "season", seasons
+          assert [row["name"] for row in seasons["data"]] == ["1 сезон", "2 сезон"], seasons
           print("PASS: season listing")
 
-          episodes = request(**series, s=1)
-          assert "1 серия" in episodes and "2 серия" in episodes, episodes
-          assert "Fixture Voice A" in episodes and "Fixture Voice B" in episodes, episodes
+          episodes = get(seasons["data"][0]["url"])
+          assert episodes["type"] == "episode", episodes
+          assert [row["e"] for row in episodes["data"]] == [1, 2], episodes
+          assert {row["name"] for row in episodes["voice"]} == {"Fixture Voice A", "Fixture Voice B"}, episodes
+          assert all(row["details"] == "Fixture Voice A" for row in episodes["data"]), episodes
           print("PASS: episodes and voice listing")
 
-          alternate = request(**series, s=1, voice="Fixture Voice B")
-          assert "1 серия" in alternate and "2 серия" in alternate, alternate
-          print("PASS: alternate voice")
+          voice_b = next(row for row in episodes["voice"] if row["name"] == "Fixture Voice B")
+          alternate = get(voice_b["url"])
+          assert [row["e"] for row in alternate["data"]] == [1, 2], alternate
+          assert all(row["details"] == "Fixture Voice B" for row in alternate["data"]), alternate
+          assert any(row["name"] == "Fixture Voice B" and row.get("active") for row in alternate["voice"]), alternate
+          print("PASS: alternate voice via generated link")
 
           logs = open("/tmp/lampac-ci.log").read()
           assert "loaded module: FanCDN.2.0" in logs
