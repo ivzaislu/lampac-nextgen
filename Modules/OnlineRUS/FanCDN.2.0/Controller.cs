@@ -128,6 +128,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         // Initialize the controller's shared transport before episode fan-out.
         _ = httpHydra;
         var streamHeaders = HeadersModel.InitOrNull(init.headers_stream);
+        var playbackHeaders = PlaybackHeaders(streamHeaders);
         var oninvk = new FanCDN2_0Invoke
         (
             init,
@@ -195,7 +196,7 @@ public class FanCDN2_0Controller : BaseOnlineController
                     voice,
                     rjson,
                     vast: init.vast,
-                    headers: httpHeaders(init)
+                    headers: playbackHeaders
                 )
             );
         }
@@ -222,7 +223,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         });
 
         return ContentTpl(cache,
-            () => oninvk.Tpl(cache.Value, title, original_title, vast: init.vast, headers: httpHeaders(init))
+            () => oninvk.Tpl(cache.Value, title, original_title, vast: init.vast, headers: playbackHeaders)
         );
     }
     #endregion
@@ -243,12 +244,7 @@ public class FanCDN2_0Controller : BaseOnlineController
             return null;
 
         string host = init.host.TrimEnd('/');
-        var headers = HeadersModel.Init(
-            ("referer", $"{host}/"),
-            ("sec-fetch-dest", "empty"),
-            ("sec-fetch-mode", "cors"),
-            ("sec-fetch-site", "same-origin")
-        );
+        var headers = AjaxHeaders($"{host}/");
 
         string search = await SiteGetFast(
             $"{host}/engine/ajax/msearch.php?q={HttpUtility.UrlEncode(title)}",
@@ -394,12 +390,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         string host = init.host.TrimEnd('/');
         string encodedKey = HttpUtility.UrlEncode(key);
         string movieUrl = $"{host}/movies/{kp}?key={encodedKey}";
-        var headers = HeadersModel.Init(
-            ("referer", movieUrl),
-            ("sec-fetch-dest", "empty"),
-            ("sec-fetch-mode", "cors"),
-            ("sec-fetch-site", "same-origin")
-        );
+        var headers = AjaxHeaders(movieUrl);
 
         string json = await SiteGetFast(
             $"{host}/film.php?kp={kp}&key={encodedKey}",
@@ -627,6 +618,50 @@ public class FanCDN2_0Controller : BaseOnlineController
         return html.Contains("требуется вход в систему", StringComparison.OrdinalIgnoreCase)
             || html.Contains("для доступа к видеоконтенту необходимо иметь учётную запись", StringComparison.OrdinalIgnoreCase)
             || html.Contains("для доступа к видеоконтенту необходимо иметь учетную запись", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // Client playback must never inherit the headers used for site authentication.
+    IReadOnlyList<HeadersModel> PlaybackHeaders(IReadOnlyList<HeadersModel> streamHeaders)
+    {
+        var resolved = httpHeaders(init.host, streamHeaders);
+        if (resolved == null || resolved.Count == 0)
+            return null;
+
+        var headers = new List<HeadersModel>(resolved.Count);
+        foreach (var h in resolved)
+        {
+            switch (h.name?.ToLowerInvariant())
+            {
+                case "accept":
+                case "accept-language":
+                case "user-agent":
+                case "origin":
+                case "referer":
+                case "cache-control":
+                case "pragma":
+                case "dnt":
+                case "sec-ch-ua":
+                case "sec-ch-ua-mobile":
+                case "sec-ch-ua-platform":
+                case "sec-fetch-dest":
+                case "sec-fetch-mode":
+                case "sec-fetch-site":
+                    headers.Add(h);
+                    break;
+            }
+        }
+
+        return headers.Count == 0 ? null : headers;
+    }
+
+    static IReadOnlyList<HeadersModel> AjaxHeaders(string referer)
+    {
+        return HeadersModel.Init(
+            ("referer", referer),
+            ("sec-fetch-dest", "empty"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-site", "same-origin")
+        );
     }
 
     static IReadOnlyList<HeadersModel> DocumentHeaders(string host)

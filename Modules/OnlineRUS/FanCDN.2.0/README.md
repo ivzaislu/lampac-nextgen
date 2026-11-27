@@ -2,7 +2,7 @@
 
 Внешний онлайн-модуль для **Lampac / Lampac NextGen**, работающий с FanSeries и потоками FanCDN.
 
-Домен по умолчанию: `https://1fanserials.org`. Потоки и субтитры отдаются через `HostStreamProxy` (`streamproxy: true`), заголовки берутся из штатного `headers_stream`; по умолчанию `Origin` и `Referer` используют `{host}`. Модуль по умолчанию выключен (`enable = false`) и включается в `init.conf`.
+Домен по умолчанию: `https://1fanserials.org`. Потоки и субтитры отдаются через `HostStreamProxy` (`streamproxy: true`), заголовки берутся из штатного `headers_stream`; по умолчанию `Origin` и `Referer` используют `{host}`. Модуль по умолчанию выключен (`enable = false`) и включается в `init.conf`. Серверные `headers` и `cookie` не передаются в шаблоны воспроизведения: при прямой выдаче используются только стандартные HTTP-заголовки из `headers_stream`, при выдаче через `/proxy/` клиентские заголовки не нужны.
 
 ## Требования
 
