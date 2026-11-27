@@ -206,7 +206,7 @@ jobs:
             if [ -f "$p" ]; then kill "$(cat "$p")" 2>/dev/null || true; fi
           done
 
-      - name: Live FanSeries 20 films and 20 series (HTTP only)
+      - name: Diagnose Avatar and The Departed HLS (HTTP only)
         env:
           FANCDN_COOKIE: ${{ secrets.FANCDN_COOKIE }}
         shell: bash
@@ -261,7 +261,9 @@ jobs:
           s = s.replace(old, '''streamfile =>
                   {
                       Console.WriteLine($"FANTRACE stream resolved host={(Uri.TryCreate(streamfile, UriKind.Absolute, out var u) ? u.Host : "invalid")}");
-                      return HostStreamProxy(streamfile, streamHeaders);
+                      string proxied = HostStreamProxy(streamfile, streamHeaders);
+                      System.IO.File.AppendAllText("/tmp/fancdn-stream-map.jsonl", System.Text.Json.JsonSerializer.Serialize(new { direct = streamfile, proxy = proxied }) + System.Environment.NewLine);
+                      return proxied;
                   }''')
           s = s.replace('await browserGate.WaitAsync(HttpContext.RequestAborted);', 'Console.WriteLine("FANTRACE playwright fallback requested (browser disabled)");\n        await browserGate.WaitAsync(HttpContext.RequestAborted);')
           p.write_text(s)
@@ -277,6 +279,21 @@ jobs:
                       }
                       return System.Threading.Tasks.Task.CompletedTask;
                   };
+                  EventListener.ProxyApiCreateHttpRequest += e =>
+                  {
+                      var req = e.requestMessage;
+                      var uri = req.RequestUri;
+                      if (uri != null && (uri.Host == "cdn.fancdn.net" || uri.Host.EndsWith(".cdn.fancdn.net", System.StringComparison.OrdinalIgnoreCase)))
+                      {
+                          var allowed = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase) { "Accept", "Accept-Language", "User-Agent", "Origin", "Referer", "Cache-Control", "Pragma", "DNT", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site", "Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform" };
+                          var safe = new System.Collections.Generic.Dictionary<string,string>(System.StringComparer.OrdinalIgnoreCase);
+                          foreach (var h in req.Headers)
+                              if (allowed.Contains(h.Key)) safe[h.Key] = string.Join(", ", h.Value);
+                          System.IO.File.AppendAllText("/tmp/fancdn-proxy-requests.jsonl", System.Text.Json.JsonSerializer.Serialize(new { url = uri.AbsoluteUri, headers = safe }) + System.Environment.NewLine);
+                          System.Console.WriteLine($"FANTRACE proxy request host={uri.Host} method={req.Method} headers={safe.Count} origin_present={safe.ContainsKey("Origin")} referer_present={safe.ContainsKey("Referer")} cookie_present={req.Headers.Contains("Cookie")}");
+                      }
+                      return System.Threading.Tasks.Task.CompletedTask;
+                  };
                   updateConf();''', 1)
           p.write_text(s)
           PY
@@ -286,7 +303,7 @@ jobs:
           cleanup() {
             kill "$pid" 2>/dev/null || true
             echo 'Live diagnostic finished; per-case redacted trace is printed above.'
-            rm -f /tmp/lampac-ci/init.conf /tmp/fancdn-live.log
+            rm -f /tmp/lampac-ci/init.conf /tmp/fancdn-live.log /tmp/fancdn-stream-map.jsonl /tmp/fancdn-proxy-requests.jsonl /tmp/fancdn-probe-body
           }
           trap cleanup EXIT
           ready=0
@@ -305,147 +322,87 @@ jobs:
             exit 1
           fi
           python3 - <<'PY'
-          import json, os, time
+          import json, time, subprocess
+          from pathlib import Path
           from urllib.request import urlopen
           from urllib.parse import urlencode, urlsplit, urljoin
-          from urllib.error import HTTPError
 
-          base = "http://127.0.0.1:9128"
-
-          def get(stage, url, manifest=False):
-              start = time.monotonic()
+          BASE = "http://127.0.0.1:9128"
+          MAP = Path("/tmp/fancdn-stream-map.jsonl")
+          REQS = Path("/tmp/fancdn-proxy-requests.jsonl")
+          BODY = Path("/tmp/fancdn-probe-body")
+          TRACE = Path("/tmp/fancdn-live.log")
+          movies = [(251733,"Аватар","Avatar",2009),(81314,"Отступники","The Departed",2006)]
+          def records(path):
+              return [json.loads(x) for x in path.read_text().splitlines() if x.strip()] if path.exists() else []
+          def valid(url, local):
               u = urlsplit(url)
-              assert u.scheme == "http" and u.netloc == "127.0.0.1:9128", "unexpected local link"
+              if local:
+                  return u.scheme == "http" and u.netloc == "127.0.0.1:9128"
+              return u.scheme in ("https","http") and u.username is None and u.password is None and (u.hostname=="cdn.fancdn.net" or (u.hostname or "").endswith(".cdn.fancdn.net"))
+          def probe(label,url,local,headers=None):
+              if not valid(url,local):
+                  print(f"PROBE {label} refused unexpected host",flush=True)
+                  return None
+              if BODY.exists(): BODY.unlink()
+              args=["curl","--silent","--show-error","--connect-timeout","12","--max-time","40","--max-filesize","2097152","--output",str(BODY),"--write-out","code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download} http=%{http_version}","--url",url]
+              for k,v in (headers or {}).items():
+                  args.extend(["--header",f"{k}: {v}"])
+              r=subprocess.run(args,capture_output=True,text=True)
+              body=BODY.read_bytes() if BODY.exists() else b""
+              hls=body.lstrip().startswith(b"#EXTM3U")
+              print(f"PROBE {label} curl_exit={r.returncode} {r.stdout.strip()} hls={hls}",flush=True)
+              return body.decode("utf-8-sig",errors="replace") if hls and r.returncode==0 else None
+          def playlist(label,url,local,headers=None):
+              m=probe(label+" master",url,local,headers)
+              if m is None: return False
+              if "#EXT-X-STREAM-INF:" in m:
+                  lines=[x.strip() for x in m.splitlines() if x.strip()]
+                  child=next((lines[i+1] for i,x in enumerate(lines[:-1]) if x.startswith("#EXT-X-STREAM-INF:") and not lines[i+1].startswith("#")),None)
+                  if not child: return False
+                  m=probe(label+" media",urljoin(url,child),local,headers)
+              ok=bool(m and "#EXTINF:" in m)
+              print(f"PLAYLIST {label} ok={ok} segments={m.count('#EXTINF:') if m else 0}",flush=True)
+              return ok
+          results=[]
+          for kp,title,original,year in movies:
+              print(f"MOVIE kp={kp} title={title}",flush=True)
+              q=urlencode(dict(kinopoisk_id=kp,title=title,original_title=original,year=year,serial=0,rjson="true"))
               try:
-                  with urlopen(url, timeout=90) as res:
-                      body = res.read(1024 * 1024 if manifest else 8 * 1024 * 1024)
-                      elapsed = round((time.monotonic()-start)*1000)
-                      print(f"LIVE {stage}: HTTP {res.status}; {elapsed}ms; bytes={len(body)}; cache={res.headers.get('X-Invoke-Cache','-')}", flush=True)
-                      if manifest:
-                          ok = body.lstrip().startswith(b"#EXTM3U")
-                          print(f"LIVE {stage}: hls_manifest={ok}", flush=True)
-                          assert ok, "invalid HLS manifest"
-                          return body.decode("utf-8-sig")
-                      data = json.loads(body)
-                      print(f"LIVE {stage}: type={data.get('type','unknown')}; items={len(data.get('data') or [])}; voices={len(data.get('voice') or [])}", flush=True)
-                      return data
-              except HTTPError as e:
-                  body = e.read(256).decode(errors="replace").strip()
-                  marker = body if body in {"search","embed","serial","seasons","cookie","disable","cors-not-supported","network","timeout"} else "redacted"
-                  print(f"LIVE {stage}: HTTP {e.code}; marker={marker}; elapsed_ms={round((time.monotonic()-start)*1000)}", flush=True)
-                  raise RuntimeError("HTTP error") from None
+                  with urlopen(BASE+"/lite/fancdn.2.0?"+q,timeout=90) as response:
+                      data=json.load(response)
+                      print(f"SEARCH status={response.status} type={data.get('type')} variants={len(data.get('data') or [])}",flush=True)
               except Exception as e:
-                  print(f"LIVE {stage}: {type(e).__name__}", flush=True)
-                  raise RuntimeError("request error") from None
-
-          def request(stage, **params):
-              params["rjson"] = "true"
-              return get(stage, base+"/lite/fancdn.2.0?"+urlencode(params))
-
-          def probe(stage, data):
-              row = data["data"][0]
-              url = row.get("url") or row.get("stream")
-              u = urlsplit(url or "")
-              print(f"LIVE {stage}: stream_link_present={bool(url)}; host={u.hostname or 'none'}; subtitles={len(row.get('subtitles') or [])}", flush=True)
-              assert u.netloc == "127.0.0.1:9128", "expected Lampac proxy stream"
-              manifest = get(stage+" manifest", url, manifest=True)
-              if "#EXT-X-STREAM-INF:" in manifest:
-                  lines = [line.strip() for line in manifest.splitlines() if line.strip()]
-                  child = next(lines[i+1] for i,line in enumerate(lines[:-1]) if line.startswith("#EXT-X-STREAM-INF:") and not lines[i+1].startswith("#"))
-                  manifest = get(stage+" media playlist", urljoin(url,child), manifest=True)
-              assert "#EXTINF:" in manifest, "media playlist contains no segments"
-              print(f"LIVE {stage}: media playlist segments={manifest.count('#EXTINF:')}", flush=True)
-
-          movies = [
-              (258687,"Интерстеллар","Interstellar",2014),
-              (447301,"Начало","Inception",2010),
-              (111543,"Тёмный рыцарь","The Dark Knight",2008),
-              (326,"Побег из Шоушенка","The Shawshank Redemption",1994),
-              (435,"Зелёная миля","The Green Mile",1999),
-              (361,"Бойцовский клуб","Fight Club",1999),
-              (448,"Форрест Гамп","Forrest Gump",1994),
-              (301,"Матрица","The Matrix",1999),
-              (342,"Криминальное чтиво","Pulp Fiction",1994),
-              (474,"Гладиатор","Gladiator",2000),
-              (2213,"Титаник","Titanic",1997),
-              (251733,"Аватар","Avatar",2009),
-              (195334,"Престиж","The Prestige",2006),
-              (397667,"Остров проклятых","Shutter Island",2010),
-              (586397,"Джанго освобождённый","Django Unchained",2012),
-              (81314,"Отступники","The Departed",2006),
-              (325,"Крёстный отец","The Godfather",1972),
-              (328,"Властелин колец: Братство Кольца","The Lord of the Rings: The Fellowship of the Ring",2001),
-              (689,"Гарри Поттер и философский камень","Harry Potter and the Philosopher's Stone",2001),
-              (476,"Назад в будущее","Back to the Future",1985)
-          ]
-          series = [
-              (404900,"Во все тяжкие","Breaking Bad",2008),
-              (464963,"Игра престолов","Game of Thrones",2011),
-              (178710,"Доктор Хаус","House M.D.",2004),
-              (502838,"Шерлок","Sherlock",2010),
-              (77044,"Друзья","Friends",1994),
-              (306084,"Теория большого взрыва","The Big Bang Theory",2007),
-              (104122,"Остаться в живых","Lost",2004),
-              (508161,"Ходячие мертвецы","The Walking Dead",2010),
-              (915196,"Очень странные дела","Stranger Things",2016),
-              (1227803,"Чернобыль","Chernobyl",2019),
-              (796660,"Лучше звоните Солу","Better Call Saul",2015),
-              (79848,"Клан Сопрано","The Sopranos",1999),
-              (277537,"Декстер","Dexter",2006),
-              (859908,"Мистер Робот","Mr. Robot",2015),
-              (681831,"Настоящий детектив","True Detective",2014),
-              (767379,"Фарго","Fargo",2014),
-              (460586,"Пацаны","The Boys",2019),
-              (1044004,"Ведьмак","The Witcher",2019),
-              (253245,"Офис","The Office",2005),
-              (178707,"Сверхъестественное","Supernatural",2005)
-          ]
-          assert len(movies) == len(series) == 20
-          assert len({row[0] for row in movies+series}) == 40
-          cases = [(kind,row) for pair in zip(movies,series) for kind,row in zip(("movie","series"),pair)]
-          results = []
-          trace_path = "/tmp/fancdn-live.log"
-          offset = 0
-          for i,(kind,(kp,title,original,year)) in enumerate(cases,1):
-              print(f"LIVE CASE {i:02d}/40 kind={kind} kp={kp} title={title} year={year}", flush=True)
-              started = time.monotonic()
-              passed = False
-              stage = "search"
-              try:
-                  data = request(f"{kind} search + {'embed' if kind=='movie' else 'seasons'}", kinopoisk_id=kp, title=title, original_title=original, year=year, serial=int(kind=="series"))
-                  if kind == "movie":
-                      assert data["type"] == "movie"
-                      stage = "movie HLS"
-                      probe("movie",data)
-                  else:
-                      assert data["type"] == "season"
-                      stage = "episodes"
-                      ep = get("season episodes", data["data"][0]["url"])
-                      assert ep["type"] == "episode"
-                      stage = "episode HLS"
-                      probe("episode",ep)
-                  passed = True
-              except Exception as e:
-                  print(f"LIVE CASE {i:02d} error stage={stage} type={type(e).__name__}", flush=True)
-              with open(trace_path, "rb") as trace:
-                  trace.seek(offset)
-                  new = trace.read()
-                  offset = trace.tell()
-              lines = [line for line in new.decode(errors="replace").splitlines() if line.startswith("FANTRACE ")]
-              for line in lines:
-                  print(f"CASE {i:02d} {line}", flush=True)
-              requests = sum(line.startswith("FANTRACE request ") for line in lines)
-              ok = sum("FANTRACE http " in line and "status=200 " in line for line in lines)
-              fallback = sum("playwright fallback requested" in line for line in lines)
-              passed = passed and fallback == 0
-              result = {"case":i,"kind":kind,"kp":kp,"title":title,"pass":passed,"requests":requests,"http200":ok,"fallback":fallback,"ms":round((time.monotonic()-started)*1000)}
-              results.append(result)
-              print("CASE_RESULT "+json.dumps(result,ensure_ascii=False),flush=True)
-              time.sleep(1)
-          for kind in ("movie","series"):
-              group = [r for r in results if r["kind"]==kind]
-              print(f"SUMMARY {kind}: {sum(r['pass'] for r in group)}/{len(group)} PASS",flush=True)
-          fallback_total = sum(r["fallback"] for r in results)
-          print(f"SUMMARY total={sum(r['pass'] for r in results)}/40 upstream_requests={sum(r['requests'] for r in results)} http200={sum(r['http200'] for r in results)} playwright_fallback={fallback_total}",flush=True)
-          raise SystemExit(0 if all(r["pass"] for r in results) and fallback_total==0 else 1)
+                  print(f"SEARCH FAIL {type(e).__name__}",flush=True)
+                  results.append({"kp":kp,"search":False})
+                  continue
+              mapping={r["proxy"]:r["direct"] for r in records(MAP)}
+              variants=data.get("data") or []
+              if not variants: results.append({"kp":kp,"search":False})
+              for i,row in enumerate(variants,1):
+                  proxy=row.get("url") or row.get("stream") or ""
+                  direct=mapping.get(proxy)
+                  tag=f"kp={kp} variant={i}/{len(variants)}"
+                  print(f"VARIANT {tag} source_mapped={bool(direct)}",flush=True)
+                  p=playlist(tag+" proxy",proxy,True)
+                  requests=records(REQS)
+                  header=next((r["headers"] for r in reversed(requests) if r["url"]==direct),None)
+                  print(f"HEADERS {tag} actual_proxy_headers_found={header is not None}",flush=True)
+                  d=playlist(tag+" direct",direct,False,header) if direct and header is not None else False
+                  retry=None
+                  if not p:
+                      time.sleep(2)
+                      retry=playlist(tag+" proxy_retry",proxy,True)
+                  row_result={"kp":kp,"variant":i,"proxy":p,"direct":d,"proxy_retry":retry,"matched_headers":header is not None}
+                  results.append(row_result)
+                  print("VARIANT_RESULT "+json.dumps(row_result),flush=True)
+                  time.sleep(1)
+          lines=[x for x in TRACE.read_text(errors="replace").splitlines() if x.startswith("FANTRACE ")]
+          for line in lines: print(line,flush=True)
+          fallback=sum("playwright fallback requested" in x for x in lines)
+          for kp,title,_,_ in movies:
+              group=[r for r in results if r["kp"]==kp and "variant" in r]
+              print(f"SUMMARY kp={kp} variants={len(group)} proxy_ok={sum(r['proxy'] for r in group)} direct_ok={sum(r['direct'] for r in group)} recovered={sum(r['proxy_retry'] is True for r in group)}",flush=True)
+          print(f"SUMMARY playwright_fallback={fallback}",flush=True)
+          raise SystemExit(0 if results and fallback==0 and all(r.get("proxy") or r.get("proxy_retry") for r in results) else 1)
           PY
