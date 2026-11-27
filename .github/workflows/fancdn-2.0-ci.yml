@@ -205,3 +205,180 @@ jobs:
           for p in /tmp/lampac-ci.pid /tmp/fancdn-fixture.pid; do
             if [ -f "$p" ]; then kill "$(cat "$p")" 2>/dev/null || true; fi
           done
+
+      - name: Live FanSeries HTTP diagnostics
+        env:
+          FANCDN_COOKIE: ${{ secrets.FANCDN_COOKIE }}
+          FANCDN_MOVIE_KP: ${{ vars.FANCDN_MOVIE_KP }}
+          FANCDN_MOVIE_TITLE: ${{ vars.FANCDN_MOVIE_TITLE }}
+          FANCDN_MOVIE_ORIGINAL: ${{ vars.FANCDN_MOVIE_ORIGINAL }}
+          FANCDN_MOVIE_YEAR: ${{ vars.FANCDN_MOVIE_YEAR }}
+          FANCDN_SERIES_KP: ${{ vars.FANCDN_SERIES_KP }}
+          FANCDN_SERIES_TITLE: ${{ vars.FANCDN_SERIES_TITLE }}
+          FANCDN_SERIES_ORIGINAL: ${{ vars.FANCDN_SERIES_ORIGINAL }}
+          FANCDN_SERIES_YEAR: ${{ vars.FANCDN_SERIES_YEAR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$FANCDN_COOKIE" ]; then
+            echo "FAIL: FANCDN_COOKIE secret missing"
+            exit 1
+          fi
+          umask 077
+          # Instrument the published copy only, not the production module.
+          python3 - <<'PY'
+          import os, json, shutil
+          from pathlib import Path
+          root = Path("/tmp/lampac-ci")
+          module = root / "module/OnlineRUS/FanCDN.2.0"
+          (root / "init.conf").write_text(json.dumps({
+              "FanCDN.2.0": {"enable": True, "host": "https://1fanserials.org",
+                             "cookie": os.environ["FANCDN_COOKIE"], "streamproxy": True}
+          }))
+          shutil.rmtree(root / "cache/module", ignore_errors=True)
+          p = module / "Controller.cs"
+          s = p.read_text()
+          a = s.index("    Task<string> GetSiteHttp(")
+          b = s.index("    async Task<string> GetBrowserPage(", a)
+          s = s[:a] + """
+          static string TraceStage(string url)
+          {
+              if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return "invalid";
+              var path = u.AbsolutePath;
+              if (path == "/engine/ajax/msearch.php") return "search";
+              if (path == "/film.php") return "film-api";
+              if (path == "/index.php") return "news-page";
+              if (path.EndsWith("-episode.html")) return "episode-page";
+              if (path.EndsWith("-season.html")) return "season-page";
+              return "content-page";
+          }
+
+          async Task<string> GetSiteHttp(string url, IReadOnlyList<HeadersModel> headers)
+          {
+              if (!IsSiteUrl(url)) { Console.WriteLine("FANTRACE blocked-origin"); return null; }
+              var stage = TraceStage(url);
+              var sw = System.Diagnostics.Stopwatch.StartNew();
+              Console.WriteLine($"FANTRACE request stage={stage} method=GET host={new Uri(url).Host}");
+              var response = await httpHydra.Get(url, addheaders: headers, safety: true, cookieContainer: siteCookies);
+              Console.WriteLine($"FANTRACE response stage={stage} elapsed_ms={sw.ElapsedMilliseconds} chars={response?.Length ?? 0} empty={string.IsNullOrWhiteSpace(response)} challenge={IsChallengeResponse(response)} auth={RequiresAuth(response)}");
+              return response;
+          }
+          """ + s[b:]
+          old = 'streamfile => HostStreamProxy(streamfile, streamHeaders)'
+          assert old in s
+          s = s.replace(old, '''streamfile =>
+                  {
+                      Console.WriteLine($"FANTRACE stream resolved host={(Uri.TryCreate(streamfile, UriKind.Absolute, out var u) ? u.Host : "invalid")}");
+                      return HostStreamProxy(streamfile, streamHeaders);
+                  }''')
+          s = s.replace('await browserGate.WaitAsync(HttpContext.RequestAborted);', 'Console.WriteLine("FANTRACE playwright fallback requested (browser disabled)");\n        await browserGate.WaitAsync(HttpContext.RequestAborted);')
+          p.write_text(s)
+          p = module / "ModInit.cs"
+          s = p.read_text()
+          s = s.replace("        updateConf();", '''        EventListener.HttpResponse += e =>
+                  {
+                      if (System.Uri.TryCreate(e.url, System.UriKind.Absolute, out var u) && u.Host == "1fanserials.org")
+                      {
+                          var path = u.AbsolutePath;
+                          string stage = path == "/engine/ajax/msearch.php" ? "search" : path == "/film.php" ? "film-api" : path == "/index.php" ? "news-page" : path.EndsWith("-episode.html") ? "episode-page" : path.EndsWith("-season.html") ? "season-page" : "content-page";
+                          System.Console.WriteLine($"FANTRACE http stage={stage} status={(int)(e.response?.StatusCode ?? 0)} chars={e.result?.Length ?? 0}");
+                      }
+                      return System.Threading.Tasks.Task.CompletedTask;
+                  };
+                  updateConf();''', 1)
+          p.write_text(s)
+          PY
+          unset FANCDN_COOKIE
+          (cd /tmp/lampac-ci && exec dotnet Core.dll > /tmp/fancdn-live.log 2>&1) &
+          pid=$!
+          cleanup() {
+            kill "$pid" 2>/dev/null || true
+            grep '^FANTRACE ' /tmp/fancdn-live.log || true
+            rm -f /tmp/lampac-ci/init.conf /tmp/fancdn-live.log
+          }
+          trap cleanup EXIT
+          ready=0
+          for _ in $(seq 1 120); do
+            code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' 'http://127.0.0.1:9128/lite/fancdn.2.0?kinopoisk_id=0' || true)
+            if [ "$code" = 503 ] && grep -Fq 'loaded module: FanCDN.2.0' /tmp/fancdn-live.log; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then
+            echo "FAIL: live diagnostic Lampac did not start"
+            grep -oE 'error CS[0-9]+' /tmp/fancdn-live.log | sort -u || true
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os, time
+          from urllib.request import urlopen
+          from urllib.parse import urlencode, urlsplit
+          from urllib.error import HTTPError
+
+          base = "http://127.0.0.1:9128"
+          def option(name, default):
+              return os.environ.get(name) or default
+
+          def get(stage, url, manifest=False):
+              start = time.monotonic()
+              u = urlsplit(url)
+              assert u.scheme == "http" and u.netloc == "127.0.0.1:9128", "unexpected local link"
+              try:
+                  with urlopen(url, timeout=90) as res:
+                      body = res.read(1024 * 1024 if manifest else 8 * 1024 * 1024)
+                      elapsed = round((time.monotonic()-start)*1000)
+                      print(f"LIVE {stage}: HTTP {res.status}; {elapsed}ms; bytes={len(body)}; cache={res.headers.get('X-Invoke-Cache','-')}", flush=True)
+                      if manifest:
+                          ok = body.lstrip().startswith(b"#EXTM3U")
+                          print(f"LIVE {stage}: hls_manifest={ok}", flush=True)
+                          return ok
+                      data = json.loads(body)
+                      print(f"LIVE {stage}: type={data.get('type','unknown')}; items={len(data.get('data') or [])}; voices={len(data.get('voice') or [])}", flush=True)
+                      return data
+              except HTTPError as e:
+                  body = e.read(256).decode(errors="replace").strip()
+                  marker = body if body in {"search","embed","serial","seasons","cookie","disable","cors-not-supported","network","timeout"} else "redacted"
+                  print(f"LIVE {stage}: HTTP {e.code}; marker={marker}; elapsed_ms={round((time.monotonic()-start)*1000)}", flush=True)
+                  raise RuntimeError("HTTP error") from None
+              except Exception as e:
+                  print(f"LIVE {stage}: {type(e).__name__}", flush=True)
+                  raise RuntimeError("request error") from None
+
+          def request(stage, **params):
+              params["rjson"] = "true"
+              return get(stage, base+"/lite/fancdn.2.0?"+urlencode(params))
+
+          def probe(stage, data):
+              row = data["data"][0]
+              url = row.get("url") or row.get("stream")
+              u = urlsplit(url or "")
+              print(f"LIVE {stage}: stream_link_present={bool(url)}; host={u.hostname or 'none'}; subtitles={len(row.get('subtitles') or [])}", flush=True)
+              assert u.netloc == "127.0.0.1:9128", "expected Lampac proxy stream"
+              assert get(stage+" manifest", url, manifest=True), "not HLS manifest"
+
+          failed = False
+          for kind, fn in (("movie", lambda: request("movie search + embed", kinopoisk_id=option("FANCDN_MOVIE_KP","258687"), title=option("FANCDN_MOVIE_TITLE","Интерстеллар"), original_title=option("FANCDN_MOVIE_ORIGINAL","Interstellar"), year=option("FANCDN_MOVIE_YEAR","2014"))), ("series", lambda: request("series search + seasons", kinopoisk_id=option("FANCDN_SERIES_KP","404900"), title=option("FANCDN_SERIES_TITLE","Во все тяжкие"), original_title=option("FANCDN_SERIES_ORIGINAL","Breaking Bad"), year=option("FANCDN_SERIES_YEAR","2008"), serial=1))):
+              try:
+                  data = fn()
+                  if kind == "movie":
+                      assert data["type"] == "movie"
+                      probe("movie", data)
+                  else:
+                      assert data["type"] == "season"
+                      ep = get("season episodes", data["data"][0]["url"])
+                      assert ep["type"] == "episode"
+                      probe("episode", ep)
+                      voices = ep.get("voice") or []
+                      if len(voices) > 1:
+                          alt = get("alternate voice", voices[1]["url"])
+                          assert alt.get("data")
+                          print("LIVE alternate voice: PASS", flush=True)
+                  print(f"LIVE {kind}: PASS", flush=True)
+              except Exception as e:
+                  failed = True
+                  print(f"LIVE {kind}: FAIL ({type(e).__name__})", flush=True)
+          raise SystemExit(1 if failed else 0)
+          PY
