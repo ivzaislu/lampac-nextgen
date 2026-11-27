@@ -10,19 +10,15 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
-using BrowserCookie = Microsoft.Playwright.Cookie;
 
 namespace FanCDN2_0;
 
 public class FanCDN2_0Controller : BaseOnlineController
 {
     #region FanCDN2_0Controller
-    List<BrowserCookie> cookies;
     CookieContainer siteCookies;
-    static readonly SemaphoreSlim browserGate = new(2, 2);
 
     public FanCDN2_0Controller() : base(ModInit.conf) { }
 
@@ -33,10 +29,8 @@ public class FanCDN2_0Controller : BaseOnlineController
             (fanUri.Scheme != Uri.UriSchemeHttp && fanUri.Scheme != Uri.UriSchemeHttps))
             return false;
 
-        var browserCookies = new List<BrowserCookie>();
         var httpCookies = new CookieContainer();
         bool secure = fanUri.Scheme == Uri.UriSchemeHttps;
-        long expires = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeSeconds();
 
         foreach (string line in init.cookie.Split(';'))
         {
@@ -62,22 +56,11 @@ public class FanCDN2_0Controller : BaseOnlineController
                 return false;
             }
 
-            browserCookies.Add(new BrowserCookie
-            {
-                Domain = "." + fanUri.Host,
-                Expires = expires,
-                Path = "/",
-                HttpOnly = true,
-                Secure = secure,
-                Name = name,
-                Value = value
-            });
         }
 
-        if (browserCookies.Count == 0)
+        if (httpCookies.Count == 0)
             return false;
 
-        cookies = browserCookies;
         siteCookies = httpCookies;
         return true;
     }
@@ -400,13 +383,7 @@ public class FanCDN2_0Controller : BaseOnlineController
             return default;
         }
 
-        string page = await GetSiteHttp(pageUrl, headers);
-
-        var result = ParsePlayer(page);
-        if (!string.IsNullOrEmpty(result.kp))
-            return result;
-
-        return ParsePlayer(await GetBrowserPage(pageUrl, headers));
+        return ParsePlayer(await GetSiteHttp(pageUrl, headers));
     }
 
     async Task<FanCDN2_0EmbedModel> EmbedMovieFast(string kp, string key)
@@ -683,33 +660,10 @@ public class FanCDN2_0Controller : BaseOnlineController
         return httpHydra.Get(url, addheaders: headers, safety: true, cookieContainer: siteCookies);
     }
 
-    async Task<string> GetBrowserPage(string url, IReadOnlyList<HeadersModel> headers)
-    {
-        if (!IsSiteUrl(url))
-            return null;
-
-        await browserGate.WaitAsync(HttpContext.RequestAborted);
-        try
-        {
-            return await PlaywrightHttp.Get(init, url, cookies: cookies,
-                headers: httpHeaders(init, headers),
-                proxy: init.useproxy ? proxy_data : default);
-        }
-        finally
-        {
-            browserGate.Release();
-        }
-    }
-
     async Task<string> SiteGetFast(string url, IReadOnlyList<HeadersModel> headers, bool expectJson)
     {
         string direct = await GetSiteHttp(url, headers);
-
-        if (UsableResponse(direct, expectJson))
-            return direct;
-
-        string fallback = await GetBrowserPage(url, headers);
-        return UsableResponse(fallback, expectJson) ? fallback : null;
+        return UsableResponse(direct, expectJson) ? direct : null;
     }
 
     static bool UsableResponse(string value, bool expectJson)
