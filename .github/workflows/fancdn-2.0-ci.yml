@@ -336,31 +336,56 @@ jobs:
           def records(path):
               return [json.loads(x) for x in path.read_text().splitlines() if x.strip()] if path.exists() else []
           def valid(url, local):
+              from ipaddress import ip_address
+              import socket
               u = urlsplit(url)
               if local:
                   return u.scheme == "http" and u.netloc == "127.0.0.1:9128"
-              return u.scheme in ("https","http") and u.username is None and u.password is None and (u.hostname=="cdn.fancdn.net" or (u.hostname or "").endswith(".cdn.fancdn.net"))
+              if u.scheme not in ("https","http") or not u.hostname or u.username is not None or u.password is not None:
+                  return False
+              if u.port not in (None,80,443):
+                  return False
+              try:
+                  return all(ip_address(a[4][0]).is_global for a in socket.getaddrinfo(u.hostname,u.port or (443 if u.scheme=="https" else 80),type=socket.SOCK_STREAM))
+              except (OSError,ValueError):
+                  return False
           def probe(label,url,local,headers=None):
-              if not valid(url,local):
-                  print(f"PROBE {label} refused unexpected host",flush=True)
-                  return None
-              if BODY.exists(): BODY.unlink()
-              args=["curl","--silent","--show-error","--connect-timeout","12","--max-time","40","--max-filesize","2097152","--output",str(BODY),"--write-out","code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download} http=%{http_version}","--url",url]
-              for k,v in (headers or {}).items():
-                  args.extend(["--header",f"{k}: {v}"])
-              r=subprocess.run(args,capture_output=True,text=True)
-              body=BODY.read_bytes() if BODY.exists() else b""
-              hls=body.lstrip().startswith(b"#EXTM3U")
-              print(f"PROBE {label} curl_exit={r.returncode} {r.stdout.strip()} hls={hls}",flush=True)
-              return body.decode("utf-8-sig",errors="replace") if hls and r.returncode==0 else None
+              if not local:
+                  host=urlsplit(url).hostname or ""
+                  if host!="cdn.fancdn.net" and not host.endswith(".cdn.fancdn.net"):
+                      # Child playlists may already be on a redirected public CDN host.
+                      if not valid(url,False): return None
+              for hop in range(7):
+                  if not valid(url,local):
+                      print(f"PROBE {label} hop={hop} refused invalid or nonpublic destination",flush=True)
+                      return None
+                  if BODY.exists(): BODY.unlink()
+                  args=["curl","--silent","--show-error","--connect-timeout","12","--max-time","40","--max-filesize","2097152","--output",str(BODY),"--write-out","code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download} http=%{http_version}\n%{redirect_url}","--url",url]
+                  for k,v in (headers or {}).items():
+                      args.extend(["--header",f"{k}: {v}"])
+                  r=subprocess.run(args,capture_output=True,text=True)
+                  body=BODY.read_bytes() if BODY.exists() else b""
+                  stats,_,location=r.stdout.partition("\n")
+                  location=location.strip()
+                  hls=body.lstrip().startswith(b"#EXTM3U")
+                  print(f"PROBE {label} hop={hop} host={urlsplit(url).hostname} curl_exit={r.returncode} {stats} hls={hls} redirect_host={urlsplit(location).hostname if location else '-'}",flush=True)
+                  if r.returncode!=0: return None
+                  if location and stats.startswith(("code=301 ","code=302 ","code=303 ","code=307 ","code=308 ")):
+                      url=urljoin(url,location)
+                      continue
+                  return (body.decode("utf-8-sig",errors="replace"),url) if hls else None
+              print(f"PROBE {label} redirect limit reached",flush=True)
+              return None
           def playlist(label,url,local,headers=None):
-              m=probe(label+" master",url,local,headers)
-              if m is None: return False
+              response=probe(label+" master",url,local,headers)
+              if response is None: return False
+              m,final_url=response
               if "#EXT-X-STREAM-INF:" in m:
                   lines=[x.strip() for x in m.splitlines() if x.strip()]
                   child=next((lines[i+1] for i,x in enumerate(lines[:-1]) if x.startswith("#EXT-X-STREAM-INF:") and not lines[i+1].startswith("#")),None)
                   if not child: return False
-                  m=probe(label+" media",urljoin(url,child),local,headers)
+                  response=probe(label+" media",urljoin(final_url,child),local,headers)
+                  m=response[0] if response else None
               ok=bool(m and "#EXTINF:" in m)
               print(f"PLAYLIST {label} ok={ok} segments={m.count('#EXTINF:') if m else 0}",flush=True)
               return ok
