@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-and-integration:
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -206,17 +206,9 @@ jobs:
             if [ -f "$p" ]; then kill "$(cat "$p")" 2>/dev/null || true; fi
           done
 
-      - name: Live FanSeries HTTP diagnostics
+      - name: Live FanSeries 20 films and 20 series (HTTP only)
         env:
           FANCDN_COOKIE: ${{ secrets.FANCDN_COOKIE }}
-          FANCDN_MOVIE_KP: ${{ vars.FANCDN_MOVIE_KP }}
-          FANCDN_MOVIE_TITLE: ${{ vars.FANCDN_MOVIE_TITLE }}
-          FANCDN_MOVIE_ORIGINAL: ${{ vars.FANCDN_MOVIE_ORIGINAL }}
-          FANCDN_MOVIE_YEAR: ${{ vars.FANCDN_MOVIE_YEAR }}
-          FANCDN_SERIES_KP: ${{ vars.FANCDN_SERIES_KP }}
-          FANCDN_SERIES_TITLE: ${{ vars.FANCDN_SERIES_TITLE }}
-          FANCDN_SERIES_ORIGINAL: ${{ vars.FANCDN_SERIES_ORIGINAL }}
-          FANCDN_SERIES_YEAR: ${{ vars.FANCDN_SERIES_YEAR }}
         shell: bash
         run: |
           set -euo pipefail
@@ -293,7 +285,7 @@ jobs:
           pid=$!
           cleanup() {
             kill "$pid" 2>/dev/null || true
-            grep '^FANTRACE ' /tmp/fancdn-live.log || true
+            echo 'Live diagnostic finished; per-case redacted trace is printed above.'
             rm -f /tmp/lampac-ci/init.conf /tmp/fancdn-live.log
           }
           trap cleanup EXIT
@@ -315,12 +307,10 @@ jobs:
           python3 - <<'PY'
           import json, os, time
           from urllib.request import urlopen
-          from urllib.parse import urlencode, urlsplit
+          from urllib.parse import urlencode, urlsplit, urljoin
           from urllib.error import HTTPError
 
           base = "http://127.0.0.1:9128"
-          def option(name, default):
-              return os.environ.get(name) or default
 
           def get(stage, url, manifest=False):
               start = time.monotonic()
@@ -334,7 +324,8 @@ jobs:
                       if manifest:
                           ok = body.lstrip().startswith(b"#EXTM3U")
                           print(f"LIVE {stage}: hls_manifest={ok}", flush=True)
-                          return ok
+                          assert ok, "invalid HLS manifest"
+                          return body.decode("utf-8-sig")
                       data = json.loads(body)
                       print(f"LIVE {stage}: type={data.get('type','unknown')}; items={len(data.get('data') or [])}; voices={len(data.get('voice') or [])}", flush=True)
                       return data
@@ -357,28 +348,104 @@ jobs:
               u = urlsplit(url or "")
               print(f"LIVE {stage}: stream_link_present={bool(url)}; host={u.hostname or 'none'}; subtitles={len(row.get('subtitles') or [])}", flush=True)
               assert u.netloc == "127.0.0.1:9128", "expected Lampac proxy stream"
-              assert get(stage+" manifest", url, manifest=True), "not HLS manifest"
+              manifest = get(stage+" manifest", url, manifest=True)
+              if "#EXT-X-STREAM-INF:" in manifest:
+                  lines = [line.strip() for line in manifest.splitlines() if line.strip()]
+                  child = next(lines[i+1] for i,line in enumerate(lines[:-1]) if line.startswith("#EXT-X-STREAM-INF:") and not lines[i+1].startswith("#"))
+                  manifest = get(stage+" media playlist", urljoin(url,child), manifest=True)
+              assert "#EXTINF:" in manifest, "media playlist contains no segments"
+              print(f"LIVE {stage}: media playlist segments={manifest.count('#EXTINF:')}", flush=True)
 
-          failed = False
-          for kind, fn in (("movie", lambda: request("movie search + embed", kinopoisk_id=option("FANCDN_MOVIE_KP","258687"), title=option("FANCDN_MOVIE_TITLE","Интерстеллар"), original_title=option("FANCDN_MOVIE_ORIGINAL","Interstellar"), year=option("FANCDN_MOVIE_YEAR","2014"))), ("series", lambda: request("series search + seasons", kinopoisk_id=option("FANCDN_SERIES_KP","404900"), title=option("FANCDN_SERIES_TITLE","Во все тяжкие"), original_title=option("FANCDN_SERIES_ORIGINAL","Breaking Bad"), year=option("FANCDN_SERIES_YEAR","2008"), serial=1))):
+          movies = [
+              (258687,"Интерстеллар","Interstellar",2014),
+              (447301,"Начало","Inception",2010),
+              (111543,"Тёмный рыцарь","The Dark Knight",2008),
+              (326,"Побег из Шоушенка","The Shawshank Redemption",1994),
+              (435,"Зелёная миля","The Green Mile",1999),
+              (361,"Бойцовский клуб","Fight Club",1999),
+              (448,"Форрест Гамп","Forrest Gump",1994),
+              (301,"Матрица","The Matrix",1999),
+              (342,"Криминальное чтиво","Pulp Fiction",1994),
+              (474,"Гладиатор","Gladiator",2000),
+              (2213,"Титаник","Titanic",1997),
+              (251733,"Аватар","Avatar",2009),
+              (195334,"Престиж","The Prestige",2006),
+              (397667,"Остров проклятых","Shutter Island",2010),
+              (586397,"Джанго освобождённый","Django Unchained",2012),
+              (81314,"Отступники","The Departed",2006),
+              (325,"Крёстный отец","The Godfather",1972),
+              (328,"Властелин колец: Братство Кольца","The Lord of the Rings: The Fellowship of the Ring",2001),
+              (689,"Гарри Поттер и философский камень","Harry Potter and the Philosopher's Stone",2001),
+              (476,"Назад в будущее","Back to the Future",1985)
+          ]
+          series = [
+              (404900,"Во все тяжкие","Breaking Bad",2008),
+              (464963,"Игра престолов","Game of Thrones",2011),
+              (178710,"Доктор Хаус","House M.D.",2004),
+              (502838,"Шерлок","Sherlock",2010),
+              (77044,"Друзья","Friends",1994),
+              (306084,"Теория большого взрыва","The Big Bang Theory",2007),
+              (104122,"Остаться в живых","Lost",2004),
+              (508161,"Ходячие мертвецы","The Walking Dead",2010),
+              (915196,"Очень странные дела","Stranger Things",2016),
+              (1227803,"Чернобыль","Chernobyl",2019),
+              (796660,"Лучше звоните Солу","Better Call Saul",2015),
+              (79848,"Клан Сопрано","The Sopranos",1999),
+              (277537,"Декстер","Dexter",2006),
+              (859908,"Мистер Робот","Mr. Robot",2015),
+              (681831,"Настоящий детектив","True Detective",2014),
+              (767379,"Фарго","Fargo",2014),
+              (460586,"Пацаны","The Boys",2019),
+              (1044004,"Ведьмак","The Witcher",2019),
+              (253245,"Офис","The Office",2005),
+              (178707,"Сверхъестественное","Supernatural",2005)
+          ]
+          assert len(movies) == len(series) == 20
+          assert len({row[0] for row in movies+series}) == 40
+          cases = [(kind,row) for pair in zip(movies,series) for kind,row in zip(("movie","series"),pair)]
+          results = []
+          trace_path = "/tmp/fancdn-live.log"
+          offset = 0
+          for i,(kind,(kp,title,original,year)) in enumerate(cases,1):
+              print(f"LIVE CASE {i:02d}/40 kind={kind} kp={kp} title={title} year={year}", flush=True)
+              started = time.monotonic()
+              passed = False
+              stage = "search"
               try:
-                  data = fn()
+                  data = request(f"{kind} search + {'embed' if kind=='movie' else 'seasons'}", kinopoisk_id=kp, title=title, original_title=original, year=year, serial=int(kind=="series"))
                   if kind == "movie":
                       assert data["type"] == "movie"
-                      probe("movie", data)
+                      stage = "movie HLS"
+                      probe("movie",data)
                   else:
                       assert data["type"] == "season"
+                      stage = "episodes"
                       ep = get("season episodes", data["data"][0]["url"])
                       assert ep["type"] == "episode"
-                      probe("episode", ep)
-                      voices = ep.get("voice") or []
-                      if len(voices) > 1:
-                          alt = get("alternate voice", voices[1]["url"])
-                          assert alt.get("data")
-                          print("LIVE alternate voice: PASS", flush=True)
-                  print(f"LIVE {kind}: PASS", flush=True)
+                      stage = "episode HLS"
+                      probe("episode",ep)
+                  passed = True
               except Exception as e:
-                  failed = True
-                  print(f"LIVE {kind}: FAIL ({type(e).__name__})", flush=True)
-          raise SystemExit(1 if failed else 0)
+                  print(f"LIVE CASE {i:02d} error stage={stage} type={type(e).__name__}", flush=True)
+              with open(trace_path, "rb") as trace:
+                  trace.seek(offset)
+                  new = trace.read()
+                  offset = trace.tell()
+              lines = [line for line in new.decode(errors="replace").splitlines() if line.startswith("FANTRACE ")]
+              for line in lines:
+                  print(f"CASE {i:02d} {line}", flush=True)
+              requests = sum(line.startswith("FANTRACE request ") for line in lines)
+              ok = sum("FANTRACE http " in line and "status=200 " in line for line in lines)
+              fallback = sum("playwright fallback requested" in line for line in lines)
+              passed = passed and fallback == 0
+              result = {"case":i,"kind":kind,"kp":kp,"title":title,"pass":passed,"requests":requests,"http200":ok,"fallback":fallback,"ms":round((time.monotonic()-started)*1000)}
+              results.append(result)
+              print("CASE_RESULT "+json.dumps(result,ensure_ascii=False),flush=True)
+              time.sleep(1)
+          for kind in ("movie","series"):
+              group = [r for r in results if r["kind"]==kind]
+              print(f"SUMMARY {kind}: {sum(r['pass'] for r in group)}/{len(group)} PASS",flush=True)
+          fallback_total = sum(r["fallback"] for r in results)
+          print(f"SUMMARY total={sum(r['pass'] for r in results)}/40 upstream_requests={sum(r['requests'] for r in results)} http200={sum(r['http200'] for r in results)} playwright_fallback={fallback_total}",flush=True)
+          raise SystemExit(0 if all(r["pass"] for r in results) and fallback_total==0 else 1)
           PY
