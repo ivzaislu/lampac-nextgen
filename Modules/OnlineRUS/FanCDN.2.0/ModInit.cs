@@ -48,8 +48,8 @@ public class ModInit : IModuleLoaded, IModuleOnline
             displayindex = 520,
             imitationHuman = true,
             headers_stream = HeadersModel.Init(Http.defaultFullHeaders,
-                ("origin", "https://1fanserials.org"),
-                ("referer", "https://1fanserials.org/"),
+                ("origin", "{host}"),
+                ("referer", "{host}/"),
                 ("sec-fetch-dest", "empty"),
                 ("sec-fetch-mode", "cors"),
                 ("sec-fetch-site", "cross-site")

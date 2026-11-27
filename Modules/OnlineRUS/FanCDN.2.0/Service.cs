@@ -17,9 +17,9 @@ public struct FanCDN2_0Invoke
     #region FanCDN2_0Invoke
     OnlinesSettings init;
     Func<string, Task<string>> ongetpage;
-    Func<string, IReadOnlyList<HeadersModel>, string> onstreamfile;
+    Func<string, string> onstreamfile;
 
-    public FanCDN2_0Invoke(OnlinesSettings init, Func<string, Task<string>> ongetpage, Func<string, IReadOnlyList<HeadersModel>, string> onstreamfile)
+    public FanCDN2_0Invoke(OnlinesSettings init, Func<string, Task<string>> ongetpage, Func<string, string> onstreamfile)
     {
         this.init = init;
         this.ongetpage = ongetpage;
@@ -358,18 +358,6 @@ public struct FanCDN2_0Invoke
         return null;
     }
 
-    IReadOnlyList<HeadersModel> StreamHeaders()
-    {
-        string host = init.host.TrimEnd('/');
-        return HeadersModel.Init(
-            ("referer", $"{host}/"),
-            ("origin", host),
-            ("sec-fetch-dest", "empty"),
-            ("sec-fetch-mode", "cors"),
-            ("sec-fetch-site", "cross-site")
-        );
-    }
-
     static string RouteBase(string localHost)
     {
         return string.IsNullOrWhiteSpace(localHost)
@@ -384,7 +372,6 @@ public struct FanCDN2_0Invoke
         if (root?.movies == null || root.movies.Length == 0)
             return default;
 
-        var streamHeaders = StreamHeaders();
         var mtpl = new MovieTpl(title, original_title, root.movies.Length);
 
         foreach (FanCDN2_0MovieEpisode movie in root.movies)
@@ -399,14 +386,14 @@ public struct FanCDN2_0Invoke
                 while (match.Success)
                 {
                     string srt = movie.file.Replace("/hls.m3u8", "/") + match.Groups[2].Value;
-                    subtitles.Append(match.Groups[1].Value, onstreamfile.Invoke(srt, streamHeaders));
+                    subtitles.Append(match.Groups[1].Value, onstreamfile.Invoke(srt));
                     match = match.NextMatch();
                 }
             }
 
             mtpl.Append(
                 movie.title,
-                onstreamfile.Invoke(movie.file, streamHeaders),
+                onstreamfile.Invoke(movie.file),
                 subtitles: subtitles,
                 vast: vast,
                 headers: headers
@@ -520,7 +507,6 @@ public struct FanCDN2_0Invoke
             );
         }
 
-        var streamHeaders = StreamHeaders();
         var etpl = new EpisodeTpl(vtpl, normalizedEpisodes.Count);
 
         foreach (FanCDN2_0SerialEpisode episode in normalizedEpisodes.Values)
@@ -533,7 +519,7 @@ public struct FanCDN2_0Invoke
                 title ?? original_title,
                 serial.season,
                 episode.episode.ToString(),
-                onstreamfile.Invoke(stream, streamHeaders),
+                onstreamfile.Invoke(stream),
                 voice_name: selectedVoice,
                 headers: headers,
                 vast: vast

@@ -135,6 +135,8 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (!InitSiteCookies())
             return OnError("cookie", gbcache: false);
 
+        init.host = init.host.TrimEnd('/');
+
         // Authenticated requests must not send the server account through a
         // third-party CORS relay. Lampac's ordinary server proxy is supported.
         if (!string.Equals(init.cors(init.host, requestInfo: requestInfo), init.host, StringComparison.Ordinal))
@@ -142,11 +144,12 @@ public class FanCDN2_0Controller : BaseOnlineController
 
         // Initialize the controller's shared transport before episode fan-out.
         _ = httpHydra;
+        var streamHeaders = HeadersModel.InitOrNull(init.headers_stream);
         var oninvk = new FanCDN2_0Invoke
         (
             init,
             url => SiteGetFast(url, DocumentHeaders(init.host), expectJson: false),
-            (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
+            streamfile => HostStreamProxy(streamfile, streamHeaders)
         );
 
         bool serialRequest = serial == 1 || s > 0;
