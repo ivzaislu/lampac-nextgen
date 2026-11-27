@@ -37,7 +37,7 @@ public struct FanCDN2_0Invoke
         if (string.IsNullOrEmpty(seasonUrl))
             return null;
 
-        string seasonPage = await GetPage(seasonUrl);
+        string seasonPage = await ongetpage(seasonUrl);
         if (string.IsNullOrWhiteSpace(seasonPage))
             return null;
 
@@ -53,20 +53,17 @@ public struct FanCDN2_0Invoke
             tasks.Add(LoadEpisode(gate, row.Key, row.Value));
 
         FanCDN2_0SerialEpisode[] loaded = await Task.WhenAll(tasks);
-        var uniqueEpisodes = new SortedDictionary<int, FanCDN2_0SerialEpisode>();
-
+        // ExtractEpisodeLinks returns unique, sorted episode numbers.
+        // Task.WhenAll preserves the order of its input tasks.
+        var episodes = new List<FanCDN2_0SerialEpisode>(loaded.Length);
         foreach (FanCDN2_0SerialEpisode episode in loaded)
         {
             if (episode != null && episode.episode > 0)
-                uniqueEpisodes[episode.episode] = episode;
+                episodes.Add(episode);
         }
 
-        if (uniqueEpisodes.Count == 0)
+        if (episodes.Count == 0)
             return null;
-
-        var episodes = new List<FanCDN2_0SerialEpisode>(uniqueEpisodes.Count);
-        foreach (FanCDN2_0SerialEpisode episode in uniqueEpisodes.Values)
-            episodes.Add(episode);
 
         return new FanCDN2_0SerialSeason
         {
@@ -80,8 +77,8 @@ public struct FanCDN2_0Invoke
         await gate.WaitAsync();
         try
         {
-            string episodePage = await GetPage(episodeUrl);
-            if (string.IsNullOrWhiteSpace(episodePage) || FanCDN2_0Helper.RequiresAuth(episodePage))
+            string episodePage = await ongetpage(episodeUrl);
+            if (string.IsNullOrWhiteSpace(episodePage))
                 return null;
 
             Dictionary<string, string> streams = ExtractCdnStreams(episodePage);
@@ -107,12 +104,12 @@ public struct FanCDN2_0Invoke
         if (string.IsNullOrWhiteSpace(html) || !Uri.TryCreate(seriesUrl, UriKind.Absolute, out Uri seriesUri))
             return result;
 
-        string rootPath = FanCDN2_0Helper.SeriesRootPath(seriesUri.AbsolutePath);
+        string rootPath = SeriesRootPath(seriesUri.AbsolutePath);
         string prefix = $"{rootPath}/{season}-season/";
 
         foreach (Match link in Regex.Matches(html, "href\\s*=\\s*[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase | RegexOptions.Singleline))
         {
-            string url = FanCDN2_0Helper.NormalizeSiteUrl(init.host, link.Groups[1].Value);
+            string url = NormalizeSiteUrl(init.host, link.Groups[1].Value);
             if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
                 continue;
 
@@ -199,11 +196,11 @@ public struct FanCDN2_0Invoke
         if (string.IsNullOrWhiteSpace(rawPlayer))
             return null;
 
-        string direct = FanCDN2_0Helper.NormalizeFanCdnUrl(rawPlayer);
+        string direct = NormalizeFanCdnUrl(rawPlayer);
         if (!string.IsNullOrEmpty(direct))
             return direct;
 
-        string playerUrl = FanCDN2_0Helper.NormalizeSiteUrl(init.host, rawPlayer);
+        string playerUrl = NormalizeSiteUrl(init.host, rawPlayer);
         if (string.IsNullOrEmpty(playerUrl) || !Uri.TryCreate(playerUrl, UriKind.Absolute, out Uri playerUri))
             return null;
 
@@ -212,22 +209,73 @@ public struct FanCDN2_0Invoke
             return null;
 
         string file = HttpUtility.ParseQueryString(playerUri.Query).Get("file");
-        return FanCDN2_0Helper.NormalizeFanCdnUrl(file);
+        return NormalizeFanCdnUrl(file);
     }
     #endregion
 
-    #region HTTP
-    Task<string> GetPage(string url)
-        => string.IsNullOrWhiteSpace(url) ? Task.FromResult<string>(null) : ongetpage(url);
-    #endregion
-
     #region Helpers
+    internal static string NormalizeSiteUrl(string host, string rawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl) ||
+            string.IsNullOrWhiteSpace(host) ||
+            !Uri.TryCreate(host.TrimEnd('/') + "/", UriKind.Absolute, out Uri baseUri))
+            return null;
+
+        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
+        if (value.StartsWith("//"))
+            value = baseUri.Scheme + ":" + value;
+
+        if (!Uri.TryCreate(baseUri, value, out Uri uri) ||
+            !uri.Host.Equals(baseUri.Host, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return uri.ToString();
+    }
+
+    internal static string NormalizeFanCdnUrl(string rawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl))
+            return null;
+
+        string value = HttpUtility.HtmlDecode(rawUrl.Trim()).Replace("\\/", "/");
+        if (value.StartsWith("//"))
+            value = "https:" + value;
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri uri))
+            return null;
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            return null;
+
+        if (!uri.Host.Equals("cdn.fancdn.net", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.EndsWith(".cdn.fancdn.net", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return uri.ToString();
+    }
+
+    internal static string SeriesRootPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "/";
+
+        string value = path.TrimEnd('/');
+        if (value.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+            value = value.Substring(0, value.Length - 5);
+
+        Match serialPath = Regex.Match(value, @"^(.*?)/[0-9]+-season(?:/[0-9]+-episode)?$", RegexOptions.IgnoreCase);
+        if (serialPath.Success && !string.IsNullOrEmpty(serialPath.Groups[1].Value))
+            value = serialPath.Groups[1].Value;
+
+        return string.IsNullOrEmpty(value) ? "/" : value;
+    }
+
     string BuildSeasonUrl(string seriesUrl, short season)
     {
         if (!Uri.TryCreate(seriesUrl, UriKind.Absolute, out Uri uri))
             return null;
 
-        string rootPath = FanCDN2_0Helper.SeriesRootPath(uri.AbsolutePath);
+        string rootPath = SeriesRootPath(uri.AbsolutePath);
         return $"{uri.Scheme}://{uri.Authority}{rootPath}/{season}-season.html";
     }
 

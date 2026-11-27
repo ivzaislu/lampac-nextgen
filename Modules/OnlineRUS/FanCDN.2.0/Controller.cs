@@ -145,7 +145,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         var oninvk = new FanCDN2_0Invoke
         (
             init,
-            url => SiteGetFast(url, FanCDN2_0Helper.DocumentHeaders(init.host), expectJson: false),
+            url => SiteGetFast(url, DocumentHeaders(init.host), expectJson: false),
             (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
         );
 
@@ -190,7 +190,7 @@ public class FanCDN2_0Controller : BaseOnlineController
 
             var season = await InvokeCacheResult<FanCDN2_0SerialSeason>($"fancdn.2.0:v12:serial:{search.Value}:{s}", 20, textJson: true, onget: async e =>
             {
-                FanCDN2_0SerialSeason result = await TryTransient(() => oninvk.Serial(search.Value, s));
+                FanCDN2_0SerialSeason result = await oninvk.Serial(search.Value, s);
                 if (result == null)
                     return e.Fail("serial");
 
@@ -242,6 +242,15 @@ public class FanCDN2_0Controller : BaseOnlineController
     #endregion
 
     #region Search
+    static IEnumerable<(string title, string originalTitle)> SearchNames(string title, string originalTitle)
+    {
+        yield return (title, originalTitle);
+
+        if (!string.IsNullOrWhiteSpace(originalTitle) &&
+            !originalTitle.Equals(title, StringComparison.OrdinalIgnoreCase))
+            yield return (originalTitle, title);
+    }
+
     async Task<List<(string url, short? year, int order, int matchRank)>> SearchCandidatesHttp(string title, string original_title, bool allowPartial = false)
     {
         if (string.IsNullOrWhiteSpace(title))
@@ -303,7 +312,7 @@ public class FanCDN2_0Controller : BaseOnlineController
             if (!titleExact && !originalExact && !titlePartial && !originalPartial)
                 continue;
 
-            string normalized = FanCDN2_0Helper.NormalizeSiteUrl(init.host, item.Value<string>("url"));
+            string normalized = FanCDN2_0Invoke.NormalizeSiteUrl(init.host, item.Value<string>("url"));
             if (string.IsNullOrEmpty(normalized))
                 continue;
 
@@ -347,7 +356,7 @@ public class FanCDN2_0Controller : BaseOnlineController
     #region Movie
     async Task<(string kp, string key)> SearchMovieFast(long kinopoisk_id, string title, string original_title, short year)
     {
-        foreach (var searchName in FanCDN2_0Helper.SearchNames(title, original_title))
+        foreach (var searchName in SearchNames(title, original_title))
         {
             var result = await SearchMovieHttp(searchName.title, searchName.originalTitle, year);
             if (ValidMovieResult(result, kinopoisk_id))
@@ -363,16 +372,16 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (string.IsNullOrEmpty(pageUrl))
             return default;
 
-        var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
+        var headers = DocumentHeaders(init.host);
 
         (string kp, string key) ParsePlayer(string page)
         {
-            if (string.IsNullOrWhiteSpace(page) || FanCDN2_0Helper.RequiresAuth(page))
+            if (string.IsNullOrWhiteSpace(page) || RequiresAuth(page))
                 return default;
 
             foreach (Match iframe in Regex.Matches(page, "<iframe\\b[^>]*\\bsrc\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>", RegexOptions.IgnoreCase | RegexOptions.Singleline))
             {
-                string playerUrl = FanCDN2_0Helper.NormalizeSiteUrl(init.host, iframe.Groups[1].Value);
+                string playerUrl = FanCDN2_0Invoke.NormalizeSiteUrl(init.host, iframe.Groups[1].Value);
                 if (string.IsNullOrEmpty(playerUrl) || !Uri.TryCreate(playerUrl, UriKind.Absolute, out Uri playerUri))
                     continue;
 
@@ -436,7 +445,7 @@ public class FanCDN2_0Controller : BaseOnlineController
             if (movie == null || string.IsNullOrWhiteSpace(movie.file))
                 continue;
 
-            string file = FanCDN2_0Helper.NormalizeFanCdnUrl(movie.file);
+            string file = FanCDN2_0Invoke.NormalizeFanCdnUrl(movie.file);
             if (string.IsNullOrEmpty(file))
                 continue;
 
@@ -461,7 +470,7 @@ public class FanCDN2_0Controller : BaseOnlineController
     {
         var tried = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var searchName in FanCDN2_0Helper.SearchNames(title, original_title))
+        foreach (var searchName in SearchNames(title, original_title))
         {
             List<(string url, short? year, int order, int matchRank)> candidates = await SearchCandidatesHttp(searchName.title, searchName.originalTitle, allowPartial: true);
             if (candidates == null || candidates.Count == 0)
@@ -517,7 +526,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (directContent && !requireKpMarker)
             return (candidateUri.ToString(), null);
 
-        var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
+        var headers = DocumentHeaders(init.host);
 
         string page = await SiteGetFast(candidateUri.ToString(), headers, expectJson: false);
         if (string.IsNullOrWhiteSpace(page))
@@ -569,7 +578,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (!Uri.TryCreate(seriesUrl, UriKind.Absolute, out Uri uri))
             return null;
 
-        var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
+        var headers = DocumentHeaders(init.host);
 
         string page = await SiteGetFast(seriesUrl, headers, expectJson: false);
         return ParseSeasonsFromPage(page, uri);
@@ -580,7 +589,7 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (string.IsNullOrWhiteSpace(page) || canonicalUri == null)
             return null;
 
-        string rootPath = FanCDN2_0Helper.SeriesRootPath(canonicalUri.AbsolutePath);
+        string rootPath = FanCDN2_0Invoke.SeriesRootPath(canonicalUri.AbsolutePath);
         var seasons = new HashSet<int>();
 
         foreach (Match link in Regex.Matches(page, @"href\s*=\s*[""']([^""']+)[""']", RegexOptions.IgnoreCase | RegexOptions.Singleline))
@@ -620,6 +629,40 @@ public class FanCDN2_0Controller : BaseOnlineController
     #endregion
 
     #region HTTP
+    static bool IsChallengeResponse(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        return value.Contains("cf-chl-", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("challenge-platform", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("Just a moment", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool RequiresAuth(string html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return false;
+
+        return html.Contains("требуется вход в систему", StringComparison.OrdinalIgnoreCase)
+            || html.Contains("для доступа к видеоконтенту необходимо иметь учётную запись", StringComparison.OrdinalIgnoreCase)
+            || html.Contains("для доступа к видеоконтенту необходимо иметь учетную запись", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static IReadOnlyList<HeadersModel> DocumentHeaders(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+            return null;
+
+        string root = host.TrimEnd('/');
+        return HeadersModel.Init(
+            ("referer", $"{root}/"),
+            ("sec-fetch-dest", "document"),
+            ("sec-fetch-mode", "navigate"),
+            ("sec-fetch-site", "same-origin")
+        );
+    }
+
     bool IsSiteUrl(string url)
     {
         return Uri.TryCreate(init.host, UriKind.Absolute, out Uri origin) &&
@@ -668,7 +711,7 @@ public class FanCDN2_0Controller : BaseOnlineController
 
     static bool UsableResponse(string value, bool expectJson)
     {
-        if (FanCDN2_0Helper.IsChallengeResponse(value) || FanCDN2_0Helper.RequiresAuth(value))
+        if (IsChallengeResponse(value) || RequiresAuth(value))
             return false;
 
         if (!expectJson)
@@ -676,28 +719,6 @@ public class FanCDN2_0Controller : BaseOnlineController
 
         string trimmed = value.TrimStart();
         return trimmed.StartsWith("[") || trimmed.StartsWith("{");
-    }
-    #endregion
-
-    #region Helpers
-    async Task<T> TryTransient<T>(Func<Task<T>> action)
-    {
-        try
-        {
-            return await action();
-        }
-        catch (OperationCanceledException)
-        {
-            return default;
-        }
-        catch (System.Net.Http.HttpRequestException)
-        {
-            return default;
-        }
-        catch (System.IO.IOException)
-        {
-            return default;
-        }
     }
     #endregion
 }
