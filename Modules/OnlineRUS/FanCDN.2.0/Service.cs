@@ -3,7 +3,6 @@ using Newtonsoft.Json.Linq;
 using Shared.Models.Base;
 using Shared.Models.Online.Settings;
 using Shared.Models.Templates;
-using Shared.Services.HTTP;
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
@@ -16,16 +15,14 @@ namespace FanCDN2_0;
 public struct FanCDN2_0Invoke
 {
     #region FanCDN2_0Invoke
-    static readonly SemaphoreSlim playwrightGate = new(2, 2);
-
     OnlinesSettings init;
-    List<Microsoft.Playwright.Cookie> cookies;
+    Func<string, Task<string>> ongetpage;
     Func<string, IReadOnlyList<HeadersModel>, string> onstreamfile;
 
-    public FanCDN2_0Invoke(OnlinesSettings init, List<Microsoft.Playwright.Cookie> cookies, Func<string, IReadOnlyList<HeadersModel>, string> onstreamfile)
+    public FanCDN2_0Invoke(OnlinesSettings init, Func<string, Task<string>> ongetpage, Func<string, IReadOnlyList<HeadersModel>, string> onstreamfile)
     {
         this.init = init;
-        this.cookies = cookies;
+        this.ongetpage = ongetpage;
         this.onstreamfile = onstreamfile;
     }
     #endregion
@@ -220,40 +217,8 @@ public struct FanCDN2_0Invoke
     #endregion
 
     #region HTTP
-    async Task<string> GetPage(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url))
-            return null;
-
-        string host = init.host.TrimEnd('/');
-        var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
-
-        string direct = await Shared.Services.Http.Get(
-            url,
-            cookie: init.cookie,
-            referer: $"{host}/",
-            timeoutSeconds: 8,
-            headers: headers
-        );
-
-        if (!FanCDN2_0Helper.IsChallengeResponse(direct) && !FanCDN2_0Helper.RequiresAuth(direct))
-            return direct;
-
-        await playwrightGate.WaitAsync();
-        try
-        {
-            return await PlaywrightHttp.Get(
-                init,
-                url,
-                cookies: cookies,
-                headers: headers
-            );
-        }
-        finally
-        {
-            playwrightGate.Release();
-        }
-    }
+    Task<string> GetPage(string url)
+        => string.IsNullOrWhiteSpace(url) ? Task.FromResult<string>(null) : ongetpage(url);
     #endregion
 
     #region Helpers

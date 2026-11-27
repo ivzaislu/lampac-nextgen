@@ -8,6 +8,7 @@ using Shared.Services.HTTP;
 using Shared.Services.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,56 +20,66 @@ namespace FanCDN2_0;
 public class FanCDN2_0Controller : BaseOnlineController
 {
     #region FanCDN2_0Controller
-    static List<BrowserCookie> cookies;
-    static string cookiesKey;
+    List<BrowserCookie> cookies;
+    CookieContainer siteCookies;
     static readonly SemaphoreSlim browserGate = new(2, 2);
 
-    public FanCDN2_0Controller() : base(ModInit.conf)
+    public FanCDN2_0Controller() : base(ModInit.conf) { }
+
+    bool InitSiteCookies()
     {
-        requestInitialization += () =>
+        if (string.IsNullOrWhiteSpace(init.cookie) ||
+            !Uri.TryCreate(init.host, UriKind.Absolute, out Uri fanUri) ||
+            (fanUri.Scheme != Uri.UriSchemeHttp && fanUri.Scheme != Uri.UriSchemeHttps))
+            return false;
+
+        var browserCookies = new List<BrowserCookie>();
+        var httpCookies = new CookieContainer();
+        bool secure = fanUri.Scheme == Uri.UriSchemeHttps;
+        long expires = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeSeconds();
+
+        foreach (string line in init.cookie.Split(';'))
         {
-            string currentKey = $"{init.host}|{init.cookie}";
-            if (cookiesKey == currentKey)
-                return;
+            int separator = line.IndexOf('=');
+            if (separator <= 0)
+                continue;
 
-            cookiesKey = currentKey;
-            cookies = null;
+            string name = line.Substring(0, separator).Trim();
+            string value = line.Substring(separator + 1).Trim();
+            if (string.IsNullOrEmpty(name))
+                continue;
 
-            if (string.IsNullOrWhiteSpace(init.cookie) || !Uri.TryCreate(init.host, UriKind.Absolute, out Uri fanUri))
-                return;
-
-            var result = new List<BrowserCookie>();
-            long expires = DateTimeOffset.UtcNow.AddYears(1).ToUnixTimeSeconds();
-
-            foreach (string line in init.cookie.Split(';'))
+            try
             {
-                if (string.IsNullOrWhiteSpace(line))
-                    continue;
-
-                int separator = line.IndexOf('=');
-                if (separator <= 0)
-                    continue;
-
-                string name = line.Substring(0, separator).Trim();
-                string value = line.Substring(separator + 1).Trim();
-                if (string.IsNullOrEmpty(name))
-                    continue;
-
-                result.Add(new BrowserCookie
+                httpCookies.Add(fanUri, new System.Net.Cookie(name, value, "/")
                 {
-                    Domain = "." + fanUri.Host,
-                    Expires = expires,
-                    Path = "/",
                     HttpOnly = true,
-                    Secure = fanUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase),
-                    Name = name,
-                    Value = value
+                    Secure = secure
                 });
             }
+            catch (CookieException)
+            {
+                return false;
+            }
 
-            if (result.Count > 0)
-                cookies = result;
-        };
+            browserCookies.Add(new BrowserCookie
+            {
+                Domain = "." + fanUri.Host,
+                Expires = expires,
+                Path = "/",
+                HttpOnly = true,
+                Secure = secure,
+                Name = name,
+                Value = value
+            });
+        }
+
+        if (browserCookies.Count == 0)
+            return false;
+
+        cookies = browserCookies;
+        siteCookies = httpCookies;
+        return true;
     }
     #endregion
 
@@ -118,13 +129,23 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (await IsRequestBlocked(rch: false))
             return badInitMsg;
 
-        if (kinopoisk_id == 0 || cookies == null)
+        if (kinopoisk_id <= 0)
             return OnError();
 
+        if (!InitSiteCookies())
+            return OnError("cookie", gbcache: false);
+
+        // Authenticated requests must not send the server account through a
+        // third-party CORS relay. Lampac's ordinary server proxy is supported.
+        if (!string.Equals(init.cors(init.host, requestInfo: requestInfo), init.host, StringComparison.Ordinal))
+            return OnError("cors-not-supported", gbcache: false);
+
+        // Initialize the controller's shared transport before episode fan-out.
+        _ = httpHydra;
         var oninvk = new FanCDN2_0Invoke
         (
             init,
-            cookies,
+            url => SiteGetFast(url, FanCDN2_0Helper.DocumentHeaders(init.host), expectJson: false),
             (streamfile, streamHeaders) => HostStreamProxy(streamfile, streamHeaders)
         );
 
@@ -237,7 +258,6 @@ public class FanCDN2_0Controller : BaseOnlineController
         string search = await SiteGetFast(
             $"{host}/engine/ajax/msearch.php?q={HttpUtility.UrlEncode(title)}",
             headers,
-            $"{host}/",
             expectJson: true
         );
         if (string.IsNullOrWhiteSpace(search))
@@ -343,7 +363,6 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (string.IsNullOrEmpty(pageUrl))
             return default;
 
-        string host = init.host.TrimEnd('/');
         var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
 
         (string kp, string key) ParsePlayer(string page)
@@ -369,29 +388,13 @@ public class FanCDN2_0Controller : BaseOnlineController
             return default;
         }
 
-        string page = await Shared.Services.Http.Get(
-            pageUrl,
-            cookie: init.cookie,
-            referer: $"{host}/",
-            timeoutSeconds: 8,
-            headers: headers
-        );
+        string page = await GetSiteHttp(pageUrl, headers);
 
         var result = ParsePlayer(page);
         if (!string.IsNullOrEmpty(result.kp))
             return result;
 
-        await browserGate.WaitAsync();
-        try
-        {
-            page = await PlaywrightHttp.Get(init, pageUrl, cookies: cookies, headers: headers);
-        }
-        finally
-        {
-            browserGate.Release();
-        }
-
-        return ParsePlayer(page);
+        return ParsePlayer(await GetBrowserPage(pageUrl, headers));
     }
 
     async Task<FanCDN2_0EmbedModel> EmbedMovieFast(string kp, string key)
@@ -412,7 +415,6 @@ public class FanCDN2_0Controller : BaseOnlineController
         string json = await SiteGetFast(
             $"{host}/film.php?kp={kp}&key={encodedKey}",
             headers,
-            movieUrl,
             expectJson: true
         );
         if (string.IsNullOrWhiteSpace(json))
@@ -515,10 +517,9 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (directContent && !requireKpMarker)
             return (candidateUri.ToString(), null);
 
-        string host = init.host.TrimEnd('/');
         var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
 
-        string page = await SiteGetFast(candidateUri.ToString(), headers, $"{host}/", expectJson: false);
+        string page = await SiteGetFast(candidateUri.ToString(), headers, expectJson: false);
         if (string.IsNullOrWhiteSpace(page))
             return default;
 
@@ -568,10 +569,9 @@ public class FanCDN2_0Controller : BaseOnlineController
         if (!Uri.TryCreate(seriesUrl, UriKind.Absolute, out Uri uri))
             return null;
 
-        string host = init.host.TrimEnd('/');
         var headers = FanCDN2_0Helper.DocumentHeaders(init.host);
 
-        string page = await SiteGetFast(seriesUrl, headers, $"{host}/", expectJson: false);
+        string page = await SiteGetFast(seriesUrl, headers, expectJson: false);
         return ParseSeasonsFromPage(page, uri);
     }
 
@@ -620,23 +620,34 @@ public class FanCDN2_0Controller : BaseOnlineController
     #endregion
 
     #region HTTP
-    async Task<string> SiteGetFast(string url, IReadOnlyList<HeadersModel> headers, string referer, bool expectJson)
+    bool IsSiteUrl(string url)
     {
-        string direct = await Shared.Services.Http.Get(
-            url,
-            cookie: init.cookie,
-            referer: referer,
-            timeoutSeconds: 8,
-            headers: headers
-        );
+        return Uri.TryCreate(init.host, UriKind.Absolute, out Uri origin) &&
+            Uri.TryCreate(url, UriKind.Absolute, out Uri target) &&
+            origin.Scheme == target.Scheme &&
+            string.Equals(origin.Authority, target.Authority, StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrEmpty(target.UserInfo);
+    }
 
-        if (UsableResponse(direct, expectJson))
-            return direct;
+    Task<string> GetSiteHttp(string url, IReadOnlyList<HeadersModel> headers)
+    {
+        if (!IsSiteUrl(url))
+            return Task.FromResult<string>(null);
 
-        await browserGate.WaitAsync();
+        return httpHydra.Get(url, addheaders: headers, safety: true, cookieContainer: siteCookies);
+    }
+
+    async Task<string> GetBrowserPage(string url, IReadOnlyList<HeadersModel> headers)
+    {
+        if (!IsSiteUrl(url))
+            return null;
+
+        await browserGate.WaitAsync(HttpContext.RequestAborted);
         try
         {
-            return await PlaywrightHttp.Get(init, url, cookies: cookies, headers: headers);
+            return await PlaywrightHttp.Get(init, url, cookies: cookies,
+                headers: httpHeaders(init, headers),
+                proxy: init.useproxy ? proxy_data : default);
         }
         finally
         {
@@ -644,9 +655,20 @@ public class FanCDN2_0Controller : BaseOnlineController
         }
     }
 
+    async Task<string> SiteGetFast(string url, IReadOnlyList<HeadersModel> headers, bool expectJson)
+    {
+        string direct = await GetSiteHttp(url, headers);
+
+        if (UsableResponse(direct, expectJson))
+            return direct;
+
+        string fallback = await GetBrowserPage(url, headers);
+        return UsableResponse(fallback, expectJson) ? fallback : null;
+    }
+
     static bool UsableResponse(string value, bool expectJson)
     {
-        if (FanCDN2_0Helper.IsChallengeResponse(value))
+        if (FanCDN2_0Helper.IsChallengeResponse(value) || FanCDN2_0Helper.RequiresAuth(value))
             return false;
 
         if (!expectJson)
