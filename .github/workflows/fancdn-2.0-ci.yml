@@ -369,7 +369,7 @@ jobs:
                       print(f"PROBE {label} hop={hop} refused invalid or nonpublic destination",flush=True)
                       return None
                   if BODY.exists(): BODY.unlink()
-                  args=["curl","--silent","--show-error","--connect-timeout","12","--max-time","40","--max-filesize","2097152","--output",str(BODY),"--write-out","code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download} http=%{http_version}\n%{redirect_url}","--url",url]
+                  args=["curl","--silent","--show-error","--connect-timeout","12","--max-time","40","--max-filesize","16777216","--output",str(BODY),"--write-out","code=%{http_code} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download} content_length=%header{content-length} http=%{http_version}\n%{redirect_url}","--url",url]
                   for k,v in (headers or {}).items():
                       args.extend(["--header",f"{k}: {v}"])
                   offset=TRACE.stat().st_size
@@ -470,7 +470,7 @@ jobs:
           fallback=sum("playwright fallback requested" in x for x in lines)
           for kp,title,_,_,_ in cases:
               group=[r for r in results if r["kp"]==kp and "variant" in r]
-              print(f"SUMMARY kp={kp} variants={len(group)} proxy_ok={sum(r['proxy'] for r in group)} direct_ok={sum(r['direct'] for r in group)} recovered={sum(r['proxy_retry'] is True for r in group)}",flush=True)
+              print(f"SUMMARY kp={kp} variants={len(group)} proxy_ok={sum(r['proxy'] for r in group)} direct_ok={sum(r['direct'] for r in group)} recovered={sum(not r['proxy'] and r['proxy_retry'] is True for r in group)}",flush=True)
           print(f"SUMMARY playwright_fallback={fallback}; checked_titles={len(set(r['kp'] for r in results))}; checked_variants={sum('variant' in r for r in results)}",flush=True)
           raise SystemExit(0 if len(set(r["kp"] for r in results))==len(cases) and fallback==0 and all(r.get("proxy") or r.get("proxy_retry") for r in results) else 1)
           PY
