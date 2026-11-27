@@ -1,4 +1,4 @@
-name: FanCDN 2.0 module CI
+name: FanCDN 2.0 Lampac integration
 
 on:
   push:
@@ -9,9 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  build-module:
+  build-and-integration:
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-dotnet@v6.1.0
         with:
           dotnet-version: '10.0.x'
+
       - name: Validate module manifest
         run: |
           python3 - <<'PY'
@@ -27,9 +28,173 @@ jobs:
           from pathlib import Path
           module = Path("Modules/OnlineRUS/FanCDN.2.0")
           manifest = json.loads((module / "manifest.json").read_text())
-          assert manifest["dynamic"] is True
+          assert manifest["enable"] and manifest["dynamic"]
           assert set(manifest["tree"]) == {p.name for p in module.glob("*.cs")}
           print("Manifest matches module source files")
           PY
-      - name: Build FanCDN.2.0
+
+      - name: Build complete NextGen solution
+        run: dotnet build NextGen.slnx --configuration Release --verbosity minimal -p:PlaywrightPlatform=linux-x64
+
+      - name: Build FanCDN.2.0 separately
         run: dotnet build Modules/OnlineRUS/FanCDN.2.0/FanCDN.2.0.csproj --configuration Release --verbosity minimal -p:PlaywrightPlatform=linux-x64
+
+      - name: Publish complete Lampac NextGen
+        run: |
+          dotnet publish Core/Core.csproj --configuration Release --output /tmp/lampac-ci --verbosity minimal -p:PlaywrightPlatform=linux-x64
+          test -f /tmp/lampac-ci/Core.dll
+          test -f /tmp/lampac-ci/module/OnlineRUS/FanCDN.2.0/manifest.json
+
+      - name: Start local fixture and published Lampac
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/fancdn-fixture.py <<'PY'
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+          from urllib.parse import urlsplit, parse_qs
+          import json
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  u = urlsplit(self.path)
+                  q = parse_qs(u.query)
+                  content_type = "text/html; charset=utf-8"
+                  status = 200
+                  if "ci_session=fixture" not in self.headers.get("Cookie", ""):
+                      status, body = 403, "fixture requires cookie"
+                  elif u.path == "/engine/ajax/msearch.php":
+                      title = q.get("q", [""])[0]
+                      entries = {
+                          "Fixture Movie": {"title": "Fixture Movie", "original_title": "Fixture Movie", "year": "2024", "url": "/100-fixture-movie.html"},
+                          "Fixture Series": {"title": "Fixture Series", "original_title": "Fixture Series", "year": "2024", "url": "/200-fixture-series.html"}
+                      }
+                      body = json.dumps([entries[title]] if title in entries else [])
+                      content_type = "application/json"
+                  elif u.path == "/100-fixture-movie.html":
+                      body = '<iframe src="/movies/123456?key=fixture"></iframe>'
+                  elif u.path == "/film.php" and q.get("kp") == ["123456"] and q.get("key") == ["fixture"]:
+                      body = json.dumps([{"title": "Fixture Movie Voice", "file": "https://cdn.fancdn.net/ci/movie/hls.m3u8", "subtitles": "[English]en.vtt"}])
+                      content_type = "application/json"
+                  elif u.path == "/200-fixture-series.html":
+                      body = '<a href="/200-fixture-series/1-season.html">Season 1</a><a href="/200-fixture-series/2-season.html">Season 2</a>'
+                  elif u.path == "/200-fixture-series/1-season.html":
+                      body = ''.join(f'<a href="/200-fixture-series/1-season/{n}-episode.html">Episode {n}</a>' for n in (1, 2))
+                  elif u.path in ("/200-fixture-series/1-season/1-episode.html", "/200-fixture-series/1-season/2-episode.html"):
+                      n = u.path.rsplit("/", 1)[-1].split("-")[0]
+                      body = '<h1 class="page-title">Episode ' + n + '</h1><script>' + ''.join(
+                          'window.cdnData[' + str(i) + '] = ' + json.dumps({"name": name, "player": f"https://cdn.fancdn.net/ci/{n}/{i}/hls.m3u8"}) + ';'
+                          for i, name in enumerate(("Fixture Voice A", "Fixture Voice B"))
+                      ) + '</script>'
+                  else:
+                      status, body = 404, "fixture route not found"
+                  data = body.encode()
+                  self.send_response(status)
+                  self.send_header("Content-Type", content_type)
+                  self.send_header("Content-Length", str(len(data)))
+                  self.end_headers()
+                  self.wfile.write(data)
+
+          ThreadingHTTPServer(("127.0.0.1", 9130), Handler).serve_forever()
+          PY
+          python3 /tmp/fancdn-fixture.py > /tmp/fancdn-fixture.log 2>&1 &
+          echo $! > /tmp/fancdn-fixture.pid
+
+          cat > /tmp/lampac-ci/init.yaml <<'YAML'
+          chromium:
+            enable: false
+          firefox:
+            enable: false
+          rch:
+            enable: false
+          cache:
+            type: mem
+          accsdb:
+            enable: false
+          BaseModule:
+            LoadModules:
+              - FanCDN.2.0
+          listen:
+            port: 9128
+          YAML
+
+          cat > /tmp/lampac-ci/init.conf <<'JSON'
+          {
+            "FanCDN.2.0": {
+              "enable": true,
+              "host": "http://127.0.0.1:9130",
+              "cookie": "ci_session=fixture",
+              "streamproxy": true
+            }
+          }
+          JSON
+
+          (cd /tmp/lampac-ci && exec dotnet Core.dll > /tmp/lampac-ci.log 2>&1) &
+          echo $! > /tmp/lampac-ci.pid
+          ready=0
+          for _ in $(seq 1 180); do
+            code=$(curl -s --max-time 2 -o /tmp/lampac-ready.txt -w '%{http_code}' 'http://127.0.0.1:9128/lite/fancdn.2.0?kinopoisk_id=0' || true)
+            if [ "$code" = 503 ] && grep -Fq 'loaded module: FanCDN.2.0' /tmp/lampac-ci.log; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$(cat /tmp/lampac-ci.pid)" 2>/dev/null; then
+              tail -n 300 /tmp/lampac-ci.log || true
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+          echo "PASS: published Lampac dynamically compiled and loaded FanCDN.2.0"
+
+      - name: Smoke test movie, seasons, episodes and voices through Lampac
+        run: |
+          python3 - <<'PY'
+          from urllib.request import urlopen
+          from urllib.parse import urlencode
+          import json
+
+          def request(**params):
+              params.update(rjson="true", year=2024)
+              url = "http://127.0.0.1:9128/lite/fancdn.2.0?" + urlencode(params)
+              with urlopen(url, timeout=30) as response:
+                  body = response.read().decode()
+                  assert response.status == 200, (response.status, body)
+                  json.loads(body)
+                  return body
+
+          movie = request(kinopoisk_id=123456, title="Fixture Movie", original_title="Fixture Movie")
+          assert "Fixture Movie Voice" in movie, movie
+          assert "English" in movie, movie
+          print("PASS: movie and subtitles")
+
+          series = dict(kinopoisk_id=234567, title="Fixture Series", original_title="Fixture Series", serial=1)
+          seasons = request(**series)
+          assert "1 сезон" in seasons and "2 сезон" in seasons, seasons
+          print("PASS: season listing")
+
+          episodes = request(**series, s=1)
+          assert "1 серия" in episodes and "2 серия" in episodes, episodes
+          assert "Fixture Voice A" in episodes and "Fixture Voice B" in episodes, episodes
+          print("PASS: episodes and voice listing")
+
+          alternate = request(**series, s=1, voice="Fixture Voice B")
+          assert "1 серия" in alternate and "2 серия" in alternate, alternate
+          print("PASS: alternate voice")
+
+          logs = open("/tmp/lampac-ci.log").read()
+          assert "loaded module: FanCDN.2.0" in logs
+          print("PASS: HTTP-only fixture integration (no real FanSeries/CDN playback)")
+          PY
+
+      - name: Diagnostics
+        if: always()
+        run: |
+          tail -n 300 /tmp/lampac-ci.log 2>/dev/null || true
+          tail -n 100 /tmp/fancdn-fixture.log 2>/dev/null || true
+
+      - name: Stop test services
+        if: always()
+        run: |
+          for p in /tmp/lampac-ci.pid /tmp/fancdn-fixture.pid; do
+            if [ -f "$p" ]; then kill "$(cat "$p")" 2>/dev/null || true; fi
+          done
