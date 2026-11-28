@@ -56,6 +56,81 @@
     return (episodeNumber < 10 ? '0' : '') + episodeNumber;
   }
 
+  // Episode groups use their own ordering, independent of canonical season/episode numbers.
+  function groupEpisodes(data, season) {
+    if (!data || !Array.isArray(data.groups)) return [];
+    var number = Number(season);
+    if (!isFinite(number) || number < 0 || Math.floor(number) !== number) return [];
+    var groups = data.groups.slice().sort(function (a, b) {
+      return a.order - b.order;
+    });
+    // TMDB group order is zero-based; a named specials group may represent season zero.
+    var specials = groups.length && /^(?:specials?|(?:season|сезон)\s*0|спецвыпуски|специальные выпуски)$/i.test((groups[0].name || '').trim());
+    var group = groups[number - (specials ? 0 : 1)];
+    if (!group || !Array.isArray(group.episodes)) return [];
+    return group.episodes.slice().sort(function (a, b) {
+      return a.order - b.order;
+    }).map(function (episode, index) {
+      // Clone metadata: never mutate TMDB's cached canonical episode objects.
+      var copy = {};
+      Object.keys(episode).forEach(function (key) {
+        copy[key] = episode[key];
+      });
+      copy.episode_number = index + 1;
+      copy.season_number = number;
+      return copy;
+    });
+  }
+
+  // A null default/override means canonical TMDB. A missing override inherits the series default.
+  function episodeGroupPreferences(tmdbId) {
+    var all = Lampa.Storage.cache('online_episode_group_preferences', 3000, {});
+    var key = String(tmdbId);
+    if (!Object.prototype.hasOwnProperty.call(all, key)) {
+      var legacy = Lampa.Storage.cache('online_episode_groups', 3000, {});
+      var prefix = key + ':';
+      var prefs = { standard: null, overrides: {} };
+      var entries = Object.keys(legacy).filter(function (k) {
+        return k.indexOf(prefix) === 0 && legacy[k] && legacy[k].id;
+      });
+      if (entries.length && entries.every(function (k) {
+        return legacy[k].id === legacy[entries[0]].id;
+      })) {
+        // A single or unanimous legacy choice becomes the series default.
+        prefs.standard = legacy[entries[0]];
+      } else {
+        // Conflicting legacy choices remain source-specific.
+        entries.forEach(function (k) {
+          prefs.overrides[k.slice(prefix.length)] = legacy[k];
+        });
+      }
+      all[key] = prefs;
+      // Avoid writing a new entry for every series opened without any saved settings.
+      if (entries.length) Lampa.Storage.set('online_episode_group_preferences', all);
+    }
+    return { all: all, key: key, prefs: all[key] };
+  }
+
+  function hasEpisodeGroupOverride(prefs, source) {
+    return Object.prototype.hasOwnProperty.call(prefs.overrides, source);
+  }
+
+  function effectiveEpisodeGroup(prefs, source) {
+    return hasEpisodeGroupOverride(prefs, source) ? prefs.overrides[source] : prefs.standard;
+  }
+
+  function saveEpisodeGroup(tmdbId, source, scope, item) {
+    var state = episodeGroupPreferences(tmdbId);
+    var choice = item.group_id ? { id: item.group_id, name: item.title } : null;
+    if (scope === 'source') {
+      if (item.inherit) delete state.prefs.overrides[source];
+      else state.prefs.overrides[source] = choice;
+    } else {
+      state.prefs.standard = choice;
+    }
+    Lampa.Storage.set('online_episode_group_preferences', state.all);
+  }
+
   var Network = Lampa.Reguest;
 
   function component(object) {
@@ -280,7 +355,12 @@
       filter.render().find('.filter--search').appendTo(filter.render().find('.torrent-filter'));
       filter.onSelect = function (type, a, b) {
         if (type == 'filter') {
-          if (a.reset) {
+          if (a.stype == 'episode_group') {
+            Lampa.Select.close();
+            setTimeout(function () {
+              _this.selectEpisodeGroup(b && b.index == 1 ? 'source' : 'series');
+            }, 10);
+          } else if (a.reset) {
             clarificationSearchDelete();
 
             _this.replaceChoice({
@@ -1147,6 +1227,30 @@
       if (filter_items.voice && filter_items.voice.length) add('voice', Lampa.Lang.translate('torrent_parser_voice'));
       if (filter_items.season && filter_items.season.length)
         add('season', Lampa.Lang.translate('torrent_serial_season'));
+      var tmdbId = this.episodeTmdbId();
+      if (tmdbId && balanser) {
+        var prefs = episodeGroupPreferences(tmdbId).prefs;
+        var groupChoice = effectiveEpisodeGroup(prefs, balanser);
+        var standardTitle = Lampa.Lang.translate('lampac_episode_order_default');
+        var overridden = hasEpisodeGroupOverride(prefs, balanser);
+        select.push({
+          title: Lampa.Lang.translate('lampac_episode_order'),
+          subtitle: (groupChoice ? groupChoice.name : standardTitle) + (overridden ? ' *' : ''),
+          items: [
+            {
+              title: Lampa.Lang.translate('lampac_episode_order_series'),
+              subtitle: prefs.standard ? prefs.standard.name : standardTitle,
+              index: 0
+            },
+            {
+              title: Lampa.Lang.translate('lampac_episode_order_source'),
+              subtitle: overridden ? (groupChoice ? groupChoice.name : standardTitle) : Lampa.Lang.translate('lampac_episode_order_inherit'),
+              index: 1
+            }
+          ],
+          stype: 'episode_group'
+        });
+      }
       filter.set('filter', select);
       filter.set(
         'sort',
@@ -1181,24 +1285,103 @@
       filter.chosen('filter', select);
       filter.chosen('sort', [sources[balanser].name]);
     };
+    this.episodeTmdbId = function () {
+      if (!object.movie.name) return null;
+      var card = object.movie;
+      var cardSource = card.source || 'tmdb';
+      var tmdbId = cardSource == 'tmdb' ? card.id : (card.tmdb_id || (cardSource == 'cub' ? card.id : null));
+      return /^\d+$/.test(String(tmdbId)) && Number(tmdbId) > 0 ? Number(tmdbId) : null;
+    };
+    this.episodeGroupChoice = function (tmdbId) {
+      return effectiveEpisodeGroup(episodeGroupPreferences(tmdbId).prefs, balanser);
+    };
+    this.selectEpisodeGroup = function (scope) {
+      var tmdbId = this.episodeTmdbId();
+      if (!tmdbId || !balanser) return;
+      var currentSource = balanser;
+      var prefs = episodeGroupPreferences(tmdbId).prefs;
+      var sourceScope = scope === 'source';
+      var inherited = sourceScope && !hasEpisodeGroupOverride(prefs, currentSource);
+      var current = sourceScope ? prefs.overrides[currentSource] : prefs.standard;
+      var active = function () {
+        return Lampa.Activity.active().activity === comp.activity && currentSource === balanser;
+      };
+      var back = function () {
+        Lampa.Controller.toggle('content');
+      };
+      var show = function (data) {
+        if (!active()) return;
+        var items = [];
+        if (sourceScope) items.push({
+          title: Lampa.Lang.translate('lampac_episode_order_inherit'),
+          subtitle: prefs.standard ? prefs.standard.name : Lampa.Lang.translate('lampac_episode_order_default'),
+          selected: inherited,
+          inherit: true
+        });
+        items.push({
+          title: Lampa.Lang.translate('lampac_episode_order_default'),
+          selected: !inherited && !current,
+          group_id: ''
+        });
+        var results = data && Array.isArray(data.results) ? data.results : [];
+        results.forEach(function (group) {
+          if (!group.id || !group.name) return;
+          items.push({
+            title: group.name,
+            subtitle: Lampa.Lang.translate('torrent_serial_season') + ': ' + group.group_count +
+              ' / ' + Lampa.Lang.translate('torrent_serial_episode') + ': ' + group.episode_count,
+            selected: !inherited && !!current && current.id === group.id,
+            group_id: group.id
+          });
+        });
+        Lampa.Select.show({
+          title: Lampa.Lang.translate(sourceScope ? 'lampac_episode_order_source' : 'lampac_episode_order_series'),
+          items: items,
+          onBack: back,
+          onSelect: function (item) {
+            if (!active()) return back();
+            saveEpisodeGroup(tmdbId, currentSource, scope, item);
+            object.lampac_custom_select = currentSource;
+            delete object.lampac_auto_select;
+            Lampa.Select.close();
+            Lampa.Activity.replace();
+          }
+        });
+      };
+      Lampa.Api.sources.tmdb.get('tv/' + tmdbId + '/episode_groups', {}, show, function () {
+        if (!active()) return;
+        Lampa.Noty.show(Lampa.Lang.translate('lampac_episode_order_error'));
+        show(null);
+      });
+    };
     this.getEpisodes = function (season, call) {
-      var episodes = [];
-      var tmdb_id = object.movie.id;
-      if (['cub', 'tmdb'].indexOf(object.movie.source || 'tmdb') == -1) tmdb_id = object.movie.tmdb_id;
-      if (typeof tmdb_id == 'number' && object.movie.name) {
+      var tmdbId = this.episodeTmdbId();
+      if (!tmdbId) return call([]);
+      var choice = this.episodeGroupChoice(tmdbId);
+      if (choice && choice.id) {
         Lampa.Api.sources.tmdb.get(
-          'tv/' + tmdb_id + '/season/' + season,
+          'tv/episode_group/' + encodeURIComponent(choice.id),
           {},
           function (data) {
-            episodes = data.episodes || [];
-
-            call(episodes);
+            call(groupEpisodes(data, season));
           },
           function () {
-            call(episodes);
+            // Do not show canonical metadata under an incompatible numbering.
+            call([]);
           }
         );
-      } else call(episodes);
+      } else {
+        Lampa.Api.sources.tmdb.get(
+          'tv/' + tmdbId + '/season/' + season,
+          {},
+          function (data) {
+            call((data && data.episodes) || []);
+          },
+          function () {
+            call([]);
+          }
+        );
+      }
     };
     this.watched = function (set) {
       var file_id = Lampa.Utils.hash(
@@ -2000,6 +2183,42 @@
     addSourceSearch('Anime', 'spider/anime');
     Lampa.Manifest.plugins = manifest;
     Lampa.Lang.add({
+      lampac_episode_order: {
+        ru: 'Порядок эпизодов TMDB',
+        en: 'TMDB episode order',
+        uk: 'Порядок епізодів TMDB',
+        zh: 'TMDB 剧集顺序'
+      },
+      lampac_episode_order_default: {
+        ru: 'Стандартный TMDB',
+        en: 'TMDB default',
+        uk: 'Стандартний TMDB',
+        zh: 'TMDB 默认顺序'
+      },
+      lampac_episode_order_series: {
+        ru: 'Для всех источников',
+        en: 'All sources',
+        uk: 'Для всіх джерел',
+        zh: '所有来源'
+      },
+      lampac_episode_order_source: {
+        ru: 'Только текущий источник',
+        en: 'Current source only',
+        uk: 'Лише поточне джерело',
+        zh: '仅当前来源'
+      },
+      lampac_episode_order_inherit: {
+        ru: 'Как у сериала',
+        en: 'Use series default',
+        uk: 'Як у серіалу',
+        zh: '使用剧集默认顺序'
+      },
+      lampac_episode_order_error: {
+        ru: 'Не удалось загрузить порядки эпизодов TMDB',
+        en: 'Could not load TMDB episode orders',
+        uk: 'Не вдалося завантажити порядки епізодів TMDB',
+        zh: '无法加载 TMDB 剧集顺序'
+      },
       lampac_watch: {
         //
         ru: 'Смотреть онлайн',

@@ -1,0 +1,98 @@
+name: TMDB episode groups
+
+on:
+  push:
+    paths:
+      - 'Online/**'
+      - 'Core/**'
+      - 'Shared/**'
+      - 'Modules/Proxy/TmdbProxy/**'
+      - 'config/**'
+      - 'Dockerfile'
+      - 'tests/episode-groups.test.mjs'
+      - 'tests/lampac-episode-groups.integration.mjs'
+      - '.github/workflows/episode-groups.yml'
+  pull_request:
+    paths:
+      - 'Online/**'
+      - 'Core/**'
+      - 'Shared/**'
+      - 'Modules/Proxy/TmdbProxy/**'
+      - 'config/**'
+      - 'Dockerfile'
+      - 'tests/episode-groups.test.mjs'
+      - 'tests/lampac-episode-groups.integration.mjs'
+      - '.github/workflows/episode-groups.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node tests/episode-groups.test.mjs
+
+  integration:
+    name: Build, start and test real Lampac
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Lampac Docker image from current commit
+        run: docker build --tag lampac-episode-groups-ci --build-arg GIT_COMMIT="$GITHUB_SHA" --build-arg GITHUB_REF="$GITHUB_REF" .
+
+      - name: Start real Lampac with Online and TmdbProxy
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/lampac-ci.conf" <<'EOF'
+          {
+            "listen": {"ip": "0.0.0.0", "port": 9118, "scheme": "http", "version": true},
+            "BaseModule": {"LoadModules": ["Online", "TmdbProxy"], "SkipModules": []},
+            "chromium": {"enable": false},
+            "firefox": {"enable": false},
+            "accsdb": {"enable": false},
+            "WAF": {"enable": false}
+          }
+          EOF
+          chmod 644 "$RUNNER_TEMP/lampac-ci.conf"
+          docker run --detach --name lampac-episode-groups-ci \
+            --publish 127.0.0.1:19118:9118 \
+            --mount "type=bind,source=$RUNNER_TEMP/lampac-ci.conf,target=/lampac/init.conf,readonly" \
+            lampac-episode-groups-ci
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent --max-time 5 http://127.0.0.1:19118/version?type=hash >/dev/null &&
+               curl --fail --silent --max-time 5 http://127.0.0.1:19118/online.js >/dev/null &&
+               curl --fail --silent --max-time 5 http://127.0.0.1:19118/tmdbproxy.js >/dev/null; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' lampac-episode-groups-ci)" != true ]; then
+              exit 1
+            fi
+            sleep 2
+          done
+          echo 'Lampac failed readiness checks'
+          exit 1
+
+      - name: Run live TMDB and served-plugin integration tests
+        env:
+          LAMPAC_URL: http://127.0.0.1:19118
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: node tests/lampac-episode-groups.integration.mjs
+
+      - name: Print Lampac logs on failure
+        if: failure()
+        run: docker logs --tail 300 lampac-episode-groups-ci || true
+
+      - name: Stop Lampac
+        if: always()
+        run: docker rm -f lampac-episode-groups-ci || true
